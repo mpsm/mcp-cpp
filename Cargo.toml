@@ -31,3 +31,11 @@ uuid = { version = "1.17.0", features = ["v4", "serde"] }
 regex = "1.11.1"
 sha2 = "0.10"
 json_compilation_db = "1.0"
+
+[dev-dependencies]
+tempfile = "3.0"
+
+[features]
+default = []
+# Enable tests that require a real clangd binary to be installed
+clangd-integration-tests = []

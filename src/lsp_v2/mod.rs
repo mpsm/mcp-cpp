@@ -8,49 +8,50 @@
 //! - **Process**: External process lifecycle management
 //! - **Protocol**: JSON-RPC 2.0 protocol implementation
 //! - **Client**: High-level typed LSP API using lsp-types
-//! - **Orchestrator**: Coordinates process, transport, and client lifecycle
 //! - **Testing**: Mock implementations for comprehensive testing
 
 pub mod client;
 pub mod framing;
-pub mod orchestrator;
 pub mod process;
 pub mod protocol;
 pub mod testing;
+pub mod traits;
 pub mod transport;
 
 //
-// The orchestrator is the recommended entry point for most use cases:
+// Example usage with direct component coordination:
 //
 // ```rust
-// use mcp_cpp::lsp_v2::orchestrator::{StandardLspOrchestrator, LspOrchestrator};
+// use mcp_cpp::lsp_v2::{ChildProcessManager, LspClient, StdioTransport};
 //
-// let mut orchestrator = StandardLspOrchestrator::new(
-//     "clangd".to_string(),
-//     vec!["--compile-commands-dir=/path/to/build".to_string()]
-// );
+// // Start process
+// let mut process = ChildProcessManager::new("clangd".to_string(), args, Some(working_dir));
+// process.start().await?;
 //
-// // Start: process → transport → client → initialize
-// orchestrator.start(Some("file:///path/to/project".to_string())).await?;
+// // Create transport and client
+// let transport = process.create_stdio_transport()?;
+// let mut client = LspClient::new(transport);
+// client.start().await?;
 //
-// // Use the LSP client
-// if let Some(client) = orchestrator.client_mut() {
-//     // Make LSP requests...
-// }
+// // Initialize LSP
+// client.initialize(Some("file:///path/to/project".to_string())).await?;
+//
+// // Make LSP requests...
 //
 // // Clean shutdown
-// orchestrator.shutdown().await?;
+// client.shutdown().await?;
+// process.stop(StopMode::Graceful).await?;
 // ```
 
 // Re-export main types for convenience
 #[allow(unused_imports)]
 pub use client::{LspClient, LspError};
 #[allow(unused_imports)]
-pub use orchestrator::{LspOrchestrator, OrchestratorError, StandardLspOrchestrator};
-#[allow(unused_imports)]
 pub use process::{
     ChildProcessManager, ProcessExitEvent, ProcessExitHandler, ProcessManager, ProcessState,
     StderrMonitor, StopMode,
 };
+#[allow(unused_imports)]
+pub use traits::LspClientTrait;
 #[allow(unused_imports)]
 pub use transport::{MockTransport, StdioTransport, Transport};

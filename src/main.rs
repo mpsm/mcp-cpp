@@ -1,3 +1,4 @@
+mod clangd;
 mod cmake;
 mod legacy_lsp;
 mod logging;
