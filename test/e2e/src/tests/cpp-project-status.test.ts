@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach, beforeAll } from 'vitest';
 import { McpClient } from '../framework/McpClient.js';
-import { TestProject } from '../framework/TestProject.js';
+import { TestProject, ProjectTemplate, BuildConfiguration } from '../framework/TestProject.js';
 import * as path from 'path';
 
 describe('cpp_project_status tool', () => {
@@ -59,7 +59,15 @@ describe('cpp_project_status tool', () => {
 
   describe('CMake project detection', () => {
     it('should detect valid CMake project with build directories', async () => {
-      project = await TestProject.create('cmake-basic');
+      project = await TestProject.fromBaseProject({
+        enableDebugLogging: true,
+        enableMemoryStorage: true,
+        buildType: BuildConfiguration.DEBUG
+      });
+
+      // Configure both debug and release builds
+      await project.runCmake({ buildType: 'Debug', buildDir: 'build-debug' });
+      await project.runCmake({ buildType: 'Release', buildDir: 'build-release' });
 
       // Create client with working directory set to project path
       client = new McpClient(serverPath, 10000, project.projectPath);
@@ -99,7 +107,7 @@ describe('cpp_project_status tool', () => {
     });
 
     it('should detect non-CMake project', async () => {
-      project = await TestProject.create('empty-project');
+      project = await TestProject.empty();
 
       client = new McpClient(serverPath, 10000, project.projectPath);
       await client.start();
@@ -117,25 +125,7 @@ describe('cpp_project_status tool', () => {
     });
 
     it('should handle CMake project without build directories', async () => {
-      project = await TestProject.create();
-
-      // Create CMakeLists.txt but don't run cmake
-      await project.writeFile(
-        'CMakeLists.txt',
-        `
-cmake_minimum_required(VERSION 3.15)
-project(TestProject)
-add_executable(TestProject main.cpp)
-`
-      );
-
-      await project.writeFile(
-        'main.cpp',
-        `
-#include <iostream>
-int main() { return 0; }
-`
-      );
+      project = await TestProject.fromTemplate(ProjectTemplate.MINIMAL_CMAKE);
 
       client = new McpClient(serverPath, 10000, project.projectPath);
       await client.start();
@@ -153,15 +143,7 @@ int main() { return 0; }
 
   describe('error handling', () => {
     it('should handle corrupted CMakeCache.txt gracefully', async () => {
-      project = await TestProject.create();
-
-      await project.writeFile(
-        'CMakeLists.txt',
-        `
-cmake_minimum_required(VERSION 3.15)
-project(TestProject)
-`
-      );
+      project = await TestProject.fromTemplate(ProjectTemplate.MINIMAL_CMAKE);
 
       // Create build directory with corrupted cache
       await project.createDirectory('build');
