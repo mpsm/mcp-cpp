@@ -1,16 +1,29 @@
 use async_trait::async_trait;
 use rust_mcp_sdk::schema::{
-    schema_utils::CallToolError, CallToolRequest, CallToolResult, ListToolsRequest,
-    ListToolsResult, ListResourcesRequest, ListResourcesResult, ReadResourceRequest,
-    ReadResourceResult, RpcError,
+    CallToolRequest, CallToolResult, ListResourcesRequest, ListResourcesResult, ListToolsRequest,
+    ListToolsResult, ReadResourceRequest, ReadResourceResult, RpcError,
+    schema_utils::CallToolError,
 };
-use rust_mcp_sdk::{mcp_server::ServerHandler, McpServer};
+use rust_mcp_sdk::{McpServer, mcp_server::ServerHandler};
 use tracing::info;
 
-use crate::tools::CppTools;
+use crate::lsp::manager::ClangdManager;
 use crate::resources::LspResources;
+use crate::tools::CppTools;
+use std::sync::Arc;
+use tokio::sync::Mutex;
 
-pub struct CppServerHandler;
+pub struct CppServerHandler {
+    clangd_manager: Arc<Mutex<ClangdManager>>,
+}
+
+impl CppServerHandler {
+    pub fn new() -> Self {
+        Self {
+            clangd_manager: Arc::new(Mutex::new(ClangdManager::new())),
+        }
+    }
+}
 
 #[async_trait]
 impl ServerHandler for CppServerHandler {
@@ -36,14 +49,15 @@ impl ServerHandler for CppServerHandler {
         info!("Executing tool: {}", request.params.name);
 
         // Convert request parameters into CppTools enum
-        let tool_params: CppTools =
-            CppTools::try_from(request).map_err(|e| CallToolError::new(std::io::Error::new(std::io::ErrorKind::InvalidInput, e)))?;
+        let tool_params: CppTools = CppTools::try_from(request).map_err(|e| {
+            CallToolError::new(std::io::Error::new(std::io::ErrorKind::InvalidInput, e))
+        })?;
 
         // Match the tool variant and execute its corresponding logic
         match tool_params {
             CppTools::CppProjectStatus(cpp_status_tool) => cpp_status_tool.call_tool(),
-            CppTools::SetupClangd(setup_tool) => setup_tool.call_tool().await,
-            CppTools::LspRequest(lsp_tool) => lsp_tool.call_tool().await,
+            CppTools::SetupClangd(setup_tool) => setup_tool.call_tool(&self.clangd_manager).await,
+            CppTools::LspRequest(lsp_tool) => lsp_tool.call_tool(&self.clangd_manager).await,
         }
     }
 
@@ -53,9 +67,8 @@ impl ServerHandler for CppServerHandler {
         _runtime: &dyn McpServer,
     ) -> std::result::Result<ListResourcesResult, RpcError> {
         info!("Listing available resources");
-        
-        LspResources::list_resources(request)
-            .map_err(|_e| RpcError::internal_error())
+
+        LspResources::list_resources(request).map_err(|_e| RpcError::internal_error())
     }
 
     async fn handle_read_resource_request(
@@ -64,8 +77,7 @@ impl ServerHandler for CppServerHandler {
         _runtime: &dyn McpServer,
     ) -> std::result::Result<ReadResourceResult, RpcError> {
         info!("Reading resource: {}", request.params.uri);
-        
-        LspResources::read_resource(request)
-            .map_err(|_e| RpcError::internal_error())
+
+        LspResources::read_resource(request).map_err(|_e| RpcError::internal_error())
     }
 }

@@ -1,19 +1,19 @@
-mod handler;
 mod cmake;
-mod tools;
+mod handler;
 mod lsp;
 mod resources;
+mod tools;
 
 use handler::CppServerHandler;
 use rust_mcp_sdk::schema::{
-    Implementation, InitializeResult, ServerCapabilities, ServerCapabilitiesTools,
-    ServerCapabilitiesResources, LATEST_PROTOCOL_VERSION,
+    Implementation, InitializeResult, LATEST_PROTOCOL_VERSION, ServerCapabilities,
+    ServerCapabilitiesResources, ServerCapabilitiesTools,
 };
 
 use rust_mcp_sdk::{
-    error::SdkResult,
-    mcp_server::{server_runtime, ServerRuntime},
     McpServer, StdioTransport, TransportOptions,
+    error::SdkResult,
+    mcp_server::{ServerRuntime, server_runtime},
 };
 use tracing::info;
 
@@ -35,9 +35,9 @@ async fn main() -> SdkResult<()> {
         },
         capabilities: ServerCapabilities {
             tools: Some(ServerCapabilitiesTools { list_changed: None }),
-            resources: Some(ServerCapabilitiesResources { 
-                subscribe: None, 
-                list_changed: None 
+            resources: Some(ServerCapabilitiesResources {
+                subscribe: None,
+                list_changed: None,
             }),
             ..Default::default()
         },
@@ -50,7 +50,7 @@ async fn main() -> SdkResult<()> {
     let transport = StdioTransport::new(TransportOptions::default())?;
 
     // Create custom handler
-    let handler = CppServerHandler {};
+    let handler = CppServerHandler::new();
 
     // Create MCP server
     let server: ServerRuntime = server_runtime::create_server(server_details, transport, handler);

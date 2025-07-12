@@ -139,10 +139,6 @@ impl CppProjectStatusTool {
     }
 }
 
-lazy_static::lazy_static! {
-    static ref CLANGD_MANAGER: Arc<Mutex<ClangdManager>> = Arc::new(Mutex::new(ClangdManager::new()));
-}
-
 #[derive(Debug, ::serde::Deserialize, ::serde::Serialize)]
 pub struct SetupClangdTool {
     #[serde(rename = "buildDirectory")]
@@ -150,8 +146,8 @@ pub struct SetupClangdTool {
 }
 
 impl SetupClangdTool {
-    #[instrument(name = "setup_clangd", skip(self))]
-    pub async fn call_tool(&self) -> Result<CallToolResult, CallToolError> {
+    #[instrument(name = "setup_clangd", skip(self, clangd_manager))]
+    pub async fn call_tool(&self, clangd_manager: &Arc<Mutex<ClangdManager>>) -> Result<CallToolResult, CallToolError> {
         info!("Setting up clangd for build directory: {}", self.build_directory);
         
         let build_path = PathBuf::from(&self.build_directory);
@@ -163,8 +159,7 @@ impl SetupClangdTool {
             std::env::current_dir().unwrap_or_default().join(build_path)
         };
         
-        let manager = CLANGD_MANAGER.clone();
-        let manager_guard = manager.lock().await;
+        let manager_guard = clangd_manager.lock().await;
         
         match manager_guard.setup_clangd(build_path.clone()).await {
             Ok(message) => {
@@ -211,12 +206,11 @@ pub struct LspRequestTool {
 }
 
 impl LspRequestTool {
-    #[instrument(name = "lsp_request", skip(self))]
-    pub async fn call_tool(&self) -> Result<CallToolResult, CallToolError> {
+    #[instrument(name = "lsp_request", skip(self, clangd_manager))]
+    pub async fn call_tool(&self, clangd_manager: &Arc<Mutex<ClangdManager>>) -> Result<CallToolResult, CallToolError> {
         info!("Sending LSP request: {}", self.method);
         
-        let manager = CLANGD_MANAGER.clone();
-        let manager_guard = manager.lock().await;
+        let manager_guard = clangd_manager.lock().await;
         
         // Check if this is a notification (methods that don't expect responses)
         let is_notification = matches!(self.method.as_str(), 
