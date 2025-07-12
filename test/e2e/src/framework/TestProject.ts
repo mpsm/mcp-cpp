@@ -309,10 +309,12 @@ export class TestProject {
 
   // Private Helper Methods
   private static async createTempProject(): Promise<TestProject> {
+    // Use crypto.randomUUID() for truly unique directory names to avoid race conditions
+    const { randomUUID } = await import('crypto');
     const tempDir = path.join(
       process.cwd(),
       'temp',
-      `test-project-${Date.now()}-${++TestProject.tempCounter}`
+      `test-project-${randomUUID()}`
     );
 
     await fse.ensureDir(tempDir);

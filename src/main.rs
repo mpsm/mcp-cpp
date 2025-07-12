@@ -1,11 +1,13 @@
 mod handler;
 mod cmake;
 mod tools;
+mod lsp;
+mod resources;
 
 use handler::CppServerHandler;
 use rust_mcp_sdk::schema::{
     Implementation, InitializeResult, ServerCapabilities, ServerCapabilitiesTools,
-    LATEST_PROTOCOL_VERSION,
+    ServerCapabilitiesResources, LATEST_PROTOCOL_VERSION,
 };
 
 use rust_mcp_sdk::{
@@ -13,8 +15,7 @@ use rust_mcp_sdk::{
     mcp_server::{server_runtime, ServerRuntime},
     McpServer, StdioTransport, TransportOptions,
 };
-use tracing::{info};
-use tracing_subscriber;
+use tracing::info;
 
 #[tokio::main]
 async fn main() -> SdkResult<()> {
@@ -34,6 +35,10 @@ async fn main() -> SdkResult<()> {
         },
         capabilities: ServerCapabilities {
             tools: Some(ServerCapabilitiesTools { list_changed: None }),
+            resources: Some(ServerCapabilitiesResources { 
+                subscribe: None, 
+                list_changed: None 
+            }),
             ..Default::default()
         },
         meta: None,

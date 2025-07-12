@@ -5,6 +5,8 @@ use thiserror::Error;
 use tracing::{debug, warn};
 use walkdir::WalkDir;
 
+type CacheParseResult = (Option<String>, Option<String>, Vec<(String, String)>);
+
 #[derive(Debug, Error)]
 pub enum CmakeError {
     #[error("IO error: {0}")]
@@ -142,7 +144,7 @@ impl CmakeProjectStatus {
         Ok(build_dir)
     }
     
-    fn parse_cmake_cache(cache_file: &Path) -> Result<(Option<String>, Option<String>, Vec<(String, String)>), std::io::Error> {
+    fn parse_cmake_cache(cache_file: &Path) -> Result<CacheParseResult, std::io::Error> {
         let content = fs::read_to_string(cache_file)?;
         
         let mut generator = None;

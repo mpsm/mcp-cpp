@@ -1,12 +1,14 @@
 use async_trait::async_trait;
 use rust_mcp_sdk::schema::{
     schema_utils::CallToolError, CallToolRequest, CallToolResult, ListToolsRequest,
-    ListToolsResult, RpcError,
+    ListToolsResult, ListResourcesRequest, ListResourcesResult, ReadResourceRequest,
+    ReadResourceResult, RpcError,
 };
 use rust_mcp_sdk::{mcp_server::ServerHandler, McpServer};
 use tracing::info;
 
 use crate::tools::CppTools;
+use crate::resources::LspResources;
 
 pub struct CppServerHandler;
 
@@ -35,11 +37,35 @@ impl ServerHandler for CppServerHandler {
 
         // Convert request parameters into CppTools enum
         let tool_params: CppTools =
-            CppTools::try_from(request.params).map_err(|e| CallToolError::new(e))?;
+            CppTools::try_from(request).map_err(|e| CallToolError::new(std::io::Error::new(std::io::ErrorKind::InvalidInput, e)))?;
 
         // Match the tool variant and execute its corresponding logic
         match tool_params {
-            CppTools::CppProjectStatusTool(cpp_status_tool) => cpp_status_tool.call_tool(),
+            CppTools::CppProjectStatus(cpp_status_tool) => cpp_status_tool.call_tool(),
+            CppTools::SetupClangd(setup_tool) => setup_tool.call_tool().await,
+            CppTools::LspRequest(lsp_tool) => lsp_tool.call_tool().await,
         }
+    }
+
+    async fn handle_list_resources_request(
+        &self,
+        request: ListResourcesRequest,
+        _runtime: &dyn McpServer,
+    ) -> std::result::Result<ListResourcesResult, RpcError> {
+        info!("Listing available resources");
+        
+        LspResources::list_resources(request)
+            .map_err(|_e| RpcError::internal_error())
+    }
+
+    async fn handle_read_resource_request(
+        &self,
+        request: ReadResourceRequest,
+        _runtime: &dyn McpServer,
+    ) -> std::result::Result<ReadResourceResult, RpcError> {
+        info!("Reading resource: {}", request.params.uri);
+        
+        LspResources::read_resource(request)
+            .map_err(|_e| RpcError::internal_error())
     }
 }
