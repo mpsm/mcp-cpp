@@ -8,6 +8,12 @@ use tokio::sync::Mutex;
 use crate::cmake::{CmakeProjectStatus, CmakeError};
 use crate::lsp::{ClangdManager, LspError};
 
+/// Helper function to serialize JSON content and handle errors gracefully
+fn serialize_result(content: &Value) -> String {
+    serde_json::to_string_pretty(content)
+        .unwrap_or_else(|e| format!("Error serializing result: {}", e))
+}
+
 #[derive(Debug, ::serde::Deserialize, ::serde::Serialize)]
 pub struct CppProjectStatusTool {
     // No parameters needed for analyzing current directory
@@ -44,8 +50,7 @@ impl CppProjectStatusTool {
                 info!("Successfully analyzed C++ project");
                 
                 Ok(CallToolResult::text_content(vec![TextContent::from(
-                    serde_json::to_string_pretty(&content)
-                        .unwrap_or_else(|e| format!("Error serializing result: {}", e))
+                    serialize_result(&content)
                 )]))
             }
             Err(CmakeError::NotCmakeProject) => {
@@ -62,8 +67,7 @@ impl CppProjectStatusTool {
                 info!("Directory is not a CMake project");
                 
                 Ok(CallToolResult::text_content(vec![TextContent::from(
-                    serde_json::to_string_pretty(&content)
-                        .unwrap_or_else(|e| format!("Error serializing result: {}", e))
+                    serialize_result(&content)
                 )]))
             }
             Err(CmakeError::MultipleIssues(issues)) => {
@@ -80,8 +84,7 @@ impl CppProjectStatusTool {
                 error!("Multiple issues detected: {:?}", issues);
                 
                 Ok(CallToolResult::text_content(vec![TextContent::from(
-                    serde_json::to_string_pretty(&content)
-                        .unwrap_or_else(|e| format!("Error serializing result: {}", e))
+                    serialize_result(&content)
                 )]))
             }
             Err(e) => {
@@ -100,8 +103,7 @@ impl CppProjectStatusTool {
                 
                 // Return error result with JSON content
                 Ok(CallToolResult::text_content(vec![TextContent::from(
-                    serde_json::to_string_pretty(&content)
-                        .unwrap_or_else(|e| format!("Error serializing result: {}", e))
+                    serialize_result(&content)
                 )]))
             }
         }
@@ -129,8 +131,10 @@ impl CppProjectStatusTool {
                 let unique_generators: std::collections::HashSet<_> = generators.into_iter().collect();
                 
                 if unique_generators.len() == 1 {
-                    format!("CMake project with {} build directories ({})", 
-                           n, unique_generators.iter().next().unwrap())
+                    let generator = unique_generators.iter().next()
+                        .map(|g| g.as_str())
+                        .unwrap_or("unknown generator");
+                    format!("CMake project with {} build directories ({})", n, generator)
                 } else {
                     format!("CMake project with {} build directories (mixed generators)", n)
                 }
@@ -174,8 +178,7 @@ impl SetupClangdTool {
                 info!("Clangd setup successful for: {}", build_path.display());
                 
                 Ok(CallToolResult::text_content(vec![TextContent::from(
-                    serde_json::to_string_pretty(&content)
-                        .unwrap_or_else(|e| format!("Error serializing result: {}", e))
+                    serialize_result(&content)
                 )]))
             }
             Err(e) => {
@@ -190,8 +193,7 @@ impl SetupClangdTool {
                 error!("Clangd setup failed: {}", error_msg);
                 
                 Ok(CallToolResult::text_content(vec![TextContent::from(
-                    serde_json::to_string_pretty(&content)
-                        .unwrap_or_else(|e| format!("Error serializing result: {}", e))
+                    serialize_result(&content)
                 )]))
             }
         }
@@ -230,8 +232,7 @@ impl LspRequestTool {
                     info!("LSP notification sent successfully: {}", self.method);
                     
                     Ok(CallToolResult::text_content(vec![TextContent::from(
-                        serde_json::to_string_pretty(&content)
-                            .unwrap_or_else(|e| format!("Error serializing result: {}", e))
+                        serialize_result(&content)
                     )]))
                 }
                 Err(e) => {
@@ -246,8 +247,7 @@ impl LspRequestTool {
                     error!("LSP notification failed: {}", error_msg);
                     
                     Ok(CallToolResult::text_content(vec![TextContent::from(
-                        serde_json::to_string_pretty(&content)
-                            .unwrap_or_else(|e| format!("Error serializing result: {}", e))
+                        serialize_result(&content)
                     )]))
                 }
             }
@@ -263,8 +263,7 @@ impl LspRequestTool {
                 info!("LSP request successful: {}", self.method);
                 
                 Ok(CallToolResult::text_content(vec![TextContent::from(
-                    serde_json::to_string_pretty(&content)
-                        .unwrap_or_else(|e| format!("Error serializing result: {}", e))
+                    serialize_result(&content)
                 )]))
             }
             Err(LspError::NotSetup) => {
@@ -279,8 +278,7 @@ impl LspRequestTool {
                 error!("LSP request failed - clangd not setup");
                 
                 Ok(CallToolResult::text_content(vec![TextContent::from(
-                    serde_json::to_string_pretty(&content)
-                        .unwrap_or_else(|e| format!("Error serializing result: {}", e))
+                    serialize_result(&content)
                 )]))
             }
             Err(e) => {
@@ -295,8 +293,7 @@ impl LspRequestTool {
                 error!("LSP request failed: {}", error_msg);
                 
                 Ok(CallToolResult::text_content(vec![TextContent::from(
-                    serde_json::to_string_pretty(&content)
-                        .unwrap_or_else(|e| format!("Error serializing result: {}", e))
+                    serialize_result(&content)
                 )]))
             }
         }

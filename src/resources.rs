@@ -1,8 +1,8 @@
-use rust_mcp_sdk::schema::{
-    ListResourcesRequest, ListResourcesResult, ReadResourceRequest, ReadResourceResult, 
-    Resource, TextResourceContents
-};
 use rust_mcp_sdk::error::SdkResult;
+use rust_mcp_sdk::schema::{
+    ListResourcesRequest, ListResourcesResult, ReadResourceRequest, ReadResourceResult, Resource,
+    TextResourceContents,
+};
 use serde_json::json;
 
 pub struct LspResources;
@@ -13,7 +13,9 @@ impl LspResources {
             Resource {
                 uri: "lsp://workflow".to_string(),
                 name: "C++ LSP Analysis Workflow".to_string(),
-                description: Some("Complete workflow guide for using LSP tools with clangd".to_string()),
+                description: Some(
+                    "Complete workflow guide for using LSP tools with clangd".to_string(),
+                ),
                 mime_type: Some("text/markdown".to_string()),
                 title: None,
                 annotations: None,
@@ -65,11 +67,19 @@ impl LspResources {
             "lsp://methods" => Self::methods_content(),
             "lsp://capabilities" => Self::capabilities_content(),
             "lsp://examples" => Self::examples_content(),
-            _ => return Err(std::io::Error::new(std::io::ErrorKind::NotFound, "Unknown resource URI").into()),
+            _ => {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::NotFound,
+                    "Unknown resource URI",
+                )
+                .into());
+            }
         };
 
         Ok(ReadResourceResult {
-            contents: vec![rust_mcp_sdk::schema::ReadResourceResultContentsItem::TextResourceContents(content)],
+            contents: vec![
+                rust_mcp_sdk::schema::ReadResourceResultContentsItem::TextResourceContents(content),
+            ],
             meta: None,
         })
     }
@@ -197,7 +207,9 @@ See `lsp://methods` and `lsp://examples` resources for detailed usage.
         });
 
         TextResourceContents {
-            text: serde_json::to_string_pretty(&methods).unwrap(),
+            text: serde_json::to_string_pretty(&methods).unwrap_or_else(|e| {
+                format!("{{\"error\": \"Failed to serialize methods: {}\"}}", e)
+            }),
             uri: "lsp://methods".to_string(),
             mime_type: Some("application/json".to_string()),
             meta: None,
@@ -226,7 +238,7 @@ See `lsp://methods` and `lsp://examples` resources for detailed usage.
                 "initialize",
                 "textDocument/definition",
                 "textDocument/hover",
-                "textDocument/completion", 
+                "textDocument/completion",
                 "textDocument/references",
                 "textDocument/documentSymbol",
                 "workspace/symbol",
@@ -240,7 +252,9 @@ See `lsp://methods` and `lsp://examples` resources for detailed usage.
         });
 
         TextResourceContents {
-            text: serde_json::to_string_pretty(&capabilities).unwrap(),
+            text: serde_json::to_string_pretty(&capabilities).unwrap_or_else(|e| {
+                format!("{{\"error\": \"Failed to serialize capabilities: {}\"}}", e)
+            }),
             uri: "lsp://capabilities".to_string(),
             mime_type: Some("application/json".to_string()),
             meta: None,
@@ -293,7 +307,9 @@ See `lsp://methods` and `lsp://examples` resources for detailed usage.
         });
 
         TextResourceContents {
-            text: serde_json::to_string_pretty(&examples).unwrap(),
+            text: serde_json::to_string_pretty(&examples).unwrap_or_else(|e| {
+                format!("{{\"error\": \"Failed to serialize examples: {}\"}}", e)
+            }),
             uri: "lsp://examples".to_string(),
             mime_type: Some("application/json".to_string()),
             meta: None,
