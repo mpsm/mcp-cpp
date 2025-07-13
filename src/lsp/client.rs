@@ -2,14 +2,16 @@ use serde_json::Value;
 use std::collections::HashMap;
 use std::process::Stdio;
 use std::sync::Arc;
+use std::time::Instant;
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{Child, Command};
 use tokio::sync::Mutex;
 use tokio::task::JoinHandle;
-use tracing::{debug, info, warn};
+use tracing::{debug, info, warn, Level};
 
 use crate::lsp::error::LspError;
 use crate::lsp::types::{JsonRpcNotification, JsonRpcRequest, JsonRpcResponse};
+use crate::{log_lsp_message, log_timing};
 
 /// Represents the result of parsing an LSP message from the stream
 #[derive(Debug)]
@@ -39,7 +41,7 @@ impl LspMessageParser {
 
         // Read header line
         match reader.read_line(&mut line).await {
-            Ok(0) => return LspParseResult::EndOfStream,
+            Ok(0) => LspParseResult::EndOfStream,
             Ok(_) => {
                 let trimmed = line.trim();
 
@@ -86,7 +88,12 @@ impl LspMessageParser {
         match String::from_utf8(content) {
             Ok(json_str) => {
                 debug!("Received from clangd: {}", json_str);
-                Self::parse_json_response(&json_str)
+                // Parse the response and log it
+                let result = Self::parse_json_response(&json_str);
+                if let LspParseResult::Response(ref response) = result {
+                    log_lsp_message!(Level::DEBUG, "incoming", &response.id, response);
+                }
+                result
             }
             Err(e) => LspParseResult::ParseError(format!("Invalid UTF-8 in message: {}", e)),
         }
@@ -220,8 +227,11 @@ impl LspClient {
         method: String,
         params: Option<Value>,
     ) -> Result<JsonRpcResponse, LspError> {
-        let request = JsonRpcRequest::new(method, params);
+        let start = Instant::now();
+        let request = JsonRpcRequest::new(method.clone(), params);
         let request_id = request.id.clone();
+
+        log_lsp_message!(Level::DEBUG, "outgoing", &method, &request);
 
         let (tx, rx) = tokio::sync::oneshot::channel();
         {
@@ -233,7 +243,10 @@ impl LspClient {
 
         // Wait for response with timeout
         match tokio::time::timeout(std::time::Duration::from_secs(30), rx).await {
-            Ok(Ok(response)) => Ok(response),
+            Ok(Ok(response)) => {
+                log_timing!(Level::DEBUG, &format!("lsp_request_{}", method), start.elapsed());
+                Ok(response)
+            },
             Ok(Err(_)) => Err(LspError::JsonRpcError(
                 "Response channel closed".to_string(),
             )),
@@ -253,9 +266,11 @@ impl LspClient {
     ) -> Result<(), LspError> {
         let notification = JsonRpcNotification {
             jsonrpc: "2.0".to_string(),
-            method,
+            method: method.clone(),
             params,
         };
+
+        log_lsp_message!(Level::DEBUG, "outgoing", &method, &notification);
 
         self.send_message(&notification).await
     }
@@ -282,7 +297,7 @@ impl LspClient {
         {
             let mut shutdown_signal = self.shutdown_signal.lock().await;
             if let Some(tx) = shutdown_signal.take() {
-                if let Err(_) = tx.send(()) {
+                if tx.send(()).is_err() {
                     shutdown_errors.push("Failed to send shutdown signal to reader task");
                 }
             }
@@ -304,7 +319,7 @@ impl LspClient {
                 )
                 .await;
 
-                if let Err(_) = exit_result {
+                if exit_result.is_err() {
                     shutdown_errors.push("Timeout sending exit notification");
                 }
             }

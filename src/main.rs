@@ -1,10 +1,13 @@
 mod cmake;
 mod handler;
+mod logging;
 mod lsp;
 mod resources;
 mod tools;
 
+use clap::Parser;
 use handler::CppServerHandler;
+use logging::{LogConfig, init_logging};
 use rust_mcp_sdk::schema::{
     Implementation, InitializeResult, LATEST_PROTOCOL_VERSION, ServerCapabilities,
     ServerCapabilitiesResources, ServerCapabilitiesTools,
@@ -15,14 +18,34 @@ use rust_mcp_sdk::{
     error::SdkResult,
     mcp_server::{ServerRuntime, server_runtime},
 };
+use std::path::PathBuf;
 use tracing::info;
+
+/// CLI arguments for the MCP C++ server
+#[derive(Parser, Debug)]
+#[command(author, version, about, long_about = None)]
+struct Args {
+    /// Log level (overrides RUST_LOG env var)
+    #[arg(long, value_name = "LEVEL")]
+    log_level: Option<String>,
+
+    /// Log file path (overrides MCP_LOG_FILE env var)
+    #[arg(long, value_name = "FILE")]
+    log_file: Option<PathBuf>,
+}
 
 #[tokio::main]
 async fn main() -> SdkResult<()> {
-    // Initialize tracing
-    tracing_subscriber::fmt()
-        .with_max_level(tracing::Level::INFO)
-        .init();
+    let args = Args::parse();
+
+    // Initialize logging with configuration from env vars and CLI args
+    let log_config = LogConfig::from_env()
+        .with_overrides(args.log_level, args.log_file);
+    
+    if let Err(e) = init_logging(log_config) {
+        eprintln!("Failed to initialize logging: {}", e);
+        std::process::exit(1);
+    }
 
     info!("Starting C++ MCP Server");
 
