@@ -197,6 +197,62 @@ Now you can perform semantic analysis operations:
 - `workspace/symbol` - Search workspace symbols
 
 See `lsp://methods` and `lsp://examples` resources for detailed usage.
+
+## Troubleshooting
+
+### Parameter Format Issues
+
+**Problem**: Getting "failed to decode initialize request: expected object" error.
+
+**Cause**: LSP requests require parameters as JSON objects, but some MCP clients may pass them as JSON strings.
+
+**Solution**: This server automatically handles both formats:
+- ✅ **Object format** (preferred): `"params": {"processId": null, "capabilities": {}}`
+- ✅ **String format** (auto-parsed): `"params": "{\"processId\": null, \"capabilities\": {}}"`
+
+**Example of both working formats**:
+```json
+// Object format (recommended)
+{
+  "name": "lsp_request", 
+  "arguments": {
+    "method": "initialize",
+    "params": {
+      "processId": null,
+      "rootUri": "file:///path/to/project", 
+      "capabilities": {}
+    }
+  }
+}
+
+// String format (legacy support)
+{
+  "name": "lsp_request",
+  "arguments": {
+    "method": "initialize", 
+    "params": "{\"processId\": null, \"rootUri\": \"file:///path/to/project\", \"capabilities\": {}}"
+  }
+}
+```
+
+### Debug Logging
+
+Enable debug logging to diagnose parameter processing:
+```bash
+RUST_LOG=debug MCP_LOG_FILE=/tmp/mcp-server.log your-mcp-client
+```
+
+Debug logs will show parameter types and processing:
+```
+DEBUG LSP request params - method: initialize, type: object, value: {"processId":null,...}
+```
+
+### Common Error Messages
+
+- **"server not initialized"**: Send `initialize` request before other LSP operations
+- **"trying to get AST for non-added document"**: Use `textDocument/didOpen` before document-specific requests  
+- **"clangd not setup"**: Run `setup_clangd` tool before any `lsp_request` calls
+- **"No compile_commands.json found"**: Run CMake with `CMAKE_EXPORT_COMPILE_COMMANDS=ON` to generate compilation database
 "#;
 
         TextResourceContents {

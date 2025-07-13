@@ -4,7 +4,7 @@ use serde_json::json;
 use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::Mutex;
-use tracing::{error, info, instrument};
+use tracing::{debug, error, info, instrument};
 
 use crate::cmake::{CmakeError, CmakeProjectStatus};
 use crate::lsp::{ClangdManager, LspError};
@@ -241,11 +241,65 @@ impl SetupClangdTool {
     }
 }
 
-#[derive(Debug, ::serde::Deserialize, ::serde::Serialize, JsonSchema)]
+#[derive(Debug, ::serde::Serialize, JsonSchema)]
 pub struct LspRequestTool {
     pub method: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub params: Option<serde_json::Value>,
+}
+
+impl<'de> serde::Deserialize<'de> for LspRequestTool {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        
+        #[derive(serde::Deserialize)]
+        struct LspRequestToolHelper {
+            method: String,
+            #[serde(default)]
+            params: Option<serde_json::Value>,
+        }
+        
+        let helper = LspRequestToolHelper::deserialize(deserializer)?;
+        
+        let processed_params = match helper.params {
+            Some(value) => {
+                match value {
+                    // If it's already a proper JSON object/array/primitive, use as-is
+                    serde_json::Value::Object(_) | 
+                    serde_json::Value::Array(_) | 
+                    serde_json::Value::Number(_) | 
+                    serde_json::Value::Bool(_) | 
+                    serde_json::Value::Null => Some(value),
+                    
+                    // If it's a string, try to parse it as JSON
+                    serde_json::Value::String(s) => {
+                        if s.trim().is_empty() {
+                            None
+                        } else {
+                            match serde_json::from_str::<serde_json::Value>(&s) {
+                                Ok(parsed) => {
+                                    tracing::debug!("Successfully parsed JSON string params: {} -> {:?}", s, parsed);
+                                    Some(parsed)
+                                },
+                                Err(e) => {
+                                    tracing::warn!("Failed to parse params as JSON string '{}': {}. Using as literal string.", s, e);
+                                    Some(serde_json::Value::String(s))
+                                }
+                            }
+                        }
+                    }
+                }
+            },
+            None => None,
+        };
+        
+        Ok(LspRequestTool {
+            method: helper.method,
+            params: processed_params,
+        })
+    }
 }
 
 impl LspRequestTool {
@@ -293,6 +347,29 @@ impl LspRequestTool {
         clangd_manager: &Arc<Mutex<ClangdManager>>,
     ) -> Result<CallToolResult, CallToolError> {
         info!("Sending LSP request: {}", self.method);
+        
+        // Enhanced logging for parameter diagnostics
+        match &self.params {
+            Some(params) => {
+                let param_type = match params {
+                    serde_json::Value::Object(_) => "object",
+                    serde_json::Value::Array(_) => "array", 
+                    serde_json::Value::String(_) => "string",
+                    serde_json::Value::Number(_) => "number",
+                    serde_json::Value::Bool(_) => "boolean",
+                    serde_json::Value::Null => "null",
+                };
+                debug!(
+                    "LSP request params - method: {}, type: {}, value: {}", 
+                    self.method, 
+                    param_type,
+                    serde_json::to_string(params).unwrap_or_else(|_| "failed to serialize".to_string())
+                );
+            },
+            None => {
+                debug!("LSP request params - method: {}, type: none", self.method);
+            }
+        }
 
         let manager_guard = clangd_manager.lock().await;
 
