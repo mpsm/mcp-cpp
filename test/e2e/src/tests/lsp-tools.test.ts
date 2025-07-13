@@ -537,4 +537,138 @@ describe('LSP tools', () => {
       expect(shutdownResult.success).toBe(true);
     });
   });
+
+  describe('LSP symbol requests', () => {
+    it('should handle textDocument/documentSymbol request', async () => {
+      project = await TestProject.fromBaseProject({
+        enableDebugLogging: true,
+        enableMemoryStorage: true,
+        buildType: BuildConfiguration.DEBUG
+      });
+
+      // Configure debug build
+      await project.runCmake({ buildType: 'Debug', buildDir: 'build' });
+
+      client = new McpClient(serverPath, 10000, project.projectPath);
+      await client.start();
+
+      // Setup clangd
+      const setupResponse = await client.callTool('setup_clangd', {
+        buildDirectory: 'build'
+      });
+      const setupResult = JSON.parse(setupResponse.content[0].text);
+      expect(setupResult.success).toBe(true);
+
+      // Initialize clangd
+      await client.callTool('lsp_request', {
+        method: 'initialize',
+        params: {
+          processId: null,
+          rootUri: `file://${project.projectPath}`,
+          capabilities: {}
+        }
+      });
+
+      await client.callTool('lsp_request', {
+        method: 'initialized',
+        params: {}
+      });
+
+      // Open the Math.hpp file first
+      const mathPath = path.join(project.projectPath, 'include/Math.hpp');
+      const mathContent = await project.readFile('include/Math.hpp');
+      await client.callTool('lsp_request', {
+        method: 'textDocument/didOpen',
+        params: {
+          textDocument: {
+            uri: `file://${mathPath}`,
+            languageId: 'cpp',
+            version: 1,
+            text: mathContent
+          }
+        }
+      });
+
+      // Request document symbols for Math.hpp
+      const response = await client.callTool('lsp_request', {
+        method: 'textDocument/documentSymbol',
+        params: {
+          textDocument: {
+            uri: `file://${mathPath}`
+          }
+        }
+      });
+
+      const result = JSON.parse(response.content[0].text);
+
+      expect(result.success).toBe(true);
+      expect(result.method).toBe('textDocument/documentSymbol');
+      expect(result.result).toBeDefined();
+      expect(Array.isArray(result.result)).toBe(true);
+      
+      // Verify we get symbols from the Math class
+      const symbols = result.result;
+      expect(symbols.length).toBeGreaterThan(0);
+      
+      // Should include the Math class and its methods
+      const symbolNames = symbols.map((symbol: any) => symbol.name);
+      expect(symbolNames).toContain('Math');
+      expect(symbolNames).toContain('factorial');
+      expect(symbolNames).toContain('gcd');
+    });
+
+    it('should fail documentSymbol request without didOpen (regression test)', async () => {
+      project = await TestProject.fromBaseProject({
+        enableDebugLogging: true,
+        enableMemoryStorage: true,
+        buildType: BuildConfiguration.DEBUG
+      });
+
+      // Configure debug build
+      await project.runCmake({ buildType: 'Debug', buildDir: 'build' });
+
+      client = new McpClient(serverPath, 10000, project.projectPath);
+      await client.start();
+
+      // Setup clangd
+      const setupResponse = await client.callTool('setup_clangd', {
+        buildDirectory: 'build'
+      });
+      const setupResult = JSON.parse(setupResponse.content[0].text);
+      expect(setupResult.success).toBe(true);
+
+      // Initialize clangd
+      await client.callTool('lsp_request', {
+        method: 'initialize',
+        params: {
+          processId: null,
+          rootUri: `file://${project.projectPath}`,
+          capabilities: {}
+        }
+      });
+
+      await client.callTool('lsp_request', {
+        method: 'initialized',
+        params: {}
+      });
+
+      // Try to request document symbols WITHOUT didOpen first (should fail)
+      const mathPath = path.join(project.projectPath, 'include/Math.hpp');
+      const response = await client.callTool('lsp_request', {
+        method: 'textDocument/documentSymbol',
+        params: {
+          textDocument: {
+            uri: `file://${mathPath}`
+          }
+        }
+      });
+
+      const result = JSON.parse(response.content[0].text);
+
+      // This should fail with "trying to get AST for non-added document"
+      expect(result.success).toBe(false);
+      expect(result.error).toContain('trying to get AST for non-added document');
+      expect(result.method).toBe('textDocument/documentSymbol');
+    });
+  });
 });

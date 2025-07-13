@@ -115,16 +115,62 @@ Use `setup_clangd` tool to initialize clangd for a specific build directory:
 - Build directory must contain `compile_commands.json`
 - clangd binary must be available (use CLANGD_PATH env var if needed)
 
-### 3. [Use] Send LSP Requests
-Use `lsp_request` tool for semantic analysis:
+### 3. [Required] Initialize LSP
+Send the LSP initialize request:
 ```json
 {
   "name": "lsp_request",
   "arguments": {
-    "method": "textDocument/definition",
+    "method": "initialize",
     "params": {
-      "textDocument": {"uri": "file:///path/to/file.cpp"},
-      "position": {"line": 10, "character": 5}
+      "processId": null,
+      "rootUri": "file:///path/to/project",
+      "capabilities": {}
+    }
+  }
+}
+```
+
+### 4. [Required] Send Initialized Notification
+After successful initialization, send the initialized notification:
+```json
+{
+  "name": "lsp_request",
+  "arguments": {
+    "method": "initialized",
+    "params": {}
+  }
+}
+```
+
+### 5. [Required for Document Operations] Open Documents
+Before requesting symbols, definitions, or other document-specific operations, open the document:
+```json
+{
+  "name": "lsp_request",
+  "arguments": {
+    "method": "textDocument/didOpen",
+    "params": {
+      "textDocument": {
+        "uri": "file:///path/to/file.cpp",
+        "languageId": "cpp",
+        "version": 1,
+        "text": "// content of the file"
+      }
+    }
+  }
+}
+```
+
+### 6. [Use] Send LSP Requests
+Now you can perform semantic analysis operations:
+```json
+{
+  "name": "lsp_request",
+  "arguments": {
+    "method": "textDocument/documentSymbol",
+    "params": {
+      "textDocument": {"uri": "file:///path/to/file.cpp"}
     }
   }
 }
@@ -133,12 +179,16 @@ Use `lsp_request` tool for semantic analysis:
 ## Important Notes
 
 - Steps must be executed in order
+- Documents must be opened with `textDocument/didOpen` before requesting symbols/definitions
 - Only one clangd instance runs at a time per build directory
 - Switching build directories will terminate the previous clangd process
 - LSP requests will fail with helpful error if clangd not setup first
 
 ## Common LSP Methods
 
+- `initialize` - Initialize the LSP server (required first)
+- `initialized` - Confirm initialization (required after initialize)
+- `textDocument/didOpen` - Open document for analysis (required before document operations)
 - `textDocument/definition` - Go to definition
 - `textDocument/hover` - Get symbol information
 - `textDocument/completion` - Code completion
@@ -263,7 +313,65 @@ See `lsp://methods` and `lsp://examples` resources for detailed usage.
 
     fn examples_content() -> TextResourceContents {
         let examples = json!({
+            "complete_workflow": {
+                "description": "Complete LSP workflow from setup to document analysis",
+                "steps": [
+                    {
+                        "step": 1,
+                        "name": "setup_clangd",
+                        "arguments": {
+                            "buildDirectory": "build"
+                        }
+                    },
+                    {
+                        "step": 2,
+                        "name": "lsp_request",
+                        "arguments": {
+                            "method": "initialize",
+                            "params": {
+                                "processId": null,
+                                "rootUri": "file:///home/user/project",
+                                "capabilities": {}
+                            }
+                        }
+                    },
+                    {
+                        "step": 3,
+                        "name": "lsp_request",
+                        "arguments": {
+                            "method": "initialized",
+                            "params": {}
+                        }
+                    },
+                    {
+                        "step": 4,
+                        "name": "lsp_request",
+                        "arguments": {
+                            "method": "textDocument/didOpen",
+                            "params": {
+                                "textDocument": {
+                                    "uri": "file:///home/user/project/src/main.cpp",
+                                    "languageId": "cpp",
+                                    "version": 1,
+                                    "text": "#include <iostream>\nint main() { return 0; }"
+                                }
+                            }
+                        }
+                    },
+                    {
+                        "step": 5,
+                        "name": "lsp_request",
+                        "arguments": {
+                            "method": "textDocument/documentSymbol",
+                            "params": {
+                                "textDocument": {"uri": "file:///home/user/project/src/main.cpp"}
+                            }
+                        }
+                    }
+                ]
+            },
             "go_to_definition": {
+                "description": "Find symbol definition (requires didOpen first)",
                 "method": "textDocument/definition",
                 "params": {
                     "textDocument": {"uri": "file:///home/user/project/src/main.cpp"},
@@ -271,6 +379,7 @@ See `lsp://methods` and `lsp://examples` resources for detailed usage.
                 }
             },
             "hover_information": {
+                "description": "Get symbol information (requires didOpen first)",
                 "method": "textDocument/hover",
                 "params": {
                     "textDocument": {"uri": "file:///home/user/project/src/main.cpp"},
@@ -278,6 +387,7 @@ See `lsp://methods` and `lsp://examples` resources for detailed usage.
                 }
             },
             "code_completion": {
+                "description": "Get code completion (requires didOpen first)",
                 "method": "textDocument/completion",
                 "params": {
                     "textDocument": {"uri": "file:///home/user/project/src/main.cpp"},
@@ -285,6 +395,7 @@ See `lsp://methods` and `lsp://examples` resources for detailed usage.
                 }
             },
             "find_references": {
+                "description": "Find all references (requires didOpen first)",
                 "method": "textDocument/references",
                 "params": {
                     "textDocument": {"uri": "file:///home/user/project/src/main.cpp"},
@@ -293,6 +404,7 @@ See `lsp://methods` and `lsp://examples` resources for detailed usage.
                 }
             },
             "document_symbols": {
+                "description": "List document symbols (requires didOpen first)",
                 "method": "textDocument/documentSymbol",
                 "params": {
                     "textDocument": {"uri": "file:///home/user/project/src/main.cpp"}

@@ -241,18 +241,52 @@ impl SetupClangdTool {
     }
 }
 
-#[mcp_tool(
-    name = "lsp_request",
-    description = "Send LSP request to clangd (requires setup_clangd first). Supports all LSP methods like textDocument/definition, textDocument/hover, textDocument/completion, etc. See lsp://workflow resource for complete usage guide."
-)]
 #[derive(Debug, ::serde::Deserialize, ::serde::Serialize, JsonSchema)]
 pub struct LspRequestTool {
     pub method: String,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub params: Option<serde_json::Value>,
 }
 
 impl LspRequestTool {
+    /// Returns the name of the tool as a string.
+    pub fn tool_name() -> String {
+        "lsp_request".to_string()
+    }
+
+    /// Constructs and returns a `rust_mcp_schema::Tool` instance.
+    pub fn tool() -> rust_mcp_sdk::schema::Tool {
+        use std::collections::HashMap;
+
+        let mut properties = HashMap::new();
+
+        // method field - required string
+        let mut method_schema = serde_json::Map::new();
+        method_schema.insert(
+            "type".to_string(),
+            serde_json::Value::String("string".to_string()),
+        );
+        properties.insert("method".to_string(), method_schema);
+
+        // params field - optional, accepts any JSON value
+        let params_schema = serde_json::Map::new();
+        // Use an empty schema which accepts any JSON value according to JSON Schema Draft 2020-12
+        properties.insert("params".to_string(), params_schema);
+
+        rust_mcp_sdk::schema::Tool {
+            name: "lsp_request".to_string(),
+            description: Some("Send LSP request to clangd (requires setup_clangd first). Supports all LSP methods like textDocument/definition, textDocument/hover, textDocument/completion, etc. See lsp://workflow resource for complete usage guide.".to_string()),
+            input_schema: rust_mcp_sdk::schema::ToolInputSchema::new(
+                vec!["method".to_string()],
+                Some(properties),
+            ),
+            title: None,
+            meta: None,
+            annotations: None,
+            output_schema: None,
+        }
+    }
+
     #[instrument(name = "lsp_request", skip(self, clangd_manager))]
     pub async fn call_tool(
         &self,
