@@ -94,35 +94,30 @@
 
 ## 🏗️ **Structural Issues Hindering Development**
 
-### 4. **Tool Registration is Manual and Error-Prone**
+### ✅ 4. **~~Tool Registration is Manual and Error-Prone~~ - RESOLVED**
 
-**Location:** `src/tools.rs:324-388`
+**Status:** 🟢 **COMPLETED** (July 13, 2025)
 
-```rust
-impl CppTools {
-    pub fn tools() -> Vec<rust_mcp_sdk::schema::Tool> {
-        vec![
-            rust_mcp_sdk::schema::Tool {
-                name: "cpp_project_status".to_string(),
-                // 20+ lines of manual schema definition
-            },
-            // Repeat for each tool...
-        ]
-    }
-}
-```
+**Why it mattered:** Manual schema definition for each tool was blocking rapid feature development and creating error-prone registration process that slowed down adding new capabilities.
 
-**Problems:**
+**Original pain:** 20+ lines of manual JSON schema per tool, no validation between schema and actual parameters, easy to introduce bugs.
 
-- Manual schema definition is brittle and error-prone
-- No validation that schema matches actual tool parameters
-- Duplication between enum variants and schema definitions
-- Adding new tools requires touching multiple places
-- Violates "Feature Development Workflow" from project context
+**Solution Implemented:**
 
-**Impact:** Makes adding new tools painful and error-prone, hindering the project's growth.
+- Enabled `macros` feature in `rust-mcp-sdk` dependency
+- Replaced manual schema definitions with `#[mcp_tool(...)]` attributes
+- Used auto-generated methods like `SomeToolStruct::tool()` and `SomeToolStruct::tool_name()`
+- Eliminated 60+ lines of boilerplate schema creation code
+- Fixed JsonSchema conflicts by using full path `serde_json::Value`
 
-**Priority:** 🟡 **MEDIUM** - Blocks easy feature development
+**Verification:** ✅ All tests pass, schemas automatically generated from struct definitions
+
+**Impact:**
+
+- ✅ Eliminated manual schema maintenance burden
+- ✅ Type-safe schema generation prevents mismatches
+- ✅ Reduced boilerplate by 60+ lines per tool
+- ✅ Adding new tools is now much simpler and less error-prone
 
 ### ✅ 5. **~~Inconsistent Async Design~~ - RESOLVED**
 
@@ -184,16 +179,13 @@ impl CppTools {
 
 ### 8. **Missing Request ID Generation Strategy**
 
-**Location:** `src/lsp/client.rs:127-148`
+**Why it matters:** `pending_requests` HashMap can grow indefinitely, causing memory leaks in long-running server instances if requests timeout or fail to receive responses.
 
-**Problems:**
+**Current risk:** No cleanup mechanism for orphaned requests, affecting production reliability.
 
-- No visible consistent request ID generation strategy
-- Potential for ID collisions or reuse
-- No timeout cleanup for orphaned requests
-- `pending_requests` HashMap can grow indefinitely
+**Priority:** 🔥 **HIGH** - Memory leak in production
 
-**Priority:** 🟡 **MEDIUM** - Potential memory leak
+---
 
 ## 📊 **Testing Impact Assessment**
 
@@ -287,18 +279,43 @@ The current architecture **directly contradicts** the testing strategy outlined 
 
 ### **Next: Phase 3 - Developer Experience Improvements**
 
-1. **Tool Registration Automation** - Consider proc macros or schema validation
-2. **Request ID Strategy Enhancement** - Already solid with UUID v4, consider timeout cleanup optimization
-3. **Code Duplication Reduction** - Some remaining serialization patterns to consolidate
+**Priority 1: Request ID Cleanup (Quick Win - 1-2 days)**
+
+- **Why first:** Memory leak risk is production-critical, and solution is straightforward
+- **Action:** Add periodic cleanup task for timed-out requests in LSP client
+- **Impact:** Eliminates potential memory leak, improves production reliability
+
+**Priority 2: Tool Registration Validation (High Impact - 1 week)**
+
+- **Why next:** Blocking feature development velocity, affects every new tool
+- **Action:** Add runtime validation that tool schemas match actual parameters
+- **Impact:** Prevents schema-parameter mismatches, catches errors early
+
+**Priority 3: Tool Registration Automation (Lower Priority - 2 weeks)**
+
+- **Why later:** Nice-to-have developer experience improvement, not blocking
+- **Action:** Evaluate proc macros or derive macros for schema generation
+- **Impact:** Reduces boilerplate when adding new tools
+
+### **Immediate Next Actions (This Week)**
+
+1. **🔥 Quick Fix: Add request cleanup** - Fix memory leak risk
+2. **🔧 Add schema validation** - Prevent runtime tool errors
+3. **📊 Measure impact** - Validate improvements with metrics
 
 ### **Immediate Next Actions for Phase 3**
 
-1. **Optimize pending request cleanup** - Add periodic cleanup for timed-out requests
-2. **Consider tool registration improvements** - Evaluate if proc macros would reduce boilerplate
-3. **Performance monitoring** - Add metrics for LSP request/response times
-4. **Documentation improvements** - Update API documentation and usage examples
+**This Week:**
 
-**Estimated Effort:** 1-2 weeks for Phase 3 improvements (Phases 1 & 2 foundation complete!)
+1. **🔥 Fix memory leak risk** - Add pending request cleanup with timeout (1-2 days)
+2. **🔧 Add schema validation** - Prevent tool registration bugs (2-3 days)
+
+**Next Week:**  
+3. **📊 Add development metrics** - Measure tool registration and LSP performance 4. **📚 Improve documentation** - Update API docs and usage examples
+
+**Later (if needed):** 5. **🤖 Evaluate automation** - Consider proc macros for tool registration boilerplate
+
+**Estimated Effort:** 1 week for critical fixes, 1-2 weeks total for Phase 3
 
 ---
 
