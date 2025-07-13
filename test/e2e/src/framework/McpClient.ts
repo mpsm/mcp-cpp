@@ -13,26 +13,67 @@ export class McpClientError extends Error {
   }
 }
 
+export interface McpClientOptions {
+  timeout?: number;
+  workingDirectory?: string;
+  logFilePath?: string;
+  logLevel?: string;
+  env?: Record<string, string>;
+}
+
 export class McpClient {
   private client?: Client;
   private transport?: StdioClientTransport;
+  private options: McpClientOptions;
 
   constructor(
     private serverPath: string,
-    private timeout = 10000,
-    private workingDirectory?: string
-  ) {}
+    options: McpClientOptions = {}
+  ) {
+    this.options = {
+      timeout: 10000,
+      logLevel: 'warn',
+      ...options,
+    };
+  }
 
   async start(): Promise<void> {
     if (this.client) {
       throw new McpClientError('MCP client already started');
     }
 
+    // Prepare environment variables for logging configuration
+    const env: Record<string, string> = {};
+
+    // Copy existing environment
+    for (const [key, value] of Object.entries(process.env)) {
+      if (value !== undefined) {
+        env[key] = value;
+      }
+    }
+
+    // Apply custom environment variables
+    if (this.options.env) {
+      Object.assign(env, this.options.env);
+    }
+
+    if (this.options.logFilePath) {
+      env.MCP_LOG_FILE = this.options.logFilePath;
+      env.MCP_LOG_UNIQUE = 'true';
+    }
+
+    if (this.options.logLevel) {
+      env.RUST_LOG = this.options.logLevel;
+    }
+
     // Create transport that will spawn the process
     this.transport = new StdioClientTransport({
       command: this.serverPath,
       args: [],
-      ...(this.workingDirectory && { cwd: this.workingDirectory }),
+      ...(this.options.workingDirectory && {
+        cwd: this.options.workingDirectory,
+      }),
+      env,
     });
 
     this.client = new Client(
@@ -80,7 +121,7 @@ export class McpClient {
         arguments: args,
       });
 
-      return response;
+      return response as CallToolResult;
     } catch (error) {
       throw new McpClientError(
         `Tool call failed: ${error instanceof Error ? error.message : String(error)}`

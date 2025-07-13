@@ -6,13 +6,13 @@ import { spawn } from 'child_process';
 export enum ProjectTemplate {
   BASE = 'base',
   EMPTY = 'empty',
-  MINIMAL_CMAKE = 'minimal-cmake'
+  MINIMAL_CMAKE = 'minimal-cmake',
 }
 
 export enum BuildConfiguration {
   DEBUG = 'debug',
   RELEASE = 'release',
-  CUSTOM = 'custom'
+  CUSTOM = 'custom',
 }
 
 export interface ProjectOptions {
@@ -53,15 +53,17 @@ export class TestProject {
     buildType: BuildConfiguration.DEBUG,
     debugLogging: false,
     memoryStorage: false,
-    customOptions: {}
+    customOptions: {},
   };
 
   private constructor(public readonly projectPath: string) {}
 
   // Factory Methods
-  static async fromTemplate(template: ProjectTemplate = ProjectTemplate.BASE): Promise<TestProject> {
+  static async fromTemplate(
+    template: ProjectTemplate = ProjectTemplate.BASE
+  ): Promise<TestProject> {
     const project = await TestProject.createTempProject();
-    
+
     switch (template) {
       case ProjectTemplate.BASE:
         await project.copyFromBaseProject();
@@ -73,7 +75,7 @@ export class TestProject {
         await project.createMinimalCMakeProject();
         break;
     }
-    
+
     return project;
   }
 
@@ -99,12 +101,18 @@ export class TestProject {
   async configure(options: ProjectOptions): Promise<void> {
     if (options.enableDebugLogging !== undefined) {
       this.currentConfig.debugLogging = options.enableDebugLogging;
-      await this.updateCMakeOption('ENABLE_DEBUG_LOGGING', options.enableDebugLogging ? 'ON' : 'OFF');
+      await this.updateCMakeOption(
+        'ENABLE_DEBUG_LOGGING',
+        options.enableDebugLogging ? 'ON' : 'OFF'
+      );
     }
 
     if (options.enableMemoryStorage !== undefined) {
       this.currentConfig.memoryStorage = options.enableMemoryStorage;
-      await this.updateCMakeOption('USE_MEMORY_STORAGE', options.enableMemoryStorage ? 'ON' : 'OFF');
+      await this.updateCMakeOption(
+        'USE_MEMORY_STORAGE',
+        options.enableMemoryStorage ? 'ON' : 'OFF'
+      );
     }
 
     if (options.buildType !== undefined) {
@@ -112,20 +120,29 @@ export class TestProject {
     }
 
     if (options.customCmakeOptions) {
-      this.currentConfig.customOptions = { ...this.currentConfig.customOptions, ...options.customCmakeOptions };
+      this.currentConfig.customOptions = {
+        ...this.currentConfig.customOptions,
+        ...options.customCmakeOptions,
+      };
     }
   }
 
   async switchBuildConfig(config: BuildConfiguration): Promise<void> {
     this.currentConfig.buildType = config;
-    
-    const buildDir = config === BuildConfiguration.DEBUG ? 'build-debug' : 
-                     config === BuildConfiguration.RELEASE ? 'build-release' : 'build';
-    
+
+    const buildDir =
+      config === BuildConfiguration.DEBUG
+        ? 'build-debug'
+        : config === BuildConfiguration.RELEASE
+          ? 'build-release'
+          : 'build';
+
     await this.ensureBuildDirectory(buildDir);
   }
 
-  async enableFeature(feature: 'debug-logging' | 'memory-storage'): Promise<void> {
+  async enableFeature(
+    feature: 'debug-logging' | 'memory-storage'
+  ): Promise<void> {
     const options: ProjectOptions = {};
     if (feature === 'debug-logging') {
       options.enableDebugLogging = true;
@@ -135,7 +152,9 @@ export class TestProject {
     await this.configure(options);
   }
 
-  async disableFeature(feature: 'debug-logging' | 'memory-storage'): Promise<void> {
+  async disableFeature(
+    feature: 'debug-logging' | 'memory-storage'
+  ): Promise<void> {
     const options: ProjectOptions = {};
     if (feature === 'debug-logging') {
       options.enableDebugLogging = false;
@@ -200,7 +219,9 @@ export class TestProject {
     const fullPath = path.join(this.projectPath, relativePath);
     try {
       const entries = await fs.readdir(fullPath, { withFileTypes: true });
-      return entries.filter(entry => entry.isFile()).map(entry => entry.name);
+      return entries
+        .filter((entry) => entry.isFile())
+        .map((entry) => entry.name);
     } catch (error) {
       throw new TestProjectError(
         `Failed to list files in ${relativePath}`,
@@ -234,7 +255,9 @@ export class TestProject {
     const fullPath = path.join(this.projectPath, relativePath);
     try {
       const entries = await fs.readdir(fullPath, { withFileTypes: true });
-      return entries.filter(entry => entry.isDirectory()).map(entry => entry.name);
+      return entries
+        .filter((entry) => entry.isDirectory())
+        .map((entry) => entry.name);
     } catch (error) {
       throw new TestProjectError(
         `Failed to list directories in ${relativePath}`,
@@ -253,7 +276,7 @@ export class TestProject {
     } = options;
 
     // Use provided buildDir or determine from current config
-    const actualBuildDir = buildDir || this.getCurrentBuildDir();
+    const actualBuildDir = buildDir ?? this.getCurrentBuildDir();
     const buildPath = path.join(this.projectPath, actualBuildDir);
     await fse.ensureDir(buildPath);
 
@@ -283,13 +306,13 @@ export class TestProject {
   }
 
   async buildProject(buildDir?: string): Promise<void> {
-    const actualBuildDir = buildDir || this.getCurrentBuildDir();
+    const actualBuildDir = buildDir ?? this.getCurrentBuildDir();
     const buildPath = path.join(this.projectPath, actualBuildDir);
     await this.runCommand('cmake', ['--build', buildPath]);
   }
 
   async cleanBuild(buildDir?: string): Promise<void> {
-    const actualBuildDir = buildDir || this.getCurrentBuildDir();
+    const actualBuildDir = buildDir ?? this.getCurrentBuildDir();
     const buildPath = path.join(this.projectPath, actualBuildDir);
     await this.runCommand('cmake', ['--build', buildPath, '--target', 'clean']);
   }
@@ -336,7 +359,7 @@ export class TestProject {
           // Exclude build directories to avoid CMake cache conflicts
           const relativePath = path.relative(basePath, src);
           return !relativePath.startsWith('build');
-        }
+        },
       });
     } catch (error) {
       throw new TestProjectError(
@@ -432,6 +455,7 @@ int main() {
       try {
         await callback();
       } catch (error) {
+        // eslint-disable-next-line no-console
         console.warn('Cleanup error:', error);
       }
     }

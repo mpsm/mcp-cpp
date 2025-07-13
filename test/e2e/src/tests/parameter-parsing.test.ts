@@ -1,7 +1,13 @@
 import { describe, it, expect, beforeEach, afterEach, beforeAll } from 'vitest';
 import { McpClient } from '../framework/McpClient.js';
-import { TestProject, ProjectTemplate, BuildConfiguration } from '../framework/TestProject.js';
+import { TestProject, BuildConfiguration } from '../framework/TestProject.js';
 import * as path from 'path';
+
+// Helper to extract text from MCP response
+function getResponseText(response: { content: unknown[] }): string {
+  const textContent = response.content[0] as { text: string };
+  return textContent.text;
+}
 
 describe('Parameter Parsing Tests', () => {
   let client: McpClient;
@@ -29,21 +35,23 @@ describe('Parameter Parsing Tests', () => {
     project = await TestProject.fromBaseProject({
       enableDebugLogging: true,
       enableMemoryStorage: true,
-      buildType: BuildConfiguration.DEBUG
+      buildType: BuildConfiguration.DEBUG,
     });
 
     // Configure debug build
     await project.runCmake({ buildType: 'Debug', buildDir: 'build' });
 
     // Create client with working directory set to project path
-    client = new McpClient(serverPath, 10000, project.projectPath);
+    client = new McpClient(serverPath, {
+      workingDirectory: project.projectPath,
+    });
     await client.start();
 
     // Setup clangd first
     const setupResponse = await client.callTool('setup_clangd', {
-      buildDirectory: 'build'
+      buildDirectory: 'build',
     });
-    const setupResult = JSON.parse(setupResponse.content[0].text);
+    const setupResult = JSON.parse(getResponseText(setupResponse));
     expect(setupResult.success).toBe(true);
   });
 
@@ -64,11 +72,11 @@ describe('Parameter Parsing Tests', () => {
         params: {
           processId: null,
           rootUri: `file://${project.projectPath}`,
-          capabilities: {}
-        }
+          capabilities: {},
+        },
       });
 
-      const result = JSON.parse(response.content[0].text);
+      const result = JSON.parse(getResponseText(response));
 
       expect(result.success).toBe(true);
       expect(result.method).toBe('initialize');
@@ -82,17 +90,17 @@ describe('Parameter Parsing Tests', () => {
       const paramsAsString = JSON.stringify({
         processId: null,
         rootUri: `file://${project.projectPath}`,
-        capabilities: {}
+        capabilities: {},
       });
 
       // Note: This test simulates sending a JSON string as the params value
       // In practice, this would happen at the MCP protocol level
       const response = await client.callTool('lsp_request', {
         method: 'initialize',
-        params: paramsAsString as any // Force TypeScript to accept string
+        params: paramsAsString as unknown, // Force TypeScript to accept string for protocol simulation
       });
 
-      const result = JSON.parse(response.content[0].text);
+      const result = JSON.parse(getResponseText(response));
 
       expect(result.success).toBe(true);
       expect(result.method).toBe('initialize');
@@ -107,17 +115,17 @@ describe('Parameter Parsing Tests', () => {
         params: {
           processId: null,
           rootUri: `file://${project.projectPath}`,
-          capabilities: {}
-        }
+          capabilities: {},
+        },
       });
 
       // Send initialized notification (no params needed)
       const response = await client.callTool('lsp_request', {
         method: 'initialized',
-        params: {}
+        params: {},
       });
 
-      const result = JSON.parse(response.content[0].text);
+      const result = JSON.parse(getResponseText(response));
 
       expect(result.success).toBe(true);
       expect(result.method).toBe('initialized');
@@ -129,10 +137,10 @@ describe('Parameter Parsing Tests', () => {
       // Our deserializer should log a warning and use the string as-is
       const response = await client.callTool('lsp_request', {
         method: 'invalidMethod',
-        params: 'not-valid-json-{' as any
+        params: 'not-valid-json-{' as unknown,
       });
 
-      const result = JSON.parse(response.content[0].text);
+      const result = JSON.parse(getResponseText(response));
 
       // Should fail but not crash
       expect(result.success).toBe(false);
@@ -152,20 +160,22 @@ describe('Parameter Parsing Tests', () => {
           capabilities: {
             textDocument: {
               hover: { dynamicRegistration: false },
-              completion: { dynamicRegistration: false }
-            }
-          }
-        }
+              completion: { dynamicRegistration: false },
+            },
+          },
+        },
       });
-      const initResult = JSON.parse(initResponse.content[0].text);
+      const initResult = JSON.parse(getResponseText(initResponse));
       expect(initResult.success).toBe(true);
 
       // 2. Send initialized notification
       const initializedResponse = await client.callTool('lsp_request', {
         method: 'initialized',
-        params: {}
+        params: {},
       });
-      const initializedResult = JSON.parse(initializedResponse.content[0].text);
+      const initializedResult = JSON.parse(
+        getResponseText(initializedResponse)
+      );
       expect(initializedResult.success).toBe(true);
 
       // 3. Open a document
@@ -178,11 +188,11 @@ describe('Parameter Parsing Tests', () => {
             uri: `file://${mainPath}`,
             languageId: 'cpp',
             version: 1,
-            text: mainContent
-          }
-        }
+            text: mainContent,
+          },
+        },
       });
-      const didOpenResult = JSON.parse(didOpenResponse.content[0].text);
+      const didOpenResult = JSON.parse(getResponseText(didOpenResponse));
       expect(didOpenResult.success).toBe(true);
 
       // 4. Request document symbols
@@ -190,11 +200,11 @@ describe('Parameter Parsing Tests', () => {
         method: 'textDocument/documentSymbol',
         params: {
           textDocument: {
-            uri: `file://${mainPath}`
-          }
-        }
+            uri: `file://${mainPath}`,
+          },
+        },
       });
-      const symbolsResult = JSON.parse(symbolsResponse.content[0].text);
+      const symbolsResult = JSON.parse(getResponseText(symbolsResponse));
       expect(symbolsResult.success).toBe(true);
       expect(Array.isArray(symbolsResult.result)).toBe(true);
     });

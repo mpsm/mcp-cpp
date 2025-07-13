@@ -1,7 +1,17 @@
 import { describe, it, expect, beforeEach, afterEach, beforeAll } from 'vitest';
 import { McpClient } from '../framework/McpClient.js';
-import { TestProject, ProjectTemplate, BuildConfiguration } from '../framework/TestProject.js';
+import {
+  TestProject,
+  ProjectTemplate,
+  BuildConfiguration,
+} from '../framework/TestProject.js';
 import * as path from 'path';
+
+// Helper to extract text from MCP response
+function getResponseText(response: { content: unknown[] }): string {
+  const textContent = response.content[0] as { text: string };
+  return textContent.text;
+}
 
 describe('LSP tools', () => {
   let client: McpClient;
@@ -55,9 +65,7 @@ describe('LSP tools', () => {
       expect(setupClangdTool).toBeDefined();
       expect(setupClangdTool?.description).toContain('clangd');
 
-      const lspRequestTool = tools.find(
-        (tool) => tool.name === 'lsp_request'
-      );
+      const lspRequestTool = tools.find((tool) => tool.name === 'lsp_request');
       expect(lspRequestTool).toBeDefined();
       expect(lspRequestTool?.description).toContain('LSP request');
     });
@@ -68,18 +76,20 @@ describe('LSP tools', () => {
       project = await TestProject.fromBaseProject({
         enableDebugLogging: true,
         enableMemoryStorage: true,
-        buildType: BuildConfiguration.DEBUG
+        buildType: BuildConfiguration.DEBUG,
       });
 
       // Configure debug build
       await project.runCmake({ buildType: 'Debug', buildDir: 'build' });
 
       // Create client with working directory set to project path
-      client = new McpClient(serverPath, 10000, project.projectPath);
+      client = new McpClient(serverPath, {
+        workingDirectory: project.projectPath,
+      });
       await client.start();
 
       const response = await client.callTool('setup_clangd', {
-        buildDirectory: 'build'
+        buildDirectory: 'build',
       });
 
       expect(response).toBeDefined();
@@ -87,7 +97,7 @@ describe('LSP tools', () => {
       expect(Array.isArray(response.content)).toBe(true);
       expect(response.content.length).toBeGreaterThan(0);
 
-      const result = JSON.parse(response.content[0].text);
+      const result = JSON.parse(getResponseText(response));
 
       expect(result.success).toBe(true);
       expect(result.message).toBeDefined();
@@ -99,14 +109,16 @@ describe('LSP tools', () => {
     it('should fail with non-existent build directory', async () => {
       project = await TestProject.fromTemplate(ProjectTemplate.MINIMAL_CMAKE);
 
-      client = new McpClient(serverPath, 10000, project.projectPath);
+      client = new McpClient(serverPath, {
+        workingDirectory: project.projectPath,
+      });
       await client.start();
 
       const response = await client.callTool('setup_clangd', {
-        buildDirectory: 'nonexistent-build'
+        buildDirectory: 'nonexistent-build',
       });
 
-      const result = JSON.parse(response.content[0].text);
+      const result = JSON.parse(getResponseText(response));
 
       expect(result.success).toBe(false);
       expect(result.error).toBeDefined();
@@ -115,18 +127,20 @@ describe('LSP tools', () => {
 
     it('should fail with build directory missing compile_commands.json', async () => {
       project = await TestProject.fromTemplate(ProjectTemplate.MINIMAL_CMAKE);
-      
+
       // Create build directory but don't run cmake (no compile_commands.json)
       await project.createDirectory('build');
 
-      client = new McpClient(serverPath, 10000, project.projectPath);
+      client = new McpClient(serverPath, {
+        workingDirectory: project.projectPath,
+      });
       await client.start();
 
       const response = await client.callTool('setup_clangd', {
-        buildDirectory: 'build'
+        buildDirectory: 'build',
       });
 
-      const result = JSON.parse(response.content[0].text);
+      const result = JSON.parse(getResponseText(response));
 
       expect(result.success).toBe(false);
       expect(result.error).toBeDefined();
@@ -137,14 +151,16 @@ describe('LSP tools', () => {
     it('should fail when clangd not setup', async () => {
       project = await TestProject.fromTemplate(ProjectTemplate.MINIMAL_CMAKE);
 
-      client = new McpClient(serverPath, 10000, project.projectPath);
+      client = new McpClient(serverPath, {
+        workingDirectory: project.projectPath,
+      });
       await client.start();
 
       const response = await client.callTool('lsp_request', {
-        method: 'initialize'
+        method: 'initialize',
       });
 
-      const result = JSON.parse(response.content[0].text);
+      const result = JSON.parse(getResponseText(response));
 
       expect(result.success).toBe(false);
       expect(result.error).toBe('clangd not setup');
@@ -155,20 +171,22 @@ describe('LSP tools', () => {
       project = await TestProject.fromBaseProject({
         enableDebugLogging: true,
         enableMemoryStorage: true,
-        buildType: BuildConfiguration.DEBUG
+        buildType: BuildConfiguration.DEBUG,
       });
 
       // Configure debug build
       await project.runCmake({ buildType: 'Debug', buildDir: 'build' });
 
-      client = new McpClient(serverPath, 10000, project.projectPath);
+      client = new McpClient(serverPath, {
+        workingDirectory: project.projectPath,
+      });
       await client.start();
 
       // Setup clangd first
       const setupResponse = await client.callTool('setup_clangd', {
-        buildDirectory: 'build'
+        buildDirectory: 'build',
       });
-      const setupResult = JSON.parse(setupResponse.content[0].text);
+      const setupResult = JSON.parse(getResponseText(setupResponse));
       expect(setupResult.success).toBe(true);
 
       // Send initialize request
@@ -177,11 +195,11 @@ describe('LSP tools', () => {
         params: {
           processId: null,
           rootUri: null,
-          capabilities: {}
-        }
+          capabilities: {},
+        },
       });
 
-      const result = JSON.parse(response.content[0].text);
+      const result = JSON.parse(getResponseText(response));
 
       expect(result.success).toBe(true);
       expect(result.method).toBe('initialize');
@@ -192,20 +210,22 @@ describe('LSP tools', () => {
       project = await TestProject.fromBaseProject({
         enableDebugLogging: true,
         enableMemoryStorage: true,
-        buildType: BuildConfiguration.DEBUG
+        buildType: BuildConfiguration.DEBUG,
       });
 
       // Configure debug build
       await project.runCmake({ buildType: 'Debug', buildDir: 'build' });
 
-      client = new McpClient(serverPath, 10000, project.projectPath);
+      client = new McpClient(serverPath, {
+        workingDirectory: project.projectPath,
+      });
       await client.start();
 
       // Setup clangd
       const setupResponse = await client.callTool('setup_clangd', {
-        buildDirectory: 'build'
+        buildDirectory: 'build',
       });
-      const setupResult = JSON.parse(setupResponse.content[0].text);
+      const setupResult = JSON.parse(getResponseText(setupResponse));
       expect(setupResult.success).toBe(true);
 
       // Initialize clangd
@@ -214,14 +234,14 @@ describe('LSP tools', () => {
         params: {
           processId: null,
           rootUri: `file://${project.projectPath}`,
-          capabilities: {}
-        }
+          capabilities: {},
+        },
       });
 
-      // Initialized notification  
+      // Initialized notification
       await client.callTool('lsp_request', {
         method: 'initialized',
-        params: {}
+        params: {},
       });
 
       // Open the file first
@@ -234,9 +254,9 @@ describe('LSP tools', () => {
             uri: `file://${mainPath}`,
             languageId: 'cpp',
             version: 1,
-            text: mainContent
-          }
-        }
+            text: mainContent,
+          },
+        },
       });
 
       // Get hover information for Math::factorial function
@@ -244,16 +264,16 @@ describe('LSP tools', () => {
         method: 'textDocument/hover',
         params: {
           textDocument: {
-            uri: `file://${mainPath}`
+            uri: `file://${mainPath}`,
           },
           position: {
             line: 17, // Math::factorial(n) line
-            character: 52 // on 'factorial'
-          }
-        }
+            character: 52, // on 'factorial'
+          },
+        },
       });
 
-      const result = JSON.parse(response.content[0].text);
+      const result = JSON.parse(getResponseText(response));
 
       expect(result.success).toBe(true);
       expect(result.method).toBe('textDocument/hover');
@@ -264,20 +284,22 @@ describe('LSP tools', () => {
       project = await TestProject.fromBaseProject({
         enableDebugLogging: true,
         enableMemoryStorage: true,
-        buildType: BuildConfiguration.DEBUG
+        buildType: BuildConfiguration.DEBUG,
       });
 
       // Configure debug build
       await project.runCmake({ buildType: 'Debug', buildDir: 'build' });
 
-      client = new McpClient(serverPath, 10000, project.projectPath);
+      client = new McpClient(serverPath, {
+        workingDirectory: project.projectPath,
+      });
       await client.start();
 
       // Setup clangd
       const setupResponse = await client.callTool('setup_clangd', {
-        buildDirectory: 'build'
+        buildDirectory: 'build',
       });
-      const setupResult = JSON.parse(setupResponse.content[0].text);
+      const setupResult = JSON.parse(getResponseText(setupResponse));
       expect(setupResult.success).toBe(true);
 
       // Initialize clangd
@@ -286,13 +308,13 @@ describe('LSP tools', () => {
         params: {
           processId: null,
           rootUri: `file://${project.projectPath}`,
-          capabilities: {}
-        }
+          capabilities: {},
+        },
       });
 
       await client.callTool('lsp_request', {
         method: 'initialized',
-        params: {}
+        params: {},
       });
 
       // Open the file first
@@ -305,9 +327,9 @@ describe('LSP tools', () => {
             uri: `file://${mainPath}`,
             languageId: 'cpp',
             version: 1,
-            text: mainContent
-          }
-        }
+            text: mainContent,
+          },
+        },
       });
 
       // Request definition of 'Math::factorial' function call in main.cpp
@@ -315,21 +337,21 @@ describe('LSP tools', () => {
         method: 'textDocument/definition',
         params: {
           textDocument: {
-            uri: `file://${mainPath}`
+            uri: `file://${mainPath}`,
           },
           position: {
             line: 17, // line with Math::factorial(n)
-            character: 52 // on 'factorial'
-          }
-        }
+            character: 52, // on 'factorial'
+          },
+        },
       });
 
-      const result = JSON.parse(response.content[0].text);
+      const result = JSON.parse(getResponseText(response));
 
       expect(result.success).toBe(true);
       expect(result.method).toBe('textDocument/definition');
       expect(result.result).toBeDefined();
-      
+
       // Should have location information
       if (Array.isArray(result.result)) {
         expect(result.result.length).toBeGreaterThan(0);
@@ -342,20 +364,22 @@ describe('LSP tools', () => {
       project = await TestProject.fromBaseProject({
         enableDebugLogging: true,
         enableMemoryStorage: true,
-        buildType: BuildConfiguration.DEBUG
+        buildType: BuildConfiguration.DEBUG,
       });
 
       // Configure debug build
       await project.runCmake({ buildType: 'Debug', buildDir: 'build' });
 
-      client = new McpClient(serverPath, 10000, project.projectPath);
+      client = new McpClient(serverPath, {
+        workingDirectory: project.projectPath,
+      });
       await client.start();
 
       // Setup clangd
       const setupResponse = await client.callTool('setup_clangd', {
-        buildDirectory: 'build'
+        buildDirectory: 'build',
       });
-      const setupResult = JSON.parse(setupResponse.content[0].text);
+      const setupResult = JSON.parse(getResponseText(setupResponse));
       expect(setupResult.success).toBe(true);
 
       // Initialize clangd
@@ -368,17 +392,17 @@ describe('LSP tools', () => {
             textDocument: {
               completion: {
                 completionItem: {
-                  snippetSupport: true
-                }
-              }
-            }
-          }
-        }
+                  snippetSupport: true,
+                },
+              },
+            },
+          },
+        },
       });
 
       await client.callTool('lsp_request', {
         method: 'initialized',
-        params: {}
+        params: {},
       });
 
       // Open the file first
@@ -391,9 +415,9 @@ describe('LSP tools', () => {
             uri: `file://${mainPath}`,
             languageId: 'cpp',
             version: 1,
-            text: mainContent
-          }
-        }
+            text: mainContent,
+          },
+        },
       });
 
       // Request completion for std:: in main.cpp
@@ -401,16 +425,16 @@ describe('LSP tools', () => {
         method: 'textDocument/completion',
         params: {
           textDocument: {
-            uri: `file://${mainPath}`
+            uri: `file://${mainPath}`,
           },
           position: {
             line: 25, // after std:: in main.cpp
-            character: 9
-          }
-        }
+            character: 9,
+          },
+        },
       });
 
-      const result = JSON.parse(response.content[0].text);
+      const result = JSON.parse(getResponseText(response));
 
       expect(result.success).toBe(true);
       expect(result.method).toBe('textDocument/completion');
@@ -421,27 +445,29 @@ describe('LSP tools', () => {
       project = await TestProject.fromBaseProject({
         enableDebugLogging: true,
         enableMemoryStorage: true,
-        buildType: BuildConfiguration.DEBUG
+        buildType: BuildConfiguration.DEBUG,
       });
 
       await project.runCmake({ buildType: 'Debug', buildDir: 'build' });
 
-      client = new McpClient(serverPath, 10000, project.projectPath);
+      client = new McpClient(serverPath, {
+        workingDirectory: project.projectPath,
+      });
       await client.start();
 
       // Setup clangd
       const setupResponse = await client.callTool('setup_clangd', {
-        buildDirectory: 'build'
+        buildDirectory: 'build',
       });
-      const setupResult = JSON.parse(setupResponse.content[0].text);
+      const setupResult = JSON.parse(getResponseText(setupResponse));
       expect(setupResult.success).toBe(true);
 
       // Send invalid method
       const response = await client.callTool('lsp_request', {
-        method: 'invalidMethod/doesNotExist'
+        method: 'invalidMethod/doesNotExist',
       });
 
-      const result = JSON.parse(response.content[0].text);
+      const result = JSON.parse(getResponseText(response));
 
       expect(result.success).toBe(false);
       expect(result.error).toBeDefined();
@@ -454,26 +480,28 @@ describe('LSP tools', () => {
       project = await TestProject.fromBaseProject({
         enableDebugLogging: true,
         enableMemoryStorage: true,
-        buildType: BuildConfiguration.DEBUG
+        buildType: BuildConfiguration.DEBUG,
       });
 
       // Configure debug build
       await project.runCmake({ buildType: 'Debug', buildDir: 'build' });
 
-      client = new McpClient(serverPath, 10000, project.projectPath);
+      client = new McpClient(serverPath, {
+        workingDirectory: project.projectPath,
+      });
       await client.start();
 
       // 1. Check project status
       const statusResponse = await client.callTool('cpp_project_status');
-      const statusResult = JSON.parse(statusResponse.content[0].text);
+      const statusResult = JSON.parse(getResponseText(statusResponse));
       expect(statusResult.success).toBe(true);
       expect(statusResult.is_configured).toBe(true);
 
       // 2. Setup clangd
       const setupResponse = await client.callTool('setup_clangd', {
-        buildDirectory: 'build'
+        buildDirectory: 'build',
       });
-      const setupResult = JSON.parse(setupResponse.content[0].text);
+      const setupResult = JSON.parse(getResponseText(setupResponse));
       expect(setupResult.success).toBe(true);
 
       // 3. Initialize LSP
@@ -482,18 +510,20 @@ describe('LSP tools', () => {
         params: {
           processId: null,
           rootUri: `file://${project.projectPath}`,
-          capabilities: {}
-        }
+          capabilities: {},
+        },
       });
-      const initResult = JSON.parse(initResponse.content[0].text);
+      const initResult = JSON.parse(getResponseText(initResponse));
       expect(initResult.success).toBe(true);
 
       // 4. Send initialized notification
       const initializedResponse = await client.callTool('lsp_request', {
         method: 'initialized',
-        params: {}
+        params: {},
       });
-      const initializedResult = JSON.parse(initializedResponse.content[0].text);
+      const initializedResult = JSON.parse(
+        getResponseText(initializedResponse)
+      );
       expect(initializedResult.success).toBe(true);
 
       // 4.5. Open file for LSP operations
@@ -506,11 +536,11 @@ describe('LSP tools', () => {
             uri: `file://${mainPath}`,
             languageId: 'cpp',
             version: 1,
-            text: mainContent
-          }
-        }
+            text: mainContent,
+          },
+        },
       });
-      const didOpenResult = JSON.parse(didOpenResponse.content[0].text);
+      const didOpenResult = JSON.parse(getResponseText(didOpenResponse));
       expect(didOpenResult.success).toBe(true);
 
       // 5. Use LSP features (hover)
@@ -518,22 +548,22 @@ describe('LSP tools', () => {
         method: 'textDocument/hover',
         params: {
           textDocument: {
-            uri: `file://${mainPath}`
+            uri: `file://${mainPath}`,
           },
           position: {
             line: 17, // on Math::factorial line
-            character: 52
-          }
-        }
+            character: 52,
+          },
+        },
       });
-      const hoverResult = JSON.parse(hoverResponse.content[0].text);
+      const hoverResult = JSON.parse(getResponseText(hoverResponse));
       expect(hoverResult.success).toBe(true);
 
       // 6. Shutdown
       const shutdownResponse = await client.callTool('lsp_request', {
-        method: 'shutdown'
+        method: 'shutdown',
       });
-      const shutdownResult = JSON.parse(shutdownResponse.content[0].text);
+      const shutdownResult = JSON.parse(getResponseText(shutdownResponse));
       expect(shutdownResult.success).toBe(true);
     });
   });
@@ -543,20 +573,22 @@ describe('LSP tools', () => {
       project = await TestProject.fromBaseProject({
         enableDebugLogging: true,
         enableMemoryStorage: true,
-        buildType: BuildConfiguration.DEBUG
+        buildType: BuildConfiguration.DEBUG,
       });
 
       // Configure debug build
       await project.runCmake({ buildType: 'Debug', buildDir: 'build' });
 
-      client = new McpClient(serverPath, 10000, project.projectPath);
+      client = new McpClient(serverPath, {
+        workingDirectory: project.projectPath,
+      });
       await client.start();
 
       // Setup clangd
       const setupResponse = await client.callTool('setup_clangd', {
-        buildDirectory: 'build'
+        buildDirectory: 'build',
       });
-      const setupResult = JSON.parse(setupResponse.content[0].text);
+      const setupResult = JSON.parse(getResponseText(setupResponse));
       expect(setupResult.success).toBe(true);
 
       // Initialize clangd
@@ -565,13 +597,13 @@ describe('LSP tools', () => {
         params: {
           processId: null,
           rootUri: `file://${project.projectPath}`,
-          capabilities: {}
-        }
+          capabilities: {},
+        },
       });
 
       await client.callTool('lsp_request', {
         method: 'initialized',
-        params: {}
+        params: {},
       });
 
       // Open the Math.hpp file first
@@ -584,9 +616,9 @@ describe('LSP tools', () => {
             uri: `file://${mathPath}`,
             languageId: 'cpp',
             version: 1,
-            text: mathContent
-          }
-        }
+            text: mathContent,
+          },
+        },
       });
 
       // Request document symbols for Math.hpp
@@ -594,24 +626,26 @@ describe('LSP tools', () => {
         method: 'textDocument/documentSymbol',
         params: {
           textDocument: {
-            uri: `file://${mathPath}`
-          }
-        }
+            uri: `file://${mathPath}`,
+          },
+        },
       });
 
-      const result = JSON.parse(response.content[0].text);
+      const result = JSON.parse(getResponseText(response));
 
       expect(result.success).toBe(true);
       expect(result.method).toBe('textDocument/documentSymbol');
       expect(result.result).toBeDefined();
       expect(Array.isArray(result.result)).toBe(true);
-      
+
       // Verify we get symbols from the Math class
       const symbols = result.result;
       expect(symbols.length).toBeGreaterThan(0);
-      
+
       // Should include the Math class and its methods
-      const symbolNames = symbols.map((symbol: any) => symbol.name);
+      const symbolNames = symbols.map(
+        (symbol: { name: string }) => symbol.name
+      );
       expect(symbolNames).toContain('Math');
       expect(symbolNames).toContain('factorial');
       expect(symbolNames).toContain('gcd');
@@ -621,20 +655,22 @@ describe('LSP tools', () => {
       project = await TestProject.fromBaseProject({
         enableDebugLogging: true,
         enableMemoryStorage: true,
-        buildType: BuildConfiguration.DEBUG
+        buildType: BuildConfiguration.DEBUG,
       });
 
       // Configure debug build
       await project.runCmake({ buildType: 'Debug', buildDir: 'build' });
 
-      client = new McpClient(serverPath, 10000, project.projectPath);
+      client = new McpClient(serverPath, {
+        workingDirectory: project.projectPath,
+      });
       await client.start();
 
       // Setup clangd
       const setupResponse = await client.callTool('setup_clangd', {
-        buildDirectory: 'build'
+        buildDirectory: 'build',
       });
-      const setupResult = JSON.parse(setupResponse.content[0].text);
+      const setupResult = JSON.parse(getResponseText(setupResponse));
       expect(setupResult.success).toBe(true);
 
       // Initialize clangd
@@ -643,13 +679,13 @@ describe('LSP tools', () => {
         params: {
           processId: null,
           rootUri: `file://${project.projectPath}`,
-          capabilities: {}
-        }
+          capabilities: {},
+        },
       });
 
       await client.callTool('lsp_request', {
         method: 'initialized',
-        params: {}
+        params: {},
       });
 
       // Try to request document symbols WITHOUT didOpen first (should fail)
@@ -658,16 +694,18 @@ describe('LSP tools', () => {
         method: 'textDocument/documentSymbol',
         params: {
           textDocument: {
-            uri: `file://${mathPath}`
-          }
-        }
+            uri: `file://${mathPath}`,
+          },
+        },
       });
 
-      const result = JSON.parse(response.content[0].text);
+      const result = JSON.parse(getResponseText(response));
 
       // This should fail with "trying to get AST for non-added document"
       expect(result.success).toBe(false);
-      expect(result.error).toContain('trying to get AST for non-added document');
+      expect(result.error).toContain(
+        'trying to get AST for non-added document'
+      );
       expect(result.method).toBe('textDocument/documentSymbol');
     });
   });

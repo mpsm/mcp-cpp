@@ -1,11 +1,23 @@
 import { describe, it, expect, beforeEach, afterEach, beforeAll } from 'vitest';
 import { McpClient } from '../framework/McpClient.js';
-import { TestProject, ProjectTemplate, BuildConfiguration } from '../framework/TestProject.js';
+import {
+  TestProject,
+  ProjectTemplate,
+  BuildConfiguration,
+} from '../framework/TestProject.js';
+import { TestUtils } from '../framework/TestUtils.js';
 import * as path from 'path';
+
+// Helper to extract text from MCP response
+function getResponseText(response: { content: unknown[] }): string {
+  const textContent = response.content[0] as { text: string };
+  return textContent.text;
+}
 
 describe('cpp_project_status tool', () => {
   let client: McpClient;
   let project: TestProject;
+  let logFilePath: string;
   const serverPath = path.resolve(
     process.cwd(),
     '../../target/debug/mcp-cpp-server'
@@ -26,6 +38,9 @@ describe('cpp_project_status tool', () => {
   });
 
   beforeEach(async () => {
+    // Create log file for this specific test
+    logFilePath = await TestUtils.createTempLogFile('cpp-project-status');
+
     // Client will be created per test with specific working directory
   });
 
@@ -36,11 +51,38 @@ describe('cpp_project_status tool', () => {
     if (project) {
       await project.cleanup();
     }
+
+    // Analyze logs and cleanup
+    const logEntries = await TestUtils.readLogFile(logFilePath);
+    const analysis = TestUtils.analyzeLogEntries(logEntries);
+
+    // For clean tests, we should have minimal ERROR/WARN logs
+    // If we do have them, log them for investigation but don't fail the test
+    // (since the functional behavior was already validated)
+    if (analysis.errors.length > 0) {
+      // eslint-disable-next-line no-console
+      console.warn(
+        `Test generated ${analysis.errors.length} error logs (investigate these):`,
+        analysis.errors.map((e) => e.message)
+      );
+    }
+    if (analysis.warnings.length > 0) {
+      // eslint-disable-next-line no-console
+      console.warn(
+        `Test generated ${analysis.warnings.length} warning logs:`,
+        analysis.warnings.map((e) => e.message)
+      );
+    }
+
+    await TestUtils.cleanupTempLogFile(logFilePath);
   });
 
   describe('tool availability', () => {
     it('should list cpp_project_status tool', async () => {
-      client = new McpClient(serverPath);
+      client = new McpClient(serverPath, {
+        logFilePath,
+        logLevel: 'warn', // Capture warnings and errors for analysis
+      });
       await client.start();
 
       const tools = await client.listTools();
@@ -62,15 +104,22 @@ describe('cpp_project_status tool', () => {
       project = await TestProject.fromBaseProject({
         enableDebugLogging: true,
         enableMemoryStorage: true,
-        buildType: BuildConfiguration.DEBUG
+        buildType: BuildConfiguration.DEBUG,
       });
 
       // Configure both debug and release builds
       await project.runCmake({ buildType: 'Debug', buildDir: 'build-debug' });
-      await project.runCmake({ buildType: 'Release', buildDir: 'build-release' });
+      await project.runCmake({
+        buildType: 'Release',
+        buildDir: 'build-release',
+      });
 
       // Create client with working directory set to project path
-      client = new McpClient(serverPath, 10000, project.projectPath);
+      client = new McpClient(serverPath, {
+        workingDirectory: project.projectPath,
+        logFilePath,
+        logLevel: 'error',
+      });
       await client.start();
 
       const response = await client.callTool('cpp_project_status');
@@ -80,7 +129,7 @@ describe('cpp_project_status tool', () => {
       expect(Array.isArray(response.content)).toBe(true);
       expect(response.content.length).toBeGreaterThan(0);
 
-      const result = JSON.parse(response.content[0].text);
+      const result = JSON.parse(getResponseText(response));
 
       expect(result.success).toBe(true);
       expect(result.project_type).toBe('cmake');
@@ -109,13 +158,17 @@ describe('cpp_project_status tool', () => {
     it('should detect non-CMake project', async () => {
       project = await TestProject.empty();
 
-      client = new McpClient(serverPath, 10000, project.projectPath);
+      client = new McpClient(serverPath, {
+        workingDirectory: project.projectPath,
+        logFilePath,
+        logLevel: 'error',
+      });
       await client.start();
 
       const response = await client.callTool('cpp_project_status');
 
       expect(response).toBeDefined();
-      const result = JSON.parse(response.content[0].text);
+      const result = JSON.parse(getResponseText(response));
 
       expect(result.success).toBe(true);
       expect(result.project_type).toBe('unknown');
@@ -127,11 +180,15 @@ describe('cpp_project_status tool', () => {
     it('should handle CMake project without build directories', async () => {
       project = await TestProject.fromTemplate(ProjectTemplate.MINIMAL_CMAKE);
 
-      client = new McpClient(serverPath, 10000, project.projectPath);
+      client = new McpClient(serverPath, {
+        workingDirectory: project.projectPath,
+        logFilePath,
+        logLevel: 'error',
+      });
       await client.start();
 
       const response = await client.callTool('cpp_project_status');
-      const result = JSON.parse(response.content[0].text);
+      const result = JSON.parse(getResponseText(response));
 
       expect(result.success).toBe(true);
       expect(result.project_type).toBe('cmake');
@@ -152,11 +209,15 @@ describe('cpp_project_status tool', () => {
         'corrupted cache content'
       );
 
-      client = new McpClient(serverPath, 10000, project.projectPath);
+      client = new McpClient(serverPath, {
+        workingDirectory: project.projectPath,
+        logFilePath,
+        logLevel: 'error',
+      });
       await client.start();
 
       const response = await client.callTool('cpp_project_status');
-      const result = JSON.parse(response.content[0].text);
+      const result = JSON.parse(getResponseText(response));
 
       // Should successfully detect CMake project and handle corrupted cache
       expect(result.success).toBe(true);
