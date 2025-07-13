@@ -11,6 +11,99 @@ use tracing::{debug, info, warn};
 use crate::lsp::error::LspError;
 use crate::lsp::types::{JsonRpcNotification, JsonRpcRequest, JsonRpcResponse};
 
+/// Represents the result of parsing an LSP message from the stream
+#[derive(Debug)]
+enum LspParseResult {
+    /// Successfully parsed a complete LSP response
+    Response(JsonRpcResponse),
+    /// Parsed a line that's not a complete message (e.g., header, empty line)
+    Incomplete,
+    /// Failed to parse - contains error description
+    ParseError(String),
+    /// Reached end of stream
+    EndOfStream,
+    /// Error reading from stream
+    ReadError(String),
+}
+
+/// LSP message parser helper functions
+struct LspMessageParser;
+
+impl LspMessageParser {
+    /// Parse a single LSP message from the reader
+    async fn parse_message<R>(reader: &mut BufReader<R>) -> LspParseResult
+    where
+        R: tokio::io::AsyncRead + Unpin,
+    {
+        let mut line = String::new();
+
+        // Read header line
+        match reader.read_line(&mut line).await {
+            Ok(0) => return LspParseResult::EndOfStream,
+            Ok(_) => {
+                let trimmed = line.trim();
+
+                // Parse Content-Length header
+                if let Some(content_length) = Self::parse_content_length(trimmed) {
+                    return Self::read_message_body(reader, content_length).await;
+                }
+
+                // Skip empty lines or other headers
+                LspParseResult::Incomplete
+            }
+            Err(e) => LspParseResult::ReadError(format!("Failed to read header: {}", e)),
+        }
+    }
+
+    /// Parse Content-Length header from a line
+    fn parse_content_length(line: &str) -> Option<usize> {
+        line.strip_prefix("Content-Length:")
+            .and_then(|s| s.trim().parse::<usize>().ok())
+    }
+
+    /// Read the message body given the content length
+    async fn read_message_body<R>(
+        reader: &mut BufReader<R>,
+        content_length: usize,
+    ) -> LspParseResult
+    where
+        R: tokio::io::AsyncRead + Unpin,
+    {
+        let mut line = String::new();
+
+        // Read the empty line separator
+        if let Err(e) = reader.read_line(&mut line).await {
+            return LspParseResult::ReadError(format!("Failed to read separator: {}", e));
+        }
+
+        // Read the JSON content
+        let mut content = vec![0u8; content_length];
+        if let Err(e) = reader.read_exact(&mut content).await {
+            return LspParseResult::ReadError(format!("Failed to read message body: {}", e));
+        }
+
+        // Convert to string and parse JSON
+        match String::from_utf8(content) {
+            Ok(json_str) => {
+                debug!("Received from clangd: {}", json_str);
+                Self::parse_json_response(&json_str)
+            }
+            Err(e) => LspParseResult::ParseError(format!("Invalid UTF-8 in message: {}", e)),
+        }
+    }
+
+    /// Parse JSON string into LSP response
+    fn parse_json_response(json_str: &str) -> LspParseResult {
+        match serde_json::from_str::<JsonRpcResponse>(json_str) {
+            Ok(response) => LspParseResult::Response(response),
+            Err(e) => LspParseResult::ParseError(format!(
+                "Invalid JSON response: {} - Content: {}",
+                e, json_str
+            )),
+        }
+    }
+}
+
 pub struct LspClient {
     process: Child,
     pending_requests: Arc<Mutex<HashMap<String, tokio::sync::oneshot::Sender<JsonRpcResponse>>>>,
@@ -64,7 +157,6 @@ impl LspClient {
         // Start reading responses
         let reader_task = tokio::spawn(async move {
             let mut reader = BufReader::new(stdout);
-            let mut line = String::new();
             let mut shutdown_rx = shutdown_rx;
 
             loop {
@@ -73,52 +165,34 @@ impl LspClient {
                         info!("LSP reader task received shutdown signal");
                         break;
                     }
-                    result = reader.read_line(&mut line) => {
+                    result = LspMessageParser::parse_message(&mut reader) => {
                         match result {
-                            Ok(0) => {
-                                info!("LSP client reached EOF, stopping reader task");
-                                break; // EOF
-                            }
-                            Ok(_) => {
-                                let trimmed = line.trim();
-
-                                // Look for Content-Length header
-                                if let Some(content_length_str) = trimmed.strip_prefix("Content-Length:") {
-                                    if let Ok(content_length) = content_length_str.trim().parse::<usize>() {
-                                        // Read the empty line
-                                        line.clear();
-                                        if reader.read_line(&mut line).await.is_ok() {
-                                            // Read the JSON content
-                                            let mut content = vec![0u8; content_length];
-                                            if let Ok(_) = reader.read_exact(&mut content).await {
-                                                if let Ok(json_str) = String::from_utf8(content) {
-                                                    debug!("Received from clangd: {}", json_str);
-
-                                                    match serde_json::from_str::<JsonRpcResponse>(&json_str) {
-                                                        Ok(response) => {
-                                                            // Only handle responses with non-empty IDs (not notifications)
-                                                            if !response.id.is_empty() {
-                                                                let mut pending = pending_requests_clone.lock().await;
-                                                                if let Some(sender) = pending.remove(&response.id) {
-                                                                    if sender.send(response).is_err() {
-                                                                        warn!("Failed to send response to waiting request");
-                                                                    }
-                                                                }
-                                                            }
-                                                        }
-                                                        Err(e) => {
-                                                            warn!("Failed to parse LSP response: {} - JSON: {}", e, json_str);
-                                                        }
-                                                    }
-                                                }
-                                            }
+                            LspParseResult::Response(response) => {
+                                // Only handle responses with non-empty IDs (not notifications)
+                                if !response.id.is_empty() {
+                                    let mut pending = pending_requests_clone.lock().await;
+                                    if let Some(sender) = pending.remove(&response.id) {
+                                        if sender.send(response).is_err() {
+                                            warn!("Failed to send response to waiting request");
                                         }
                                     }
                                 }
-                                line.clear();
                             }
-                            Err(e) => {
-                                warn!("Error reading from clangd: {}", e);
+                            LspParseResult::Incomplete => {
+                                // Continue reading - this is normal (headers, empty lines, etc.)
+                                continue;
+                            }
+                            LspParseResult::ParseError(error) => {
+                                warn!("LSP parse error: {}", error);
+                                // Continue reading - we might recover from parse errors
+                                continue;
+                            }
+                            LspParseResult::EndOfStream => {
+                                info!("LSP client reached EOF, stopping reader task");
+                                break;
+                            }
+                            LspParseResult::ReadError(error) => {
+                                warn!("LSP read error: {}", error);
                                 break;
                             }
                         }
@@ -327,6 +401,98 @@ impl Drop for LspClient {
                 .arg("-9")
                 .arg(pid.to_string())
                 .output();
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tokio::io::BufReader;
+
+    #[test]
+    fn test_parse_content_length() {
+        assert_eq!(
+            LspMessageParser::parse_content_length("Content-Length: 123"),
+            Some(123)
+        );
+        assert_eq!(
+            LspMessageParser::parse_content_length("Content-Length:456"),
+            Some(456)
+        );
+        assert_eq!(
+            LspMessageParser::parse_content_length("Content-Length: invalid"),
+            None
+        );
+        assert_eq!(
+            LspMessageParser::parse_content_length("Other-Header: 123"),
+            None
+        );
+        assert_eq!(LspMessageParser::parse_content_length(""), None);
+    }
+
+    #[test]
+    fn test_parse_json_response() {
+        let valid_json = r#"{"jsonrpc":"2.0","id":"1","result":{"success":true}}"#;
+        match LspMessageParser::parse_json_response(valid_json) {
+            LspParseResult::Response(response) => {
+                assert_eq!(response.id, "1");
+                assert_eq!(response.jsonrpc, "2.0");
+                assert!(response.result.is_some());
+            }
+            _ => panic!("Expected Response variant"),
+        }
+
+        let invalid_json = "not json";
+        match LspMessageParser::parse_json_response(invalid_json) {
+            LspParseResult::ParseError(error) => {
+                assert!(error.contains("Invalid JSON response"));
+            }
+            _ => panic!("Expected ParseError variant"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_parse_message_end_of_stream() {
+        let empty_data: &[u8] = b"";
+        let mut reader = BufReader::new(empty_data);
+
+        match LspMessageParser::parse_message(&mut reader).await {
+            LspParseResult::EndOfStream => {
+                // Expected
+            }
+            other => panic!("Expected EndOfStream, got {:?}", other),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_parse_message_content_length_header() {
+        let data = b"Content-Length: 123\r\n";
+        let mut reader = BufReader::new(data.as_slice());
+
+        // This will try to read the message body and fail due to insufficient data,
+        // but we're testing that the header parsing works
+        match LspMessageParser::parse_message(&mut reader).await {
+            LspParseResult::ReadError(_) => {
+                // Expected - we don't have enough data for the full message
+            }
+            other => panic!(
+                "Expected ReadError due to incomplete message, got {:?}",
+                other
+            ),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_parse_message_other_header() {
+        let data = b"Other-Header: value\r\n";
+        let mut reader = BufReader::new(data.as_slice());
+
+        match LspMessageParser::parse_message(&mut reader).await {
+            LspParseResult::Incomplete => {
+                // Expected - non-Content-Length headers are skipped
+            }
+            other => panic!("Expected Incomplete, got {:?}", other),
         }
     }
 }

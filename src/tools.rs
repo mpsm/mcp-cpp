@@ -14,6 +14,22 @@ fn serialize_result(content: &Value) -> String {
         .unwrap_or_else(|e| format!("Error serializing result: {}", e))
 }
 
+/// MCP Tool Design Guidelines
+/// 
+/// **Async vs Sync Pattern:**
+/// - Tools that interact with external processes, file I/O, or network should be **async**
+/// - Tools that perform pure computation or analysis on in-memory data should be **sync**
+/// 
+/// **Current Tool Classifications:**
+/// - `CppProjectStatusTool` - **sync** (file system analysis, no process interaction)
+/// - `SetupClangdTool` - **async** (starts LSP process, initializes manager)
+/// - `LspRequestTool` - **async** (sends requests to LSP process)
+/// 
+/// **Error Handling Pattern:**
+/// - All tools use `CallToolResult::text_content()` for responses
+/// - All tools use `serialize_result()` helper for consistent JSON formatting
+/// - Errors are logged with appropriate level (error, warn, info) before returning
+
 #[derive(Debug, ::serde::Deserialize, ::serde::Serialize)]
 pub struct CppProjectStatusTool {
     // No parameters needed for analyzing current directory
