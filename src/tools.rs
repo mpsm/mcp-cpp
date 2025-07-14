@@ -176,7 +176,7 @@ impl CppProjectStatusTool {
 
 #[mcp_tool(
     name = "setup_clangd",
-    description = "Setup clangd LSP server for a build directory with compile_commands.json (required before using lsp_request). Use cpp_project_status tool first to discover build directories."
+    description = "Initialize clangd LSP session and start indexing for a build directory with compile_commands.json (required before using lsp_request). Performs full LSP initialization sequence and triggers background indexing by opening first source file. Use cpp_project_status tool first to discover build directories."
 )]
 #[derive(Debug, ::serde::Deserialize, ::serde::Serialize, JsonSchema)]
 pub struct SetupClangdTool {

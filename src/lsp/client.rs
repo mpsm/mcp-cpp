@@ -7,7 +7,7 @@ use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{Child, Command};
 use tokio::sync::Mutex;
 use tokio::task::JoinHandle;
-use tracing::{debug, info, warn, Level};
+use tracing::{Level, debug, info, warn};
 
 use crate::lsp::error::LspError;
 use crate::lsp::types::{JsonRpcNotification, JsonRpcRequest, JsonRpcResponse};
@@ -91,7 +91,11 @@ impl LspMessageParser {
                 // Parse the response and log it
                 let result = Self::parse_json_response(&json_str);
                 if let LspParseResult::Response(ref response) = result {
-                    log_lsp_message!(Level::DEBUG, "incoming", &response.id, response);
+                    let response_id = match &response.id {
+                        serde_json::Value::String(s) => s.clone(),
+                        other => other.to_string(),
+                    };
+                    log_lsp_message!(Level::DEBUG, "incoming", &response_id, response);
                 }
                 result
             }
@@ -128,7 +132,10 @@ impl LspClient {
 
         let mut command = Command::new(clangd_path);
         command
-            .arg("--background-index=false")
+            .arg("--background-index")
+            .arg("--clang-tidy")
+            .arg("--completion-style=detailed")
+            .arg("--log=verbose")
             .current_dir(build_directory)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
@@ -156,6 +163,8 @@ impl LspClient {
             Mutex<HashMap<String, tokio::sync::oneshot::Sender<JsonRpcResponse>>>,
         > = Arc::new(Mutex::new(HashMap::new()));
         let pending_requests_clone = pending_requests.clone();
+        let stdin_clone = Arc::new(Mutex::new(stdin));
+        let stdin_for_task = stdin_clone.clone();
 
         // Create shutdown signal
         let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel();
@@ -175,14 +184,49 @@ impl LspClient {
                     result = LspMessageParser::parse_message(&mut reader) => {
                         match result {
                             LspParseResult::Response(response) => {
-                                // Only handle responses with non-empty IDs (not notifications)
-                                if !response.id.is_empty() {
+                                if !response.id.is_null() && response.method.is_none() {
+                                    // Handle responses with IDs (regular request responses)
                                     let mut pending = pending_requests_clone.lock().await;
-                                    if let Some(sender) = pending.remove(&response.id) {
+
+                                    // Extract the actual string value from the JSON Value
+                                    let response_id = match &response.id {
+                                        serde_json::Value::String(s) => s.clone(),
+                                        other => other.to_string(),
+                                    };
+
+                                    if let Some(sender) = pending.remove(&response_id) {
                                         if sender.send(response).is_err() {
                                             warn!("Failed to send response to waiting request");
                                         }
+                                    } else {
+                                        warn!("Received response for unknown request ID: {}", response_id);
                                     }
+                                } else if !response.id.is_null() && response.method.is_some() {
+                                    // Handle requests from clangd (need to respond)
+                                    if let Some(method) = &response.method {
+                                        match method.as_str() {
+                                            "window/workDoneProgress/create" => {
+                                                // Accept the progress token
+                                                info!("Accepting progress token request from clangd");
+                                                // Send success response
+                                                let response_message = serde_json::json!({
+                                                    "jsonrpc": "2.0",
+                                                    "id": response.id,
+                                                    "result": null
+                                                });
+                                                // Send response to clangd
+                                                if let Err(e) = Self::send_raw_message(&stdin_for_task, &response_message.to_string()).await {
+                                                    warn!("Failed to send progress token response: {}", e);
+                                                }
+                                            }
+                                            _ => {
+                                                debug!("Unhandled request from clangd: {}", method);
+                                            }
+                                        }
+                                    }
+                                } else {
+                                    // Handle notifications (empty ID and method present)
+                                    Self::handle_notification(&response).await;
                                 }
                             }
                             LspParseResult::Incomplete => {
@@ -212,7 +256,7 @@ impl LspClient {
         let client = Self {
             process,
             pending_requests,
-            stdin: Arc::new(Mutex::new(stdin)),
+            stdin: stdin_clone.clone(),
             reader_task: Some(reader_task),
             shutdown_signal,
         };
@@ -244,9 +288,13 @@ impl LspClient {
         // Wait for response with timeout
         match tokio::time::timeout(std::time::Duration::from_secs(30), rx).await {
             Ok(Ok(response)) => {
-                log_timing!(Level::DEBUG, &format!("lsp_request_{}", method), start.elapsed());
+                log_timing!(
+                    Level::DEBUG,
+                    &format!("lsp_request_{}", method),
+                    start.elapsed()
+                );
                 Ok(response)
-            },
+            }
             Ok(Err(_)) => Err(LspError::JsonRpcError(
                 "Response channel closed".to_string(),
             )),
@@ -389,6 +437,131 @@ impl LspClient {
             );
             warn!("{}", error_msg);
             Err(LspError::ProcessError(error_msg))
+        }
+    }
+
+    async fn send_raw_message(
+        stdin: &Arc<Mutex<tokio::process::ChildStdin>>,
+        message: &str,
+    ) -> Result<(), LspError> {
+        let content = format!("Content-Length: {}\r\n\r\n{}", message.len(), message);
+
+        let mut stdin_guard = stdin.lock().await;
+        stdin_guard
+            .write_all(content.as_bytes())
+            .await
+            .map_err(|e| LspError::ProcessError(format!("Failed to write to stdin: {}", e)))?;
+        stdin_guard
+            .flush()
+            .await
+            .map_err(|e| LspError::ProcessError(format!("Failed to flush stdin: {}", e)))?;
+
+        Ok(())
+    }
+
+    async fn handle_notification(response: &JsonRpcResponse) {
+        // Handle notifications from clangd
+        if let Some(method) = &response.method {
+            match method.as_str() {
+                "window/workDoneProgress/create" => {
+                    // clangd requesting progress token
+                    if let Some(params) = &response.params {
+                        if let Some(token) = params.get("token") {
+                            info!("Progress token requested: {}", token);
+                            // We should send a response accepting the token, but we can't do that here
+                            // since this is a notification handler. For now, just log it.
+                        }
+                    }
+                }
+                "$/progress" => {
+                    // Progress updates
+                    if let Some(params) = &response.params {
+                        if let (Some(token), Some(value)) =
+                            (params.get("token"), params.get("value"))
+                        {
+                            if let Some(token_str) = token.as_str() {
+                                if token_str == "backgroundIndexProgress" {
+                                    if let Some(kind) = value.get("kind").and_then(|k| k.as_str()) {
+                                        match kind {
+                                            "begin" => {
+                                                if let Some(title) =
+                                                    value.get("title").and_then(|t| t.as_str())
+                                                {
+                                                    info!("🔍 Indexing started: {}", title);
+                                                }
+                                            }
+                                            "report" => {
+                                                let message = value
+                                                    .get("message")
+                                                    .and_then(|m| m.as_str())
+                                                    .unwrap_or("");
+                                                let percentage = value
+                                                    .get("percentage")
+                                                    .and_then(|p| p.as_u64())
+                                                    .unwrap_or(0);
+                                                info!(
+                                                    "📊 Indexing progress: {} ({}%)",
+                                                    message, percentage
+                                                );
+                                            }
+                                            "end" => {
+                                                info!("✅ Indexing completed!");
+                                            }
+                                            _ => {
+                                                debug!("Unknown progress kind: {}", kind);
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                "textDocument/clangd.fileStatus" => {
+                    // File status updates
+                    if let Some(params) = &response.params {
+                        if let (Some(uri), Some(state)) = (params.get("uri"), params.get("state")) {
+                            if let (Some(uri_str), Some(state_str)) = (uri.as_str(), state.as_str())
+                            {
+                                let file_path = uri_str.replace("file://", "");
+                                let filename = std::path::Path::new(&file_path)
+                                    .file_name()
+                                    .and_then(|n| n.to_str())
+                                    .unwrap_or("unknown");
+                                info!("📄 File status: {} - {}", filename, state_str);
+                            }
+                        }
+                    }
+                }
+                "textDocument/publishDiagnostics" => {
+                    // Diagnostic messages (errors, warnings, etc.)
+                    if let Some(params) = &response.params {
+                        if let (Some(uri), Some(diagnostics)) =
+                            (params.get("uri"), params.get("diagnostics"))
+                        {
+                            if let (Some(uri_str), Some(diagnostics_array)) =
+                                (uri.as_str(), diagnostics.as_array())
+                            {
+                                let file_path = uri_str.replace("file://", "");
+                                let filename = std::path::Path::new(&file_path)
+                                    .file_name()
+                                    .and_then(|n| n.to_str())
+                                    .unwrap_or("unknown");
+                                if !diagnostics_array.is_empty() {
+                                    info!(
+                                        "⚠️  Diagnostics for {}: {} issues",
+                                        filename,
+                                        diagnostics_array.len()
+                                    );
+                                }
+                            }
+                        }
+                    }
+                }
+                _ => {
+                    debug!("Unhandled notification: {}", method);
+                }
+            }
         }
     }
 }

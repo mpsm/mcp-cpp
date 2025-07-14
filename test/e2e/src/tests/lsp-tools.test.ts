@@ -584,44 +584,18 @@ describe('LSP tools', () => {
       });
       await client.start();
 
-      // Setup clangd
+      // Setup clangd (this now performs full initialization automatically)
       const setupResponse = await client.callTool('setup_clangd', {
         buildDirectory: 'build',
       });
       const setupResult = JSON.parse(getResponseText(setupResponse));
       expect(setupResult.success).toBe(true);
 
-      // Initialize clangd
-      await client.callTool('lsp_request', {
-        method: 'initialize',
-        params: {
-          processId: null,
-          rootUri: `file://${project.projectPath}`,
-          capabilities: {},
-        },
-      });
+      // Wait a moment for clangd to complete indexing
+      await new Promise(resolve => setTimeout(resolve, 2000));
 
-      await client.callTool('lsp_request', {
-        method: 'initialized',
-        params: {},
-      });
-
-      // Open the Math.hpp file first
-      const mathPath = path.join(project.projectPath, 'include/Math.hpp');
-      const mathContent = await project.readFile('include/Math.hpp');
-      await client.callTool('lsp_request', {
-        method: 'textDocument/didOpen',
-        params: {
-          textDocument: {
-            uri: `file://${mathPath}`,
-            languageId: 'cpp',
-            version: 1,
-            text: mathContent,
-          },
-        },
-      });
-
-      // Request document symbols for Math.hpp
+      // Request document symbols for Math.cpp (the file opened by setup_clangd)
+      const mathPath = path.join(project.projectPath, 'src/Math.cpp');
       const response = await client.callTool('lsp_request', {
         method: 'textDocument/documentSymbol',
         params: {
@@ -642,13 +616,25 @@ describe('LSP tools', () => {
       const symbols = result.result;
       expect(symbols.length).toBeGreaterThan(0);
 
-      // Should include the Math class and its methods
-      const symbolNames = symbols.map(
-        (symbol: { name: string }) => symbol.name
-      );
-      expect(symbolNames).toContain('Math');
-      expect(symbolNames).toContain('factorial');
-      expect(symbolNames).toContain('gcd');
+      // Get all symbol names (including nested ones)
+      const getAllSymbolNames = (symbols: any[]): string[] => {
+        const names: string[] = [];
+        for (const symbol of symbols) {
+          names.push(symbol.name);
+          if (symbol.children) {
+            names.push(...getAllSymbolNames(symbol.children));
+          }
+        }
+        return names;
+      };
+
+      const allSymbolNames = getAllSymbolNames(symbols);
+
+      // Should include the Math class methods with their fully qualified names
+      expect(allSymbolNames).toContain('Math::factorial');
+      expect(allSymbolNames).toContain('Math::gcd');
+      // Also verify we have the namespace
+      expect(allSymbolNames).toContain('TestProject');
     });
 
     it('should fail documentSymbol request without didOpen (regression test)', async () => {
@@ -666,27 +652,15 @@ describe('LSP tools', () => {
       });
       await client.start();
 
-      // Setup clangd
+      // Setup clangd (this now performs full initialization automatically)
       const setupResponse = await client.callTool('setup_clangd', {
         buildDirectory: 'build',
       });
       const setupResult = JSON.parse(getResponseText(setupResponse));
       expect(setupResult.success).toBe(true);
 
-      // Initialize clangd
-      await client.callTool('lsp_request', {
-        method: 'initialize',
-        params: {
-          processId: null,
-          rootUri: `file://${project.projectPath}`,
-          capabilities: {},
-        },
-      });
-
-      await client.callTool('lsp_request', {
-        method: 'initialized',
-        params: {},
-      });
+      // Wait a moment for initialization to complete
+      await new Promise(resolve => setTimeout(resolve, 1000));
 
       // Try to request document symbols WITHOUT didOpen first (should fail)
       const mathPath = path.join(project.projectPath, 'include/Math.hpp');
