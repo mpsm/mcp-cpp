@@ -1,4 +1,5 @@
 # Rust build artifacts
 /target/
 Cargo.lock
-
+.cache
+*.log
