@@ -32,11 +32,24 @@ impl ClangdManager {
             )));
         }
 
+        // Check if build directory is different from current
+        let current_build_dir = self.get_current_build_directory().await;
+        let session_changed = match current_build_dir {
+            Some(ref current) => current != &build_directory,
+            None => true,
+        };
+
+        if session_changed {
+            info!("Build directory changed, shutting down existing clangd session");
+        }
+
         // Get clangd path from environment or use default
         let clangd_path = std::env::var("CLANGD_PATH").unwrap_or_else(|_| "clangd".to_string());
         
-        // Shutdown existing clangd if running
-        self.shutdown_clangd().await?;
+        // Shutdown existing clangd if running or build directory changed
+        if session_changed {
+            self.shutdown_clangd().await?;
+        }
 
         info!("Setting up clangd for build directory: {}", build_directory.display());
 
@@ -251,6 +264,11 @@ impl ClangdManager {
         info!("File opened, background indexing should now start");
         
         Ok(())
+    }
+
+    pub async fn get_current_build_directory(&self) -> Option<PathBuf> {
+        let current_dir = self.current_build_dir.lock().await;
+        current_dir.clone()
     }
 
     async fn shutdown_clangd(&self) -> Result<(), LspError> {

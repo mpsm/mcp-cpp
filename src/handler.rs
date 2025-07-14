@@ -69,8 +69,7 @@ impl ServerHandler for CppServerHandler {
 
         // Match the tool variant and execute its corresponding logic
         let result = match tool_params {
-            CppTools::CppProjectStatus(cpp_status_tool) => cpp_status_tool.call_tool(),
-            CppTools::SetupClangd(setup_tool) => setup_tool.call_tool(&self.clangd_manager).await,
+            CppTools::ListBuildDirs(list_build_dirs_tool) => list_build_dirs_tool.call_tool(),
             CppTools::LspRequest(lsp_tool) => lsp_tool.call_tool(&self.clangd_manager).await,
         };
         
