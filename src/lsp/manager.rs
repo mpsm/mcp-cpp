@@ -6,11 +6,13 @@ use serde_json::Value;
 
 use crate::lsp::client::LspClient;
 use crate::lsp::error::LspError;
+use crate::lsp::types::IndexingState;
 
 pub struct ClangdManager {
     current_build_dir: Arc<Mutex<Option<PathBuf>>>,
     lsp_client: Arc<Mutex<Option<LspClient>>>,
     is_initialized: Arc<Mutex<bool>>,
+    indexing_state: Arc<Mutex<IndexingState>>,
 }
 
 impl ClangdManager {
@@ -19,6 +21,7 @@ impl ClangdManager {
             current_build_dir: Arc::new(Mutex::new(None)),
             lsp_client: Arc::new(Mutex::new(None)),
             is_initialized: Arc::new(Mutex::new(false)),
+            indexing_state: Arc::new(Mutex::new(IndexingState::new())),
         }
     }
 
@@ -46,6 +49,9 @@ impl ClangdManager {
         // Get clangd path from environment or use default
         let clangd_path = std::env::var("CLANGD_PATH").unwrap_or_else(|_| "clangd".to_string());
         
+        // Check clangd version
+        self.check_clangd_version(&clangd_path).await?;
+        
         // Shutdown existing clangd if running or build directory changed
         if session_changed {
             self.shutdown_clangd().await?;
@@ -54,7 +60,7 @@ impl ClangdManager {
         info!("Setting up clangd for build directory: {}", build_directory.display());
 
         // Start new clangd process
-        let client = LspClient::start_clangd(&clangd_path, &build_directory).await?;
+        let client = LspClient::start_clangd(&clangd_path, &build_directory, self.indexing_state.clone()).await?;
         
         // Update state
         {
@@ -271,6 +277,76 @@ impl ClangdManager {
         current_dir.clone()
     }
 
+    pub async fn get_indexing_state(&self) -> IndexingState {
+        let state = self.indexing_state.lock().await;
+        state.clone()
+    }
+
+    #[allow(dead_code)]
+    pub fn get_indexing_state_ref(&self) -> Arc<Mutex<IndexingState>> {
+        self.indexing_state.clone()
+    }
+
+    async fn check_clangd_version(&self, clangd_path: &str) -> Result<(), LspError> {
+        use std::process::Command;
+        
+        info!("Checking clangd version for {}", clangd_path);
+        
+        let output = Command::new(clangd_path)
+            .arg("--version")
+            .output()
+            .map_err(|e| {
+                if e.kind() == std::io::ErrorKind::NotFound {
+                    LspError::ClangdNotFound
+                } else {
+                    LspError::ProcessError(format!("Failed to check clangd version: {}", e))
+                }
+            })?;
+
+        if !output.status.success() {
+            return Err(LspError::ProcessError(format!(
+                "Failed to get clangd version: {}",
+                String::from_utf8_lossy(&output.stderr)
+            )));
+        }
+
+        let version_output = String::from_utf8_lossy(&output.stdout);
+        info!("Clangd version output: {}", version_output);
+        
+        // Parse version number from output like "clangd version 20.0.0"
+        let version_number = self.parse_clangd_version(&version_output)?;
+        
+        if version_number < 20 {
+            return Err(LspError::ProcessError(format!(
+                "Clangd version {} is too old. Minimum required version is 20. Current version: {}",
+                version_number,
+                version_output.trim()
+            )));
+        }
+
+        info!("Clangd version {} meets minimum requirement (20+)", version_number);
+        Ok(())
+    }
+
+    fn parse_clangd_version(&self, version_output: &str) -> Result<u32, LspError> {
+        // Look for pattern like "clangd version X.Y.Z" or "version X.Y.Z"
+        let version_regex = regex::Regex::new(r"(?i)version\s+(\d+)\.?")
+            .map_err(|e| LspError::ProcessError(format!("Failed to create version regex: {}", e)))?;
+        
+        if let Some(captures) = version_regex.captures(version_output) {
+            if let Some(version_match) = captures.get(1) {
+                let version_str = version_match.as_str();
+                return version_str.parse::<u32>()
+                    .map_err(|e| LspError::ProcessError(format!("Failed to parse version number '{}': {}", version_str, e)));
+            }
+        }
+        
+        Err(LspError::ProcessError(format!(
+            "Could not parse clangd version from output: {}",
+            version_output.trim()
+        )))
+    }
+
     async fn shutdown_clangd(&self) -> Result<(), LspError> {
         let mut client_guard = self.lsp_client.lock().await;
         
@@ -286,6 +362,12 @@ impl ClangdManager {
             let mut is_initialized = self.is_initialized.lock().await;
             *is_initialized = false;
         }
+
+        // Reset indexing state
+        {
+            let mut indexing_state = self.indexing_state.lock().await;
+            *indexing_state = IndexingState::new();
+        }
         
         Ok(())
     }
@@ -295,5 +377,109 @@ impl ClangdManager {
 impl Default for ClangdManager {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::lsp::types::IndexingStatus;
+
+    #[test]
+    fn test_manager_new() {
+        let manager = ClangdManager::new();
+        // Basic construction test - can't easily test internal state without getters
+        assert!(matches!(manager, ClangdManager { .. }));
+    }
+
+    #[tokio::test]
+    async fn test_get_indexing_state_default() {
+        let manager = ClangdManager::new();
+        let state = manager.get_indexing_state().await;
+        
+        assert_eq!(state.status, IndexingStatus::NotStarted);
+        assert_eq!(state.files_processed, 0);
+        assert_eq!(state.total_files, None);
+        assert_eq!(state.percentage, None);
+        assert_eq!(state.message, None);
+        assert_eq!(state.estimated_completion_seconds, None);
+        assert!(!state.is_indexing());
+    }
+
+    #[tokio::test]
+    async fn test_get_current_build_directory_default() {
+        let manager = ClangdManager::new();
+        let build_dir = manager.get_current_build_directory().await;
+        assert_eq!(build_dir, None);
+    }
+
+    #[test]
+    fn test_parse_clangd_version_valid() {
+        let manager = ClangdManager::new();
+        
+        // Test typical clangd version output
+        let version_output = "clangd version 20.0.0";
+        let version = manager.parse_clangd_version(version_output).unwrap();
+        assert_eq!(version, 20);
+        
+        // Test version with more details
+        let version_output = "clangd version 22.0.1 (https://github.com/llvm/llvm-project.git)";
+        let version = manager.parse_clangd_version(version_output).unwrap();
+        assert_eq!(version, 22);
+        
+        // Test version with different format
+        let version_output = "version 18.1.8";
+        let version = manager.parse_clangd_version(version_output).unwrap();
+        assert_eq!(version, 18);
+    }
+
+    #[test]
+    fn test_parse_clangd_version_invalid() {
+        let manager = ClangdManager::new();
+        
+        // Test invalid version output
+        let version_output = "clangd: command not found";
+        assert!(manager.parse_clangd_version(version_output).is_err());
+        
+        // Test empty output
+        let version_output = "";
+        assert!(manager.parse_clangd_version(version_output).is_err());
+        
+        // Test output without version
+        let version_output = "clangd help text";
+        assert!(manager.parse_clangd_version(version_output).is_err());
+    }
+
+    #[test]
+    fn test_parse_clangd_version_edge_cases() {
+        let manager = ClangdManager::new();
+        
+        // Test version with no decimal point
+        let version_output = "clangd version 20";
+        let version = manager.parse_clangd_version(version_output).unwrap();
+        assert_eq!(version, 20);
+        
+        // Test version with case insensitive
+        let version_output = "CLANGD VERSION 19.0.0";
+        let version = manager.parse_clangd_version(version_output).unwrap();
+        assert_eq!(version, 19);
+    }
+
+    #[tokio::test]
+    async fn test_indexing_state_update_through_reference() {
+        let manager = ClangdManager::new();
+        let state_ref = manager.get_indexing_state_ref();
+        
+        // Update state through reference
+        {
+            let mut state = state_ref.lock().await;
+            state.start_indexing(Some("Test indexing".to_string()));
+        }
+        
+        // Verify state was updated
+        let state = manager.get_indexing_state().await;
+        assert_eq!(state.status, IndexingStatus::InProgress);
+        assert_eq!(state.message, Some("Test indexing".to_string()));
+        assert!(state.is_indexing());
     }
 }

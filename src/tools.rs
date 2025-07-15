@@ -285,7 +285,7 @@ impl LspRequestTool {
 
         rust_mcp_sdk::schema::Tool {
             name: "lsp_request".to_string(),
-            description: Some("Send LSP request to clangd. Automatically sets up clangd if not already running. Optional build_directory parameter - if not provided, requires single build directory in workspace. Supports all LSP methods like textDocument/definition, textDocument/hover, textDocument/completion, etc.".to_string()),
+            description: Some("Send LSP request to clangd. Automatically sets up clangd if not already running. Requires clangd version 20+. Optional build_directory parameter - if not provided, requires single build directory in workspace. Supports all LSP methods like textDocument/definition, textDocument/hover, textDocument/completion, etc. All responses include real-time indexing status with progress tracking and completion estimates.".to_string()),
             input_schema: rust_mcp_sdk::schema::ToolInputSchema::new(
                 vec!["method".to_string()],
                 Some(properties),
@@ -319,9 +319,11 @@ impl LspRequestTool {
             }
             None => {
                 info!("No build directory specified for LSP request, attempting auto-resolution");
-                match Self::resolve_build_directory()? {
+                let resolved_path = Self::resolve_build_directory()?;
+                match resolved_path {
                     Some(path) => path,
                     None => {
+                        let indexing_state = clangd_manager.lock().await.get_indexing_state().await;
                         let content = json!({
                             "success": false,
                             "error": "build_directory parameter required",
@@ -330,7 +332,20 @@ impl LspRequestTool {
                                 "Call list_build_dirs to see discovered build directories",
                                 "Or provide any build_directory path (tool will validate and attempt to use)"
                             ],
-                            "flexibility_note": "build_directory parameter accepts any path - not restricted to discovered directories"
+                            "flexibility_note": "build_directory parameter accepts any path - not restricted to discovered directories",
+                            "indexing_status": {
+                                "status": match indexing_state.status {
+                                    crate::lsp::types::IndexingStatus::NotStarted => "not_started",
+                                    crate::lsp::types::IndexingStatus::InProgress => "in_progress",
+                                    crate::lsp::types::IndexingStatus::Completed => "completed",
+                                },
+                                "is_indexing": indexing_state.is_indexing(),
+                                "files_processed": indexing_state.files_processed,
+                                "total_files": indexing_state.total_files,
+                                "percentage": indexing_state.percentage,
+                                "message": indexing_state.message,
+                                "estimated_completion_seconds": indexing_state.estimated_completion_seconds
+                            }
                         });
 
                         return Ok(CallToolResult::text_content(vec![TextContent::from(
@@ -360,11 +375,25 @@ impl LspRequestTool {
                 );
                 let manager_guard = clangd_manager.lock().await;
                 if let Err(e) = manager_guard.setup_clangd(build_path.clone()).await {
+                    let indexing_state = manager_guard.get_indexing_state().await;
                     let content = json!({
                         "success": false,
                         "error": format!("Failed to setup clangd: {}", e),
                         "build_directory_attempted": build_path.display().to_string(),
-                        "suggestion": "Verify build directory exists and contains compile_commands.json"
+                        "suggestion": "Verify build directory exists and contains compile_commands.json",
+                        "indexing_status": {
+                            "status": match indexing_state.status {
+                                crate::lsp::types::IndexingStatus::NotStarted => "not_started",
+                                crate::lsp::types::IndexingStatus::InProgress => "in_progress",
+                                crate::lsp::types::IndexingStatus::Completed => "completed",
+                            },
+                            "is_indexing": indexing_state.is_indexing(),
+                            "files_processed": indexing_state.files_processed,
+                            "total_files": indexing_state.total_files,
+                            "percentage": indexing_state.percentage,
+                            "message": indexing_state.message,
+                            "estimated_completion_seconds": indexing_state.estimated_completion_seconds
+                        }
                     });
 
                     return Ok(CallToolResult::text_content(vec![TextContent::from(
@@ -424,11 +453,25 @@ impl LspRequestTool {
                         .map(|p| p.display().to_string())
                         .unwrap_or_else(|| "none".to_string());
 
+                    let indexing_state = manager_guard.get_indexing_state().await;
                     let content = json!({
                         "success": true,
                         "method": self.method,
                         "message": "Notification sent successfully",
-                        "build_directory_used": build_directory
+                        "build_directory_used": build_directory,
+                        "indexing_status": {
+                            "status": match indexing_state.status {
+                                crate::lsp::types::IndexingStatus::NotStarted => "not_started",
+                                crate::lsp::types::IndexingStatus::InProgress => "in_progress",
+                                crate::lsp::types::IndexingStatus::Completed => "completed",
+                            },
+                            "is_indexing": indexing_state.is_indexing(),
+                            "files_processed": indexing_state.files_processed,
+                            "total_files": indexing_state.total_files,
+                            "percentage": indexing_state.percentage,
+                            "message": indexing_state.message,
+                            "estimated_completion_seconds": indexing_state.estimated_completion_seconds
+                        }
                     });
 
                     info!("LSP notification sent successfully: {}", self.method);
@@ -439,11 +482,25 @@ impl LspRequestTool {
                 }
                 Err(e) => {
                     let error_msg = e.to_string();
+                    let indexing_state = manager_guard.get_indexing_state().await;
                     let content = json!({
                         "success": false,
                         "error": error_msg,
                         "method": self.method,
-                        "params": self.params
+                        "params": self.params,
+                        "indexing_status": {
+                            "status": match indexing_state.status {
+                                crate::lsp::types::IndexingStatus::NotStarted => "not_started",
+                                crate::lsp::types::IndexingStatus::InProgress => "in_progress",
+                                crate::lsp::types::IndexingStatus::Completed => "completed",
+                            },
+                            "is_indexing": indexing_state.is_indexing(),
+                            "files_processed": indexing_state.files_processed,
+                            "total_files": indexing_state.total_files,
+                            "percentage": indexing_state.percentage,
+                            "message": indexing_state.message,
+                            "estimated_completion_seconds": indexing_state.estimated_completion_seconds
+                        }
                     });
 
                     error!("LSP notification failed: {}", error_msg);
@@ -465,11 +522,25 @@ impl LspRequestTool {
                         .map(|p| p.display().to_string())
                         .unwrap_or_else(|| "none".to_string());
 
+                    let indexing_state = manager_guard.get_indexing_state().await;
                     let content = json!({
                         "success": true,
                         "method": self.method,
                         "result": result,
-                        "build_directory_used": build_directory
+                        "build_directory_used": build_directory,
+                        "indexing_status": {
+                            "status": match indexing_state.status {
+                                crate::lsp::types::IndexingStatus::NotStarted => "not_started",
+                                crate::lsp::types::IndexingStatus::InProgress => "in_progress",
+                                crate::lsp::types::IndexingStatus::Completed => "completed",
+                            },
+                            "is_indexing": indexing_state.is_indexing(),
+                            "files_processed": indexing_state.files_processed,
+                            "total_files": indexing_state.total_files,
+                            "percentage": indexing_state.percentage,
+                            "message": indexing_state.message,
+                            "estimated_completion_seconds": indexing_state.estimated_completion_seconds
+                        }
                     });
 
                     info!("LSP request successful: {}", self.method);
@@ -479,12 +550,26 @@ impl LspRequestTool {
                     )]))
                 }
                 Err(LspError::NotSetup) => {
+                    let indexing_state = manager_guard.get_indexing_state().await;
                     let content = json!({
                         "success": false,
                         "error": "clangd setup failed",
                         "message": "Unable to automatically setup clangd. This should not happen - clangd setup is now automatic.",
                         "workflow": "1. Use list_build_dirs to verify build directories, 2. Ensure build directory contains compile_commands.json",
-                        "method": self.method
+                        "method": self.method,
+                        "indexing_status": {
+                            "status": match indexing_state.status {
+                                crate::lsp::types::IndexingStatus::NotStarted => "not_started",
+                                crate::lsp::types::IndexingStatus::InProgress => "in_progress",
+                                crate::lsp::types::IndexingStatus::Completed => "completed",
+                            },
+                            "is_indexing": indexing_state.is_indexing(),
+                            "files_processed": indexing_state.files_processed,
+                            "total_files": indexing_state.total_files,
+                            "percentage": indexing_state.percentage,
+                            "message": indexing_state.message,
+                            "estimated_completion_seconds": indexing_state.estimated_completion_seconds
+                        }
                     });
 
                     error!("LSP request failed - clangd setup failed");
@@ -495,11 +580,25 @@ impl LspRequestTool {
                 }
                 Err(e) => {
                     let error_msg = e.to_string();
+                    let indexing_state = manager_guard.get_indexing_state().await;
                     let content = json!({
                         "success": false,
                         "error": error_msg,
                         "method": self.method,
-                        "params": self.params
+                        "params": self.params,
+                        "indexing_status": {
+                            "status": match indexing_state.status {
+                                crate::lsp::types::IndexingStatus::NotStarted => "not_started",
+                                crate::lsp::types::IndexingStatus::InProgress => "in_progress",
+                                crate::lsp::types::IndexingStatus::Completed => "completed",
+                            },
+                            "is_indexing": indexing_state.is_indexing(),
+                            "files_processed": indexing_state.files_processed,
+                            "total_files": indexing_state.total_files,
+                            "percentage": indexing_state.percentage,
+                            "message": indexing_state.message,
+                            "estimated_completion_seconds": indexing_state.estimated_completion_seconds
+                        }
                     });
 
                     error!("LSP request failed: {}", error_msg);

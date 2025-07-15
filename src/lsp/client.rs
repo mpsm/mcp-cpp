@@ -10,7 +10,7 @@ use tokio::task::JoinHandle;
 use tracing::{Level, debug, info, warn};
 
 use crate::lsp::error::LspError;
-use crate::lsp::types::{JsonRpcNotification, JsonRpcRequest, JsonRpcResponse};
+use crate::lsp::types::{JsonRpcNotification, JsonRpcRequest, JsonRpcResponse, IndexingState};
 use crate::{log_lsp_message, log_timing};
 
 /// Represents the result of parsing an LSP message from the stream
@@ -127,6 +127,7 @@ impl LspClient {
     pub async fn start_clangd(
         clangd_path: &str,
         build_directory: &std::path::Path,
+        indexing_state: Arc<Mutex<IndexingState>>,
     ) -> Result<Self, LspError> {
         info!("Starting clangd process at: {}", clangd_path);
 
@@ -171,6 +172,7 @@ impl LspClient {
         let shutdown_signal = Arc::new(Mutex::new(Some(shutdown_tx)));
 
         // Start reading responses
+        let indexing_state_clone = indexing_state.clone();
         let reader_task = tokio::spawn(async move {
             let mut reader = BufReader::new(stdout);
             let mut shutdown_rx = shutdown_rx;
@@ -226,7 +228,7 @@ impl LspClient {
                                     }
                                 } else {
                                     // Handle notifications (empty ID and method present)
-                                    Self::handle_notification(&response).await;
+                                    Self::handle_notification(&response, &indexing_state_clone).await;
                                 }
                             }
                             LspParseResult::Incomplete => {
@@ -459,7 +461,7 @@ impl LspClient {
         Ok(())
     }
 
-    async fn handle_notification(response: &JsonRpcResponse) {
+    async fn handle_notification(response: &JsonRpcResponse, indexing_state: &Arc<Mutex<IndexingState>>) {
         // Handle notifications from clangd
         if let Some(method) = &response.method {
             match method.as_str() {
@@ -484,28 +486,43 @@ impl LspClient {
                                     if let Some(kind) = value.get("kind").and_then(|k| k.as_str()) {
                                         match kind {
                                             "begin" => {
-                                                if let Some(title) =
-                                                    value.get("title").and_then(|t| t.as_str())
-                                                {
-                                                    info!("🔍 Indexing started: {}", title);
-                                                }
+                                                let title = value
+                                                    .get("title")
+                                                    .and_then(|t| t.as_str())
+                                                    .map(|s| s.to_string());
+                                                
+                                                info!("🔍 Indexing started: {}", title.as_deref().unwrap_or("Background indexing"));
+                                                
+                                                // Update indexing state
+                                                let mut state = indexing_state.lock().await;
+                                                state.start_indexing(title);
                                             }
                                             "report" => {
                                                 let message = value
                                                     .get("message")
                                                     .and_then(|m| m.as_str())
-                                                    .unwrap_or("");
+                                                    .map(|s| s.to_string());
                                                 let percentage = value
                                                     .get("percentage")
                                                     .and_then(|p| p.as_u64())
-                                                    .unwrap_or(0);
+                                                    .map(|p| p as u8);
+                                                
                                                 info!(
                                                     "📊 Indexing progress: {} ({}%)",
-                                                    message, percentage
+                                                    message.as_deref().unwrap_or("Processing"), 
+                                                    percentage.unwrap_or(0)
                                                 );
+                                                
+                                                // Update indexing state
+                                                let mut state = indexing_state.lock().await;
+                                                state.update_progress(message, percentage);
                                             }
                                             "end" => {
                                                 info!("✅ Indexing completed!");
+                                                
+                                                // Update indexing state
+                                                let mut state = indexing_state.lock().await;
+                                                state.complete_indexing();
                                             }
                                             _ => {
                                                 debug!("Unknown progress kind: {}", kind);
