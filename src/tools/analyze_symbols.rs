@@ -34,7 +34,14 @@ use super::symbol_filtering::SymbolUtilities;
                    • Definition and declaration locations with file mappings
                    • Fully qualified names with namespace resolution
 
-                   📈 USAGE PATTERN ANALYSIS (optional):
+                   � CLASS MEMBER ANALYSIS (classes/structs):
+                   • Flat enumeration of all class members (methods, fields, constructors)
+                   • Member kind classification with string representation (method, field, constructor, etc.)
+                   • Member signatures and documentation extraction
+                   • Static vs instance member identification
+                   • Access level determination where available
+
+                   �📈 USAGE PATTERN ANALYSIS (optional):
                    • Statistical reference counting across entire codebase
                    • Usage pattern classification (initialization, calls, inheritance)
                    • Concrete code examples demonstrating typical usage
@@ -61,6 +68,7 @@ use super::symbol_filtering::SymbolUtilities;
                    🎯 TARGET USE CASES:
                    Code navigation • Dependency analysis • Refactoring preparation • Architecture understanding
                    • Debugging inheritance issues • Code review assistance • Technical documentation • Educational exploration
+                   • Class member discovery and API exploration
 
                    INPUT REQUIREMENTS:
                    • symbol: Required string - the symbol name to analyze
@@ -211,6 +219,7 @@ struct SymbolAnalysisData<'a> {
     inheritance_info: Option<&'a serde_json::Value>,
     usage_examples: Option<&'a serde_json::Value>,
     call_relationships: Option<&'a serde_json::Value>,
+    class_members: Option<&'a serde_json::Value>,
 }
 
 impl AnalyzeSymbolContextTool {
@@ -387,7 +396,10 @@ impl AnalyzeSymbolContextTool {
             None
         };
 
-        // Step 8: Build comprehensive symbol information
+        // Step 8: Get class members if symbol is a class or struct
+        let class_members = self.get_class_members(&manager_guard, &symbol_location, &hover_info).await;
+
+        // Step 9: Build comprehensive symbol information
         let symbol_info = self.build_comprehensive_symbol_info(SymbolAnalysisData {
             symbol_location: &symbol_location, 
             hover_info: &hover_info, 
@@ -397,6 +409,7 @@ impl AnalyzeSymbolContextTool {
             inheritance_info: inheritance_info.as_ref(),
             usage_examples: usage_examples.as_ref(),
             call_relationships: call_relationships.as_ref(),
+            class_members: class_members.as_ref(),
         });
 
         // Prepare the response
@@ -414,7 +427,8 @@ impl AnalyzeSymbolContextTool {
                     "usage_statistics": usage_stats.is_some(),
                     "inheritance_info": inheritance_info.is_some(),
                     "usage_examples": usage_examples.is_some(),
-                    "call_relationships": call_relationships.is_some()
+                    "call_relationships": call_relationships.is_some(),
+                    "class_members": class_members.is_some()
                 },
                 "build_directory_used": build_directory,
                 "indexing_waited": initial_indexing_state.status != crate::lsp::types::IndexingStatus::Completed,
@@ -1047,6 +1061,11 @@ impl AnalyzeSymbolContextTool {
             info["call_relationships"] = calls.clone();
         }
 
+        // Add class members
+        if let Some(members) = data.class_members {
+            info["class_members"] = members.clone();
+        }
+
         info
     }
 
@@ -1237,6 +1256,140 @@ impl AnalyzeSymbolContextTool {
         } else {
             json!(null)
         }
+    }
+
+    async fn get_class_members(
+        &self,
+        manager: &ClangdManager,
+        symbol_location: &serde_json::Value,
+        hover_info: &Option<serde_json::Value>,
+    ) -> Option<serde_json::Value> {
+        // Check if the symbol is a class or struct
+        let symbol_kind = self.extract_symbol_kind(symbol_location, hover_info);
+        if symbol_kind != "class" && symbol_kind != "struct" {
+            return None;
+        }
+
+        // Get the file URI from symbol location
+        let uri = symbol_location.get("uri").and_then(|u| u.as_str())?;
+        
+        // Ensure the file is opened in clangd
+        if let Some(file_path_str) = uri.strip_prefix("file://") {
+            let file_path = std::path::PathBuf::from(file_path_str);
+            if let Err(e) = manager.open_file_if_needed(&file_path).await {
+                info!("Failed to open file {} for class member analysis: {}", file_path.display(), e);
+                return None;
+            }
+        }
+
+        // Get document symbols for the file
+        let params = json!({
+            "textDocument": {
+                "uri": uri
+            }
+        });
+
+        match manager
+            .send_lsp_request("textDocument/documentSymbol".to_string(), Some(params))
+            .await
+        {
+            Ok(symbols_result) => {
+                if let Some(symbols_array) = symbols_result.as_array() {
+                    // Find the target class in the document symbols
+                    let target_class = self.find_target_class_in_symbols(symbols_array, symbol_location)?;
+                    
+                    // Extract members from the class
+                    let members = self.extract_class_members_flat(&target_class);
+                    
+                    if !members.is_empty() {
+                        return Some(json!({
+                            "members": members,
+                            "total_count": members.len()
+                        }));
+                    }
+                }
+                None
+            }
+            Err(e) => {
+                info!("Failed to get document symbols for class member analysis: {}", e);
+                None
+            }
+        }
+    }
+
+    fn find_target_class_in_symbols(
+        &self,
+        symbols: &[serde_json::Value],
+        symbol_location: &serde_json::Value,
+    ) -> Option<serde_json::Value> {
+        let target_name = &self.symbol;
+        let target_range = symbol_location.get("range")?;
+        let target_start_line = target_range.get("start")?.get("line")?.as_u64()?;
+
+        for symbol in symbols {
+            if let (Some(name), Some(range), Some(kind)) = (
+                symbol.get("name").and_then(|n| n.as_str()),
+                symbol.get("range"),
+                symbol.get("kind").and_then(|k| k.as_u64()),
+            ) {
+                // Check if this is a class or struct (kind 5 or 23)
+                if (kind == 5 || kind == 23) && 
+                   (name == target_name || name.contains(target_name)) {
+                    
+                    // Check if the range matches approximately
+                    if let Some(start_line) = range.get("start").and_then(|s| s.get("line")).and_then(|l| l.as_u64()) {
+                        if start_line == target_start_line {
+                            return Some(symbol.clone());
+                        }
+                    }
+                }
+            }
+
+            // Also check nested symbols recursively
+            if let Some(children) = symbol.get("children").and_then(|c| c.as_array()) {
+                if let Some(found) = self.find_target_class_in_symbols(children, symbol_location) {
+                    return Some(found);
+                }
+            }
+        }
+
+        None
+    }
+
+    fn extract_class_members_flat(&self, class_symbol: &serde_json::Value) -> Vec<serde_json::Value> {
+        let mut members = Vec::new();
+
+        if let Some(children) = class_symbol.get("children").and_then(|c| c.as_array()) {
+            for child in children {
+                if let (Some(name), Some(kind_num), Some(range)) = (
+                    child.get("name").and_then(|n| n.as_str()),
+                    child.get("kind").and_then(|k| k.as_u64()),
+                    child.get("range"),
+                ) {
+                    let kind_str = self.symbol_kind_to_string(kind_num);
+                    
+                    let mut member = json!({
+                        "name": name,
+                        "kind": kind_str,
+                        "range": range
+                    });
+
+                    // Add detail if available
+                    if let Some(detail) = child.get("detail").and_then(|d| d.as_str()) {
+                        member["detail"] = json!(detail);
+                    }
+
+                    // Add selection range if available
+                    if let Some(selection_range) = child.get("selectionRange") {
+                        member["selectionRange"] = selection_range.clone();
+                    }
+
+                    members.push(member);
+                }
+            }
+        }
+
+        members
     }
 
     async fn get_similar_symbols(&self, manager: &ClangdManager) -> Vec<String> {
