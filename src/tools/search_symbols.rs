@@ -15,48 +15,109 @@ use super::symbol_filtering::{SymbolFilter, SymbolUtilities};
 
 #[mcp_tool(
     name = "search_symbols",
-    description = "Search C++ symbols using clangd LSP server with comprehensive filtering and scope control. \
-                   QUERY SYNTAX: Supports fuzzy search ('vector'), qualified names ('std::vector'), namespace exploration ('MyNamespace::'), \
-                   global scope ('::main'), and partial matches ('get_'). \
-                   SYMBOL KINDS: class, struct, enum, function, method, variable, field, namespace, typedef, macro, constructor, destructor, \
-                   operator, interface, property, event, constant, array, boolean, key, null, number, object, string, enumMember, typeParameter. \
-                   SCOPE CONTROL: By default searches project symbols only (source files + headers in project directory tree). \
-                   Use include_external=true for system headers and libraries. \
-                   FILE FILTERING: Accepts relative paths from project root or absolute paths. \
-                   PROJECT DETECTION: Automatically detects project boundaries using CMake compilation database and common ancestor analysis. \
-                   OUTPUT: Returns JSON with symbol name, kind (human-readable), qualified name, file location, line/column, container scope, and detail information. \
-                   Perfect for code exploration, navigation, refactoring, and understanding large codebases."
+    description = "Advanced C++ symbol discovery and exploration engine using clangd LSP server with intelligent \
+                   filtering, scope control, and project boundary detection. Perfect for rapid code navigation \
+                   and comprehensive symbol analysis across large C++ codebases.
+
+                   🔍 QUERY SYNTAX CAPABILITIES:
+                   • Fuzzy matching: 'vector' → finds std::vector, vector_impl, my_vector
+                   • Qualified names: 'std::vector', 'MyNamespace::MyClass' 
+                   • Namespace exploration: 'MyNamespace::' → lists all namespace members
+                   • Global scope: '::main', '::global_function' → global symbols only
+                   • Prefix matching: 'get_' → finds all getter methods
+                   • Partial matching: 'Math' → MathUtils, BasicMath, etc.
+
+                   📋 SYMBOL KIND TAXONOMY:
+                   Comprehensive support for all C++ constructs: classes • structs • enums • functions
+                   • methods • variables • fields • namespaces • typedefs • macros • constructors
+                   • destructors • operators • interfaces • properties • events • constants • arrays
+                   • type parameters. Each result includes precise kind classification.
+
+                   🎯 INTELLIGENT SCOPE CONTROL:
+                   • PROJECT SCOPE (default): Searches only project files and headers
+                   • EXTERNAL SCOPE: Enable include_external=true for system libraries (std::, boost::)
+                   • Project boundaries auto-detected via CMake compilation database
+                   • Common ancestor analysis for multi-module projects
+
+                   📁 FILE FILTERING SYSTEM:
+                   • Relative paths: 'src/math.cpp', 'include/utils/*.h'
+                   • Absolute paths: '/home/project/src/main.cpp'
+                   • Directory filtering: Target specific modules or components
+                   • When specified, uses document symbols for detailed per-file results
+
+                   📊 RICH OUTPUT FORMAT:
+                   Each result includes: symbol name • kind classification • qualified name
+                   • precise file location • line/column coordinates • container scope
+                   • signature information • documentation snippets
+
+                   🚀 PERFORMANCE & FEATURES:
+                   • Leverages clangd's high-speed indexing for sub-second searches
+                   • Results ranked by relevance and usage frequency  
+                   • Configurable result limits (default: 100, max: 1000)
+                   • Automatic build directory detection and clangd initialization
+
+                   🎯 PRIMARY USE CASES:
+                   Code exploration • API discovery • Refactoring preparation • Dependency analysis
+                   • Navigation in unfamiliar codebases • Architecture understanding • Symbol validation
+
+                   INPUT REQUIREMENTS:
+                   • query: Required search string using above syntax
+                   • kinds: Optional array to filter by symbol types  
+                   • include_external: Optional boolean for system library inclusion
+                   • files: Optional array for file-specific searches
+                   • max_results: Optional limit (1-1000, default 100)"
 )]
 #[derive(Debug, ::serde::Serialize, JsonSchema)]
 pub struct SearchSymbolsTool {
-    /// Search query using clangd's native syntax. 
-    /// EXAMPLES: 'vector' (fuzzy match), 'std::vector' (qualified name), 'MyNamespace::' (explore namespace contents), 
-    /// '::main' (global scope), 'get_' (prefix match), 'Math' (class name)
+    /// Search query using clangd's native syntax. REQUIRED.
+    /// 
+    /// SYNTAX OPTIONS:
+    /// • Fuzzy matching: "vector" → finds std::vector, my_vector, vector_impl
+    /// • Qualified names: "std::vector", "MyNamespace::MyClass"
+    /// • Namespace exploration: "MyNamespace::" → lists all namespace members  
+    /// • Global scope: "::main", "::global_var" → global symbols only
+    /// • Prefix matching: "get_" → finds all getters, "set_" → all setters
+    /// • Class methods: "MyClass::" → all class members
     pub query: String,
     
-    /// Optional symbol kinds to filter results. 
-    /// SUPPORTED KINDS: "class", "struct", "enum", "function", "method", "variable", "field", "namespace", "typedef", 
-    /// "macro", "constructor", "destructor", "operator", "interface", "property", "event", "constant", "array", 
-    /// "boolean", "key", "null", "number", "object", "string", "enumMember", "typeParameter". 
-    /// Multiple kinds can be specified: ["class", "struct", "enum"]
+    /// Optional symbol kinds to filter results by type. DEFAULT: all kinds.
+    /// 
+    /// SUPPORTED KINDS: "class", "struct", "enum", "function", "method", "variable", 
+    /// "field", "namespace", "typedef", "macro", "constructor", "destructor", "operator",
+    /// "interface", "property", "event", "constant", "array", "boolean", "key", "null", 
+    /// "number", "object", "string", "enumMember", "typeParameter"
+    /// 
+    /// EXAMPLES: ["class", "struct"] → only classes and structs
+    ///           ["function", "method"] → only callable symbols
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub kinds: Option<Vec<String>>,
     
-    /// Optional file paths to limit search scope to specific files. 
-    /// Accepts relative paths from project root (e.g., "src/math.cpp") or absolute paths. 
-    /// When specified, uses document symbol search instead of workspace search for more detailed results within those files.
+    /// Optional file paths to limit search scope. DEFAULT: entire workspace.
+    /// 
+    /// FORMATS ACCEPTED:
+    /// • Relative paths: "src/math.cpp", "include/utils.h"
+    /// • Absolute paths: "/home/project/src/main.cpp" 
+    /// • Directory patterns: "src/", "include/math/"
+    /// 
+    /// BEHAVIOR: When specified, uses document symbol search for detailed 
+    /// per-file results instead of workspace-wide search.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub files: Option<Vec<String>>,
     
-    /// Maximum number of results to return. DEFAULT: 100. 
-    /// Useful for limiting output when searching broad terms or exploring large codebases. 
-    /// Results are returned in relevance order from clangd.
+    /// Maximum number of results to return. DEFAULT: 100. RANGE: 1-1000.
+    /// 
+    /// Use lower values (10-50) for quick exploration, higher values (200-1000) 
+    /// for comprehensive analysis. Results are ranked by clangd relevance scoring.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_results: Option<u32>,
     
-    /// Include external symbols from system headers and libraries (e.g., std::vector, stdio functions). 
-    /// DEFAULT: false (project-only scope). When true, includes symbols from outside the detected project boundaries. 
-    /// Project boundaries are determined by CMake compilation database and directory tree analysis.
+    /// Include external symbols from system libraries. DEFAULT: false.
+    /// 
+    /// PROJECT SCOPE (false): Only project files and project-specific headers
+    /// EXTERNAL SCOPE (true): Includes std::, boost::, system headers, third-party libs
+    /// 
+    /// PERFORMANCE NOTE: External scope adds ~1-3 seconds for comprehensive searches.
+    /// Project boundaries auto-detected via CMake compilation database analysis.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub include_external: Option<bool>,
 }

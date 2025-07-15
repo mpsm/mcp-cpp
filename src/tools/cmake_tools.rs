@@ -10,7 +10,48 @@ use super::serialize_result;
 
 #[mcp_tool(
     name = "list_build_dirs",
-    description = "List available CMake build directories with their configurations, generators, build types, and options. Use this to discover build directories before using other compilation-dependent tools."
+    description = "Comprehensive CMake build environment analyzer providing detailed discovery and analysis \
+                   of all build directories in the current workspace. Essential prerequisite tool for any \
+                   compilation-dependent operations including symbol analysis and LSP server initialization.
+
+                   🏗️ BUILD DIRECTORY DISCOVERY:
+                   • Deep filesystem scanning for configured build directories
+                   • Detection of both active and potential build locations
+                   • Common build patterns: build/, Debug/, Release/, out/
+                   • Custom build directory identification via CMake cache analysis
+
+                   ⚙️ CONFIGURATION ANALYSIS:
+                   • CMake generator type: Ninja, Unix Makefiles, Visual Studio, Xcode
+                   • Build type classification: Debug, Release, RelWithDebInfo, MinSizeRel
+                   • Compiler toolchain detection: GCC, Clang, MSVC versions
+                   • CMake version and configuration timestamp
+
+                   📋 COMPILATION DATABASE STATUS:
+                   • compile_commands.json availability and validity
+                   • LSP server compatibility assessment  
+                   • Clangd integration readiness verification
+                   • Source file coverage analysis
+
+                   🎯 BUILD TARGETS & OPTIONS:
+                   • Configured CMake targets and executables
+                   • Build options and feature flags (CMAKE_BUILD_TYPE, etc.)
+                   • Dependency library detection
+                   • Installation prefix and output paths
+
+                   🚀 INTEGRATION BENEFITS:
+                   • Automatic build directory selection for single-config projects
+                   • Multi-configuration project guidance and selection prompts
+                   • LSP server initialization with optimal build context
+                   • Symbol analysis prerequisite validation
+
+                   🎯 PRIMARY USE CASES:
+                   Build environment assessment • LSP setup validation • Multi-config project navigation
+                   • Compilation troubleshooting • Development environment verification
+
+                   INPUT REQUIREMENTS:
+                   • No parameters required - analyzes current workspace automatically
+                   • Operates on current working directory and subdirectories
+                   • Results include actionable recommendations for next steps"
 )]
 #[derive(Debug, ::serde::Deserialize, ::serde::Serialize, JsonSchema)]
 pub struct ListBuildDirsTool {

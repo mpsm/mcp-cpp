@@ -15,77 +15,154 @@ use super::symbol_filtering::SymbolUtilities;
 
 #[mcp_tool(
     name = "analyze_symbol_context",
-    description = "Comprehensive C++ symbol analysis tool providing detailed context about any symbol in your codebase. \
-                   Leverages clangd's LSP capabilities for accurate, fast analysis with rich semantic understanding. \
-                   \
-                   🔍 SYMBOL RESOLUTION: Accepts symbol names ('MyClass', 'process'), qualified names ('std::vector', 'MyNamespace::MyClass'), \
-                   or global scope symbols ('::main'). Handles overloaded functions and disambiguates symbols using workspace search. \
-                   \
-                   📊 CORE ANALYSIS: Symbol kind, type information, documentation, definitions, declarations, qualified names, and file locations. \
-                   \
-                   🔗 USAGE ANALYSIS: Reference counting, usage statistics, concrete code examples, and usage pattern classification. \
-                   \
-                   🏗️ INHERITANCE ANALYSIS: Class hierarchies, base classes, derived classes, virtual function relationships. \
-                   \
-                   📞 CALL ANALYSIS: Function call relationships, incoming calls (who calls this), outgoing calls (what this calls), \
-                   call chain traversal with configurable depth, and dependency mapping. \
-                   \
-                   ⚡ PERFORMANCE: Optimized with clangd's indexing, concurrent LSP requests, and intelligent caching. \
-                   Graceful degradation when features unavailable. \
-                   \
-                   Perfect for: Code navigation, dependency analysis, refactoring planning, architecture understanding, \
-                   debugging, code review, and comprehensive symbol documentation."
+    description = "Advanced multi-dimensional C++ symbol analysis engine providing comprehensive contextual \
+                   understanding of any symbol in your codebase through sophisticated clangd LSP integration. \
+                   This tool performs deep semantic analysis combining multiple LSP operations to deliver \
+                   complete symbol intelligence for complex C++ codebases.
+
+                   🔍 SYMBOL RESOLUTION CAPABILITIES:
+                   • Simple names: 'MyClass', 'factorial', 'process'
+                   • Fully qualified names: 'std::vector', 'MyNamespace::MyClass'
+                   • Global scope symbols: '::main', '::global_function'
+                   • Template specializations and overloaded functions
+                   • Advanced disambiguation using optional location hints
+
+                   📊 CORE SEMANTIC ANALYSIS:
+                   • Precise symbol kind classification (class, function, variable, etc.)
+                   • Complete type information with template parameters
+                   • Extracted documentation comments and signatures
+                   • Definition and declaration locations with file mappings
+                   • Fully qualified names with namespace resolution
+
+                   📈 USAGE PATTERN ANALYSIS (optional):
+                   • Statistical reference counting across entire codebase
+                   • Usage pattern classification (initialization, calls, inheritance)
+                   • Concrete code examples demonstrating typical usage
+                   • File distribution and usage density metrics
+
+                   🏗️ INHERITANCE HIERARCHY ANALYSIS (optional):
+                   • Complete class relationship mapping and base class hierarchies
+                   • Derived class discovery and virtual function relationships
+                   • Multiple inheritance resolution and abstract interface identification
+                   • Essential for understanding polymorphic relationships
+
+                   📞 CALL RELATIONSHIP ANALYSIS (optional):
+                   • Incoming call discovery (who calls this function)
+                   • Outgoing call mapping (what functions this calls)
+                   • Call chain traversal with configurable depth limits
+                   • Dependency relationship mapping and recursive call detection
+
+                   ⚡ PERFORMANCE & RELIABILITY:
+                   • Leverages clangd's high-performance indexing system
+                   • Concurrent LSP request processing for parallel analysis
+                   • Intelligent caching and graceful degradation
+                   • Automatic build directory detection and clangd setup
+
+                   🎯 TARGET USE CASES:
+                   Code navigation • Dependency analysis • Refactoring preparation • Architecture understanding
+                   • Debugging inheritance issues • Code review assistance • Technical documentation • Educational exploration
+
+                   INPUT REQUIREMENTS:
+                   • symbol: Required string - the symbol name to analyze
+                   • location: Optional - for disambiguating overloaded/template symbols
+                   • include_usage_patterns: Optional boolean - enables usage statistics and examples
+                   • include_inheritance: Optional boolean - enables class hierarchy analysis
+                   • include_call_hierarchy: Optional boolean - enables function call analysis
+                   • Analysis depth and example limits are configurable via optional parameters"
 )]
 #[derive(Debug, ::serde::Serialize, JsonSchema)]
 pub struct AnalyzeSymbolContextTool {
-    /// The symbol name to analyze. Can be simple name ('MyClass'), qualified name ('std::vector'), 
-    /// or global scope ('::main'). For overloaded functions or ambiguous symbols, consider providing location.
+    /// The symbol name to analyze. REQUIRED.
+    /// 
+    /// EXAMPLES:
+    /// • Simple names: "MyClass", "factorial", "calculateSum"
+    /// • Fully qualified: "std::vector", "MyNamespace::MyClass"  
+    /// • Global scope: "::main", "::global_var"
+    /// • Methods: "MyClass::method" (class context will be analyzed)
+    /// 
+    /// For overloaded functions or template specializations, consider providing 
+    /// the optional 'location' parameter for precise disambiguation.
     pub symbol: String,
     
-    /// Optional location to disambiguate symbols when multiple symbols have the same name.
-    /// Useful for overloaded functions, template specializations, or symbols with identical names in different scopes.
+    /// Optional file location to disambiguate symbols with identical names.
+    /// 
+    /// USE WHEN: Multiple symbols exist with the same name (overloaded functions,
+    /// template specializations, symbols in different namespaces/classes).
+    /// 
+    /// FORMATS ACCEPTED:
+    /// • Relative path: "src/math.cpp" 
+    /// • Absolute path: "/home/project/src/math.cpp"
+    /// • File URI: "file:///home/project/src/math.cpp"
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub location: Option<SymbolLocation>,
     
-    /// Include usage patterns and examples in the analysis. DEFAULT: false.
-    /// When true, provides concrete code examples showing how the symbol is used.
+    /// Include usage patterns and concrete code examples. DEFAULT: false.
+    /// 
+    /// ENABLES: Reference counting, usage statistics, file distribution analysis,
+    /// and up to 'max_usage_examples' concrete code snippets showing how the symbol is used.
+    /// 
+    /// PERFORMANCE NOTE: Adds ~2-5 seconds to analysis time for heavily used symbols.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub include_usage_patterns: Option<bool>,
     
-    /// Maximum number of usage examples to include. DEFAULT: 5.
-    /// Only relevant when include_usage_patterns is true.
+    /// Maximum number of usage examples to include. DEFAULT: 5. RANGE: 1-20.
+    /// 
+    /// Only relevant when 'include_usage_patterns' is true.
+    /// Each example includes file location, code context, and usage pattern classification.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_usage_examples: Option<u32>,
     
-    /// Include inheritance and class hierarchy information. DEFAULT: false.
-    /// When true, provides base classes, derived classes, and inheritance relationships.
+    /// Include class inheritance and hierarchy information. DEFAULT: false.
+    /// 
+    /// ENABLES: Base class discovery, derived class mapping, virtual function analysis.
+    /// APPLIES TO: Classes, structs, interfaces - ignored for functions/variables.
+    /// 
+    /// PERFORMANCE NOTE: Adds ~1-3 seconds for complex inheritance hierarchies.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub include_inheritance: Option<bool>,
     
-    /// Include call relationships and function call hierarchy. DEFAULT: false.
-    /// When true, provides incoming calls (functions that call this symbol) and outgoing calls (functions this symbol calls).
+    /// Include function call relationships and dependency analysis. DEFAULT: false.
+    /// 
+    /// ENABLES: Incoming calls (who calls this), outgoing calls (what this calls),
+    /// call chain traversal up to 'max_call_depth' levels.
+    /// APPLIES TO: Functions, methods, constructors - ignored for variables/types.
+    /// 
+    /// PERFORMANCE NOTE: Adds ~2-8 seconds depending on call complexity and depth.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub include_call_hierarchy: Option<bool>,
     
-    /// Maximum depth for call hierarchy analysis. DEFAULT: 3.
-    /// Only relevant when include_call_hierarchy is true. Controls how deep to traverse the call graph.
+    /// Maximum depth for call hierarchy traversal. DEFAULT: 3. RANGE: 1-10.
+    /// 
+    /// Only relevant when 'include_call_hierarchy' is true.
+    /// Controls how deep to follow the call chain (depth 1 = direct calls only,
+    /// depth 3 = calls → calls of calls → calls of calls of calls).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_call_depth: Option<u32>,
 }
 
 #[derive(Debug, PartialEq, ::serde::Serialize, ::serde::Deserialize, JsonSchema)]
 pub struct SymbolLocation {
-    /// File URI in format 'file:///path/to/file.cpp' or relative path from project root
+    /// File path or URI where the symbol is located.
+    /// 
+    /// ACCEPTED FORMATS:
+    /// • Relative path: "src/math.cpp", "include/utils.h"
+    /// • Absolute path: "/home/project/src/math.cpp" 
+    /// • File URI: "file:///home/project/src/math.cpp"
     pub file_uri: String,
-    /// Position within the file to help disambiguate symbols
+    
+    /// Precise position within the file for disambiguation.
+    /// Use this to target a specific occurrence when multiple symbols 
+    /// with the same name exist in the same file.
     pub position: SymbolPosition,
 }
 
 #[derive(Debug, PartialEq, ::serde::Serialize, ::serde::Deserialize, JsonSchema)]
 pub struct SymbolPosition {
-    /// Line number (0-based)
+    /// Line number (0-based indexing). 
+    /// Example: line 0 = first line, line 10 = eleventh line
     pub line: u32,
-    /// Character position within the line (0-based)
+    /// Character position within the line (0-based indexing).
+    /// Example: character 0 = first character, character 5 = sixth character  
     pub character: u32,
 }
 

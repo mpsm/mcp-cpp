@@ -4,7 +4,6 @@
 //! using clangd LSP server integration.
 
 pub mod cmake_tools;
-pub mod lsp_tools;
 pub mod symbol_filtering;
 pub mod search_symbols;
 pub mod analyze_symbols;
@@ -16,7 +15,6 @@ use tokio::sync::Mutex;
 use crate::lsp::ClangdManager;
 
 pub use cmake_tools::ListBuildDirsTool;
-pub use lsp_tools::LspRequestTool;
 pub use search_symbols::SearchSymbolsTool;
 pub use analyze_symbols::AnalyzeSymbolContextTool;
 
@@ -49,8 +47,6 @@ pub fn serialize_result(content: &serde_json::Value) -> String {
 pub enum CppTools {
     #[serde(rename = "list_build_dirs")]
     ListBuildDirs(ListBuildDirsTool),
-    #[serde(rename = "lsp_request")]
-    LspRequest(LspRequestTool),
     #[serde(rename = "search_symbols")]
     SearchSymbols(SearchSymbolsTool),
     #[serde(rename = "analyze_symbol_context")]
@@ -61,7 +57,6 @@ impl CppTools {
     pub fn tools() -> Vec<rust_mcp_sdk::schema::Tool> {
         vec![
             ListBuildDirsTool::tool(),
-            LspRequestTool::tool(),
             SearchSymbolsTool::tool(),
             AnalyzeSymbolContextTool::tool(),
         ]
@@ -85,15 +80,6 @@ impl CppTools {
                     ))
                 })?;
                 tool.call_tool()
-            }
-            "lsp_request" => {
-                let tool: LspRequestTool = serde_json::from_value(arguments).map_err(|e| {
-                    CallToolError::new(std::io::Error::new(
-                        std::io::ErrorKind::InvalidInput,
-                        format!("Failed to deserialize lsp_request arguments: {}", e)
-                    ))
-                })?;
-                tool.call_tool(clangd_manager).await
             }
             "search_symbols" => {
                 let tool: SearchSymbolsTool = serde_json::from_value(arguments).map_err(|e| {
