@@ -285,7 +285,7 @@ impl LspRequestTool {
 
         rust_mcp_sdk::schema::Tool {
             name: "lsp_request".to_string(),
-            description: Some("Send LSP request to clangd. Automatically sets up clangd if not already running. Requires clangd version 20+. Optional build_directory parameter - if not provided, requires single build directory in workspace. Supports all LSP methods like textDocument/definition, textDocument/hover, textDocument/completion, etc. All responses include real-time indexing status with progress tracking and completion estimates.".to_string()),
+            description: Some("Direct proxy to clangd LSP server for advanced use cases not covered by specialized tools. Supports all LSP methods and protocols. Use this for custom LSP requests, experimental features, or when you need direct access to clangd's full capabilities. Automatically sets up clangd if not already running. Requires clangd version 20+. Optional build_directory parameter - if not provided, requires single build directory in workspace. All responses include real-time indexing status with progress tracking and completion estimates.".to_string()),
             input_schema: rust_mcp_sdk::schema::ToolInputSchema::new(
                 vec!["method".to_string()],
                 Some(properties),
@@ -639,6 +639,349 @@ impl LspRequestTool {
     }
 }
 
+#[mcp_tool(
+    name = "get_symbols",
+    description = "Retrieve C++ symbols from clangd LSP server. Returns document symbols for a specific file or workspace symbols for project-wide symbol search. Automatically manages file opening in clangd and waits for indexing completion when needed. Provides hierarchical symbol information including classes, functions, variables, and their locations. For workspace symbols, use null, empty string, or omit the fileUri parameter."
+)]
+#[derive(Debug, ::serde::Serialize, JsonSchema)]
+pub struct GetSymbolsTool {
+    #[serde(rename = "fileUri", default, skip_serializing_if = "Option::is_none")]
+    pub file_uri: Option<String>,
+}
+
+impl<'de> serde::Deserialize<'de> for GetSymbolsTool {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        #[derive(serde::Deserialize)]
+        struct GetSymbolsToolHelper {
+            #[serde(rename = "fileUri", default)]
+            file_uri: Option<serde_json::Value>,
+        }
+
+        let helper = GetSymbolsToolHelper::deserialize(deserializer)?;
+        
+        let processed_file_uri = match helper.file_uri {
+            Some(value) => match value {
+                serde_json::Value::Null => None,
+                serde_json::Value::String(s) => {
+                    let trimmed = s.trim();
+                    if trimmed.is_empty() || trimmed == "null" {
+                        None
+                    } else {
+                        Some(s)
+                    }
+                }
+                _ => {
+                    // For other types, try to convert to string
+                    Some(value.to_string())
+                }
+            },
+            None => None,
+        };
+
+        Ok(GetSymbolsTool {
+            file_uri: processed_file_uri,
+        })
+    }
+}
+
+impl GetSymbolsTool {
+    #[instrument(name = "get_symbols", skip(self, clangd_manager))]
+    pub async fn call_tool(
+        &self,
+        clangd_manager: &Arc<Mutex<ClangdManager>>,
+    ) -> Result<CallToolResult, CallToolError> {
+        info!("Getting symbols: file_uri={:?}", self.file_uri);
+
+        // Handle automatic clangd setup if needed
+        let build_path = match Self::resolve_build_directory() {
+            Ok(Some(path)) => path,
+            Ok(None) => {
+                let indexing_state = clangd_manager.lock().await.get_indexing_state().await;
+                let content = json!({
+                    "success": false,
+                    "error": "build_directory_required",
+                    "message": "No build directory found. Use list_build_dirs tool to see available options, or configure a build directory first.",
+                    "indexing_status": Self::format_indexing_status(&indexing_state)
+                });
+
+                return Ok(CallToolResult::text_content(vec![TextContent::from(
+                    serialize_result(&content),
+                )]));
+            }
+            Err(_) => {
+                let indexing_state = clangd_manager.lock().await.get_indexing_state().await;
+                let content = json!({
+                    "success": false,
+                    "error": "build_directory_analysis_failed",
+                    "message": "Failed to analyze build directories. Use list_build_dirs tool to see available options.",
+                    "indexing_status": Self::format_indexing_status(&indexing_state)
+                });
+
+                return Ok(CallToolResult::text_content(vec![TextContent::from(
+                    serialize_result(&content),
+                )]));
+            }
+        };
+
+        // Ensure clangd is setup
+        {
+            let current_build_dir = clangd_manager
+                .lock()
+                .await
+                .get_current_build_directory()
+                .await;
+            let needs_setup = match current_build_dir {
+                Some(current) => current != build_path,
+                None => true,
+            };
+
+            if needs_setup {
+                info!(
+                    "Setting up clangd for build directory: {}",
+                    build_path.display()
+                );
+                let manager_guard = clangd_manager.lock().await;
+                if let Err(e) = manager_guard.setup_clangd(build_path.clone()).await {
+                    let indexing_state = manager_guard.get_indexing_state().await;
+                    let content = json!({
+                        "success": false,
+                        "error": format!("Failed to setup clangd: {}", e),
+                        "build_directory_attempted": build_path.display().to_string(),
+                        "indexing_status": Self::format_indexing_status(&indexing_state)
+                    });
+
+                    return Ok(CallToolResult::text_content(vec![TextContent::from(
+                        serialize_result(&content),
+                    )]));
+                }
+            }
+        }
+
+        let manager_guard = clangd_manager.lock().await;
+        let build_directory = manager_guard
+            .get_current_build_directory()
+            .await
+            .map(|p| p.display().to_string())
+            .unwrap_or_else(|| "none".to_string());
+
+        if let Some(file_uri) = &self.file_uri {
+            // Document symbols for specific file
+            self.get_document_symbols(file_uri, &manager_guard, &build_directory)
+                .await
+        } else {
+            // Workspace symbols
+            self.get_workspace_symbols(&manager_guard, &build_directory)
+                .await
+        }
+    }
+
+    async fn get_document_symbols(
+        &self,
+        file_uri: &str,
+        manager: &ClangdManager,
+        build_directory: &str,
+    ) -> Result<CallToolResult, CallToolError> {
+        // Convert URI to file path
+        let file_path = if let Some(stripped) = file_uri.strip_prefix("file://") {
+            PathBuf::from(stripped)
+        } else {
+            PathBuf::from(file_uri)
+        };
+
+        // Open file if needed
+        let file_opened = match manager.open_file_if_needed(&file_path).await {
+            Ok(opened) => opened,
+            Err(e) => {
+                let indexing_state = manager.get_indexing_state().await;
+                let content = json!({
+                    "success": false,
+                    "error": format!("Failed to open file: {}", e),
+                    "file_uri": file_uri,
+                    "indexing_status": Self::format_indexing_status(&indexing_state)
+                });
+
+                return Ok(CallToolResult::text_content(vec![TextContent::from(
+                    serialize_result(&content),
+                )]));
+            }
+        };
+
+        // Send document symbol request
+        let params = json!({
+            "textDocument": {
+                "uri": file_uri
+            }
+        });
+
+        match manager
+            .send_lsp_request("textDocument/documentSymbol".to_string(), Some(params))
+            .await
+        {
+            Ok(symbols) => {
+                let indexing_state = manager.get_indexing_state().await;
+                let opened_files_count = manager.get_opened_files_count().await;
+
+                let content = json!({
+                    "success": true,
+                    "symbols": symbols,
+                    "metadata": {
+                        "symbol_type": "document",
+                        "file_uri": file_uri,
+                        "file_opened": file_opened,
+                        "opened_files_count": opened_files_count,
+                        "build_directory_used": build_directory,
+                        "indexing_status": Self::format_indexing_status(&indexing_state)
+                    }
+                });
+
+                Ok(CallToolResult::text_content(vec![TextContent::from(
+                    serialize_result(&content),
+                )]))
+            }
+            Err(e) => {
+                let indexing_state = manager.get_indexing_state().await;
+                let content = json!({
+                    "success": false,
+                    "error": format!("LSP request failed: {}", e),
+                    "file_uri": file_uri,
+                    "indexing_status": Self::format_indexing_status(&indexing_state)
+                });
+
+                Ok(CallToolResult::text_content(vec![TextContent::from(
+                    serialize_result(&content),
+                )]))
+            }
+        }
+    }
+
+    async fn get_workspace_symbols(
+        &self,
+        manager: &ClangdManager,
+        build_directory: &str,
+    ) -> Result<CallToolResult, CallToolError> {
+        // Check current indexing state before waiting
+        let initial_indexing_state = manager.get_indexing_state().await;
+        info!("Initial indexing state: {:?}", initial_indexing_state.status);
+        
+        // Wait for indexing to complete if not already completed
+        if initial_indexing_state.status != crate::lsp::types::IndexingStatus::Completed {
+            info!("Waiting for indexing completion before workspace symbol request (current status: {:?})", initial_indexing_state.status);
+            if let Err(e) = manager
+                .wait_for_indexing_completion(std::time::Duration::from_secs(30))
+                .await
+            {
+                let final_indexing_state = manager.get_indexing_state().await;
+                let content = json!({
+                    "success": false,
+                    "error": format!("Indexing timeout: {}", e),
+                    "message": "Workspace symbols may be incomplete due to ongoing indexing",
+                    "initial_status": match initial_indexing_state.status {
+                        crate::lsp::types::IndexingStatus::NotStarted => "not_started",
+                        crate::lsp::types::IndexingStatus::InProgress => "in_progress", 
+                        crate::lsp::types::IndexingStatus::Completed => "completed",
+                    },
+                    "indexing_status": Self::format_indexing_status(&final_indexing_state)
+                });
+
+                return Ok(CallToolResult::text_content(vec![TextContent::from(
+                    serialize_result(&content),
+                )]));
+            }
+        }
+
+        // Send workspace symbol request with empty query to get all symbols
+        let params = json!({
+            "query": ""
+        });
+
+        match manager
+            .send_lsp_request("workspace/symbol".to_string(), Some(params))
+            .await
+        {
+            Ok(symbols) => {
+                let final_indexing_state = manager.get_indexing_state().await;
+                let opened_files_count = manager.get_opened_files_count().await;
+
+                let content = json!({
+                    "success": true,
+                    "symbols": symbols,
+                    "metadata": {
+                        "symbol_type": "workspace",
+                        "opened_files_count": opened_files_count,
+                        "build_directory_used": build_directory,
+                        "indexing_waited": initial_indexing_state.status != crate::lsp::types::IndexingStatus::Completed,
+                        "indexing_status": Self::format_indexing_status(&final_indexing_state)
+                    }
+                });
+
+                Ok(CallToolResult::text_content(vec![TextContent::from(
+                    serialize_result(&content),
+                )]))
+            }
+            Err(e) => {
+                let indexing_state = manager.get_indexing_state().await;
+                let content = json!({
+                    "success": false,
+                    "error": format!("LSP request failed: {}", e),
+                    "indexing_status": Self::format_indexing_status(&indexing_state)
+                });
+
+                Ok(CallToolResult::text_content(vec![TextContent::from(
+                    serialize_result(&content),
+                )]))
+            }
+        }
+    }
+
+    fn format_indexing_status(
+        indexing_state: &crate::lsp::types::IndexingState,
+    ) -> serde_json::Value {
+        json!({
+            "status": match indexing_state.status {
+                crate::lsp::types::IndexingStatus::NotStarted => "not_started",
+                crate::lsp::types::IndexingStatus::InProgress => "in_progress",
+                crate::lsp::types::IndexingStatus::Completed => "completed",
+            },
+            "is_indexing": indexing_state.is_indexing(),
+            "files_processed": indexing_state.files_processed,
+            "total_files": indexing_state.total_files,
+            "percentage": indexing_state.percentage,
+            "message": indexing_state.message,
+            "estimated_completion_seconds": indexing_state.estimated_completion_seconds
+        })
+    }
+
+    fn resolve_build_directory() -> Result<Option<PathBuf>, String> {
+        match CmakeProjectStatus::analyze_current_directory() {
+            Ok(status) => match status.build_directories.len() {
+                1 => {
+                    let build_dir = &status.build_directories[0];
+                    info!(
+                        "Auto-resolved to single build directory: {}",
+                        build_dir.path.display()
+                    );
+                    Ok(Some(build_dir.path.clone()))
+                }
+                0 => {
+                    info!("No build directories found");
+                    Ok(None)
+                }
+                _ => {
+                    info!("Multiple build directories found, requiring explicit selection");
+                    Ok(None)
+                }
+            },
+            Err(e) => {
+                info!("Not a CMake project or failed to analyze: {}", e);
+                Err(format!("Failed to analyze build directories: {}", e))
+            }
+        }
+    }
+}
+
 // Tool definitions using mcp_tool! macro for automatic schema generation
 #[derive(Debug, serde::Serialize, serde::Deserialize)]
 #[serde(tag = "name")]
@@ -647,11 +990,17 @@ pub enum CppTools {
     ListBuildDirs(ListBuildDirsTool),
     #[serde(rename = "lsp_request")]
     LspRequest(LspRequestTool),
+    #[serde(rename = "get_symbols")]
+    GetSymbols(GetSymbolsTool),
 }
 
 impl CppTools {
     pub fn tools() -> Vec<rust_mcp_sdk::schema::Tool> {
-        vec![ListBuildDirsTool::tool(), LspRequestTool::tool()]
+        vec![
+            ListBuildDirsTool::tool(),
+            LspRequestTool::tool(),
+            GetSymbolsTool::tool(),
+        ]
     }
 }
 
@@ -688,7 +1037,95 @@ impl TryFrom<rust_mcp_sdk::schema::CallToolRequest> for CppTools {
                 })?;
                 Ok(CppTools::LspRequest(tool))
             }
+            name if name == GetSymbolsTool::tool_name() => {
+                let args_value = match request.params.arguments {
+                    Some(args) => serde_json::Value::Object(args),
+                    None => serde_json::json!({}),
+                };
+                let tool: GetSymbolsTool = serde_json::from_value(args_value).map_err(|e| {
+                    format!(
+                        "Failed to parse {} params: {}",
+                        GetSymbolsTool::tool_name(),
+                        e
+                    )
+                })?;
+                Ok(CppTools::GetSymbols(tool))
+            }
             _ => Err(format!("Unknown tool: {}", request.params.name)),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn test_get_symbols_tool_deserialize_null() {
+        let json_data = json!({
+            "fileUri": null
+        });
+        
+        let tool: GetSymbolsTool = serde_json::from_value(json_data).unwrap();
+        assert!(tool.file_uri.is_none());
+    }
+
+    #[test]
+    fn test_get_symbols_tool_deserialize_empty_string() {
+        let json_data = json!({
+            "fileUri": ""
+        });
+        
+        let tool: GetSymbolsTool = serde_json::from_value(json_data).unwrap();
+        assert!(tool.file_uri.is_none());
+    }
+
+    #[test]
+    fn test_get_symbols_tool_deserialize_null_string() {
+        let json_data = json!({
+            "fileUri": "null"
+        });
+        
+        let tool: GetSymbolsTool = serde_json::from_value(json_data).unwrap();
+        assert!(tool.file_uri.is_none());
+    }
+
+    #[test]
+    fn test_get_symbols_tool_deserialize_whitespace() {
+        let json_data = json!({
+            "fileUri": "   "
+        });
+        
+        let tool: GetSymbolsTool = serde_json::from_value(json_data).unwrap();
+        assert!(tool.file_uri.is_none());
+    }
+
+    #[test]
+    fn test_get_symbols_tool_deserialize_missing_field() {
+        let json_data = json!({});
+        
+        let tool: GetSymbolsTool = serde_json::from_value(json_data).unwrap();
+        assert!(tool.file_uri.is_none());
+    }
+
+    #[test]
+    fn test_get_symbols_tool_deserialize_valid_uri() {
+        let json_data = json!({
+            "fileUri": "file:///path/to/file.cpp"
+        });
+        
+        let tool: GetSymbolsTool = serde_json::from_value(json_data).unwrap();
+        assert_eq!(tool.file_uri, Some("file:///path/to/file.cpp".to_string()));
+    }
+
+    #[test]
+    fn test_get_symbols_tool_deserialize_trimmed_uri() {
+        let json_data = json!({
+            "fileUri": "  file:///path/to/file.cpp  "
+        });
+        
+        let tool: GetSymbolsTool = serde_json::from_value(json_data).unwrap();
+        assert_eq!(tool.file_uri, Some("  file:///path/to/file.cpp  ".to_string()));
     }
 }

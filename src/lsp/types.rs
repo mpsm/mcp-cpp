@@ -200,9 +200,9 @@ mod tests {
     fn test_indexing_state_start_indexing() {
         let mut state = IndexingState::new();
         let title = Some("Building index".to_string());
-        
+
         state.start_indexing(title.clone());
-        
+
         assert_eq!(state.status, IndexingStatus::InProgress);
         assert_eq!(state.files_processed, 0);
         assert_eq!(state.total_files, None);
@@ -217,15 +217,15 @@ mod tests {
     fn test_indexing_state_update_progress() {
         let mut state = IndexingState::new();
         state.start_indexing(Some("Building index".to_string()));
-        
+
         // Sleep for a short time to ensure progress calculation works
         std::thread::sleep(Duration::from_millis(10));
-        
+
         let message = Some("Processing files".to_string());
         let percentage = Some(50);
-        
+
         state.update_progress(message.clone(), percentage);
-        
+
         assert_eq!(state.status, IndexingStatus::InProgress);
         assert_eq!(state.message, message);
         assert_eq!(state.percentage, percentage);
@@ -238,12 +238,12 @@ mod tests {
         let mut state = IndexingState::new();
         state.start_indexing(Some("Building index".to_string()));
         state.total_files = Some(1);
-        
+
         let message = Some("Processing file".to_string());
         let percentage = None;
-        
+
         state.update_progress(message.clone(), percentage);
-        
+
         assert_eq!(state.status, IndexingStatus::InProgress);
         assert_eq!(state.message, message);
         assert_eq!(state.percentage, percentage);
@@ -255,13 +255,13 @@ mod tests {
     fn test_indexing_state_complete_indexing() {
         let mut state = IndexingState::new();
         state.start_indexing(Some("Building index".to_string()));
-        
+
         // Add a progress update to ensure message is present
         state.update_progress(Some("Processing files".to_string()), Some(50));
         assert_eq!(state.message, Some("Processing files".to_string()));
-        
+
         state.complete_indexing();
-        
+
         assert_eq!(state.status, IndexingStatus::Completed);
         assert_eq!(state.percentage, Some(100));
         assert_eq!(state.estimated_completion_seconds, Some(0));
@@ -273,12 +273,12 @@ mod tests {
     fn test_indexing_state_update_progress_when_not_in_progress() {
         let mut state = IndexingState::new();
         assert_eq!(state.status, IndexingStatus::NotStarted);
-        
+
         let message = Some("Should not update".to_string());
         let percentage = Some(25);
-        
+
         state.update_progress(message.clone(), percentage);
-        
+
         // Should not update when not in progress
         assert_eq!(state.status, IndexingStatus::NotStarted);
         assert_eq!(state.message, None);
@@ -297,7 +297,7 @@ mod tests {
             start_time: Some(std::time::Instant::now()),
             estimated_completion_seconds: Some(30),
         };
-        
+
         // Test serialization (start_time should be skipped)
         let serialized = serde_json::to_value(&state).unwrap();
         assert!(serialized.get("start_time").is_none());

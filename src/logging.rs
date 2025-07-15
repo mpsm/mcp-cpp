@@ -2,7 +2,7 @@ use std::env;
 use std::fs::OpenOptions;
 use std::io;
 use std::path::PathBuf;
-use tracing_subscriber::{fmt, layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
+use tracing_subscriber::{EnvFilter, fmt, layer::SubscriberExt, util::SubscriberInitExt};
 
 /// Configuration for the logging system
 #[derive(Debug, Clone)]
@@ -29,32 +29,31 @@ impl LogConfig {
     /// Create LogConfig from environment variables
     pub fn from_env() -> Self {
         let level = env::var("RUST_LOG").unwrap_or_else(|_| "info".to_string());
-        
-        let file_path = env::var("MCP_LOG_FILE")
-            .ok()
-            .map(|path| {
-                let mut path_buf = PathBuf::from(path);
-                
-                // Add process ID if MCP_LOG_UNIQUE is set
-                if env::var("MCP_LOG_UNIQUE").unwrap_or_default() == "true" {
-                    if let Some(filename) = path_buf.file_stem() {
-                        let extension = path_buf.extension()
-                            .and_then(|ext| ext.to_str())
-                            .unwrap_or("");
-                        
-                        let pid = std::process::id();
-                        let unique_filename = if extension.is_empty() {
-                            format!("{}.{}", filename.to_string_lossy(), pid)
-                        } else {
-                            format!("{}.{}.{}", filename.to_string_lossy(), pid, extension)
-                        };
-                        
-                        path_buf.set_file_name(unique_filename);
-                    }
+
+        let file_path = env::var("MCP_LOG_FILE").ok().map(|path| {
+            let mut path_buf = PathBuf::from(path);
+
+            // Add process ID if MCP_LOG_UNIQUE is set
+            if env::var("MCP_LOG_UNIQUE").unwrap_or_default() == "true" {
+                if let Some(filename) = path_buf.file_stem() {
+                    let extension = path_buf
+                        .extension()
+                        .and_then(|ext| ext.to_str())
+                        .unwrap_or("");
+
+                    let pid = std::process::id();
+                    let unique_filename = if extension.is_empty() {
+                        format!("{}.{}", filename.to_string_lossy(), pid)
+                    } else {
+                        format!("{}.{}.{}", filename.to_string_lossy(), pid, extension)
+                    };
+
+                    path_buf.set_file_name(unique_filename);
                 }
-                
-                path_buf
-            });
+            }
+
+            path_buf
+        });
 
         let json_format = env::var("MCP_LOG_JSON").unwrap_or_default() == "true";
 
@@ -75,18 +74,15 @@ impl LogConfig {
         }
         self
     }
-
 }
 
 /// Initialize the logging system based on configuration
 pub fn init_logging(config: LogConfig) -> Result<(), Box<dyn std::error::Error>> {
     // Create environment filter from log level
-    let env_filter = EnvFilter::try_new(&config.level)
-        .or_else(|_| EnvFilter::try_new("info"))?;
+    let env_filter = EnvFilter::try_new(&config.level).or_else(|_| EnvFilter::try_new("info"))?;
 
     // Build the subscriber based on configuration
-    let subscriber = tracing_subscriber::registry()
-        .with(env_filter);
+    let subscriber = tracing_subscriber::registry().with(env_filter);
 
     match (&config.file_path, config.json_format) {
         // File + JSON format
@@ -96,14 +92,9 @@ pub fn init_logging(config: LogConfig) -> Result<(), Box<dyn std::error::Error>>
                 .append(true)
                 .open(file_path)?;
 
-            let file_layer = fmt::layer()
-                .json()
-                .with_writer(file)
-                .with_ansi(false);
+            let file_layer = fmt::layer().json().with_writer(file).with_ansi(false);
 
-            subscriber
-                .with(file_layer)
-                .init();
+            subscriber.with(file_layer).init();
         }
         // File + human readable format
         (Some(file_path), false) => {
@@ -119,20 +110,13 @@ pub fn init_logging(config: LogConfig) -> Result<(), Box<dyn std::error::Error>>
                 .with_thread_ids(true)
                 .with_line_number(true);
 
-            subscriber
-                .with(file_layer)
-                .init();
+            subscriber.with(file_layer).init();
         }
         // Stderr only + JSON format
         (None, true) => {
-            let stderr_layer = fmt::layer()
-                .json()
-                .with_writer(io::stderr)
-                .with_ansi(false);
+            let stderr_layer = fmt::layer().json().with_writer(io::stderr).with_ansi(false);
 
-            subscriber
-                .with(stderr_layer)
-                .init();
+            subscriber.with(stderr_layer).init();
         }
         // Stderr only + human readable format (default)
         (None, false) => {
@@ -143,9 +127,7 @@ pub fn init_logging(config: LogConfig) -> Result<(), Box<dyn std::error::Error>>
                 .with_thread_ids(true)
                 .with_line_number(true);
 
-            subscriber
-                .with(stderr_layer)
-                .init();
+            subscriber.with(stderr_layer).init();
         }
     }
 
@@ -255,11 +237,10 @@ mod tests {
 
     #[test]
     fn test_log_config_with_overrides() {
-        let config = LogConfig::default()
-            .with_overrides(
-                Some("warn".to_string()),
-                Some(PathBuf::from("/custom/path.log"))
-            );
+        let config = LogConfig::default().with_overrides(
+            Some("warn".to_string()),
+            Some(PathBuf::from("/custom/path.log")),
+        );
 
         assert_eq!(config.level, "warn");
         assert_eq!(config.file_path, Some(PathBuf::from("/custom/path.log")));
@@ -275,7 +256,7 @@ mod tests {
         let config = LogConfig::from_env();
         let file_path = config.file_path.unwrap();
         let filename = file_path.file_name().unwrap().to_string_lossy();
-        
+
         let pid = std::process::id();
         let expected = format!("mcp.{}.log", pid);
         assert_eq!(filename, expected);
@@ -297,7 +278,7 @@ mod tests {
         let config = LogConfig::from_env();
         let file_path = config.file_path.unwrap();
         let filename = file_path.file_name().unwrap().to_string_lossy();
-        
+
         let pid = std::process::id();
         let expected = format!("mcp.{}", pid);
         assert_eq!(filename, expected);

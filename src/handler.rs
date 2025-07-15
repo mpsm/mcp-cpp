@@ -5,7 +5,7 @@ use rust_mcp_sdk::schema::{
     schema_utils::CallToolError,
 };
 use rust_mcp_sdk::{McpServer, mcp_server::ServerHandler};
-use tracing::{info, Level};
+use tracing::{Level, info};
 
 use crate::lsp::manager::ClangdManager;
 use crate::resources::LspResources;
@@ -35,7 +35,7 @@ impl ServerHandler for CppServerHandler {
         _runtime: &dyn McpServer,
     ) -> std::result::Result<ListToolsResult, RpcError> {
         let start = Instant::now();
-        
+
         log_mcp_message!(Level::INFO, "incoming", "list_tools", &request);
         info!("Listing available tools");
 
@@ -44,10 +44,10 @@ impl ServerHandler for CppServerHandler {
             next_cursor: None,
             tools: CppTools::tools(),
         };
-        
+
         log_mcp_message!(Level::INFO, "outgoing", "list_tools", &result);
         log_timing!(Level::DEBUG, "list_tools", start.elapsed());
-        
+
         Ok(result)
     }
 
@@ -58,7 +58,7 @@ impl ServerHandler for CppServerHandler {
     ) -> std::result::Result<CallToolResult, CallToolError> {
         let start = Instant::now();
         let tool_name = request.params.name.clone();
-        
+
         log_mcp_message!(Level::INFO, "incoming", "call_tool", &request);
         info!("Executing tool: {}", tool_name);
 
@@ -71,11 +71,18 @@ impl ServerHandler for CppServerHandler {
         let result = match tool_params {
             CppTools::ListBuildDirs(list_build_dirs_tool) => list_build_dirs_tool.call_tool(),
             CppTools::LspRequest(lsp_tool) => lsp_tool.call_tool(&self.clangd_manager).await,
+            CppTools::GetSymbols(get_symbols_tool) => {
+                get_symbols_tool.call_tool(&self.clangd_manager).await
+            }
         };
-        
+
         log_mcp_message!(Level::INFO, "outgoing", "call_tool", &result);
-        log_timing!(Level::DEBUG, &format!("call_tool_{}", tool_name), start.elapsed());
-        
+        log_timing!(
+            Level::DEBUG,
+            &format!("call_tool_{}", tool_name),
+            start.elapsed()
+        );
+
         result
     }
 
@@ -85,15 +92,16 @@ impl ServerHandler for CppServerHandler {
         _runtime: &dyn McpServer,
     ) -> std::result::Result<ListResourcesResult, RpcError> {
         let start = Instant::now();
-        
+
         log_mcp_message!(Level::INFO, "incoming", "list_resources", &request);
         info!("Listing available resources");
 
-        let result = LspResources::list_resources(request).map_err(|_e| RpcError::internal_error())?;
-        
+        let result =
+            LspResources::list_resources(request).map_err(|_e| RpcError::internal_error())?;
+
         log_mcp_message!(Level::INFO, "outgoing", "list_resources", &result);
         log_timing!(Level::DEBUG, "list_resources", start.elapsed());
-        
+
         Ok(result)
     }
 
@@ -104,15 +112,20 @@ impl ServerHandler for CppServerHandler {
     ) -> std::result::Result<ReadResourceResult, RpcError> {
         let start = Instant::now();
         let uri = request.params.uri.clone();
-        
+
         log_mcp_message!(Level::INFO, "incoming", "read_resource", &request);
         info!("Reading resource: {}", uri);
 
-        let result = LspResources::read_resource(request).map_err(|_e| RpcError::internal_error())?;
-        
+        let result =
+            LspResources::read_resource(request).map_err(|_e| RpcError::internal_error())?;
+
         log_mcp_message!(Level::INFO, "outgoing", "read_resource", &result);
-        log_timing!(Level::DEBUG, &format!("read_resource_{}", uri), start.elapsed());
-        
+        log_timing!(
+            Level::DEBUG,
+            &format!("read_resource_{}", uri),
+            start.elapsed()
+        );
+
         Ok(result)
     }
 }

@@ -10,7 +10,7 @@ use tokio::task::JoinHandle;
 use tracing::{Level, debug, info, warn};
 
 use crate::lsp::error::LspError;
-use crate::lsp::types::{JsonRpcNotification, JsonRpcRequest, JsonRpcResponse, IndexingState};
+use crate::lsp::types::{IndexingState, JsonRpcNotification, JsonRpcRequest, JsonRpcResponse};
 use crate::{log_lsp_message, log_timing};
 
 /// Represents the result of parsing an LSP message from the stream
@@ -461,7 +461,10 @@ impl LspClient {
         Ok(())
     }
 
-    async fn handle_notification(response: &JsonRpcResponse, indexing_state: &Arc<Mutex<IndexingState>>) {
+    async fn handle_notification(
+        response: &JsonRpcResponse,
+        indexing_state: &Arc<Mutex<IndexingState>>,
+    ) {
         // Handle notifications from clangd
         if let Some(method) = &response.method {
             match method.as_str() {
@@ -490,9 +493,14 @@ impl LspClient {
                                                     .get("title")
                                                     .and_then(|t| t.as_str())
                                                     .map(|s| s.to_string());
-                                                
-                                                info!("🔍 Indexing started: {}", title.as_deref().unwrap_or("Background indexing"));
-                                                
+
+                                                info!(
+                                                    "🔍 Indexing started: {}",
+                                                    title
+                                                        .as_deref()
+                                                        .unwrap_or("Background indexing")
+                                                );
+
                                                 // Update indexing state
                                                 let mut state = indexing_state.lock().await;
                                                 state.start_indexing(title);
@@ -506,20 +514,20 @@ impl LspClient {
                                                     .get("percentage")
                                                     .and_then(|p| p.as_u64())
                                                     .map(|p| p as u8);
-                                                
+
                                                 info!(
                                                     "📊 Indexing progress: {} ({}%)",
-                                                    message.as_deref().unwrap_or("Processing"), 
+                                                    message.as_deref().unwrap_or("Processing"),
                                                     percentage.unwrap_or(0)
                                                 );
-                                                
+
                                                 // Update indexing state
                                                 let mut state = indexing_state.lock().await;
                                                 state.update_progress(message, percentage);
                                             }
                                             "end" => {
                                                 info!("✅ Indexing completed!");
-                                                
+
                                                 // Update indexing state
                                                 let mut state = indexing_state.lock().await;
                                                 state.complete_indexing();

@@ -39,9 +39,8 @@ async fn main() -> SdkResult<()> {
     let args = Args::parse();
 
     // Initialize logging with configuration from env vars and CLI args
-    let log_config = LogConfig::from_env()
-        .with_overrides(args.log_level, args.log_file);
-    
+    let log_config = LogConfig::from_env().with_overrides(args.log_level, args.log_file);
+
     if let Err(e) = init_logging(log_config) {
         eprintln!("Failed to initialize logging: {}", e);
         std::process::exit(1);
