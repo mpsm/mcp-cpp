@@ -62,19 +62,11 @@ impl ServerHandler for CppServerHandler {
         log_mcp_message!(Level::INFO, "incoming", "call_tool", &request);
         info!("Executing tool: {}", tool_name);
 
-        // Convert request parameters into CppTools enum
-        let tool_params: CppTools = CppTools::try_from(request).map_err(|e| {
-            CallToolError::new(std::io::Error::new(std::io::ErrorKind::InvalidInput, e))
-        })?;
-
-        // Match the tool variant and execute its corresponding logic
-        let result = match tool_params {
-            CppTools::ListBuildDirs(list_build_dirs_tool) => list_build_dirs_tool.call_tool(),
-            CppTools::LspRequest(lsp_tool) => lsp_tool.call_tool(&self.clangd_manager).await,
-            CppTools::GetSymbols(get_symbols_tool) => {
-                get_symbols_tool.call_tool(&self.clangd_manager).await
-            }
-        };
+        let result = CppTools::handle_call(
+            &tool_name,
+            request.params.arguments.map(serde_json::Value::Object).unwrap_or(serde_json::Value::Null),
+            &self.clangd_manager,
+        ).await;
 
         log_mcp_message!(Level::INFO, "outgoing", "call_tool", &result);
         log_timing!(

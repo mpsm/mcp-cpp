@@ -1,6 +1,6 @@
 use serde_json::Value;
 use sha2::{Digest, Sha256};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::Mutex;
@@ -22,6 +22,7 @@ pub struct ClangdManager {
     is_initialized: Arc<Mutex<bool>>,
     indexing_state: Arc<Mutex<IndexingState>>,
     opened_files: Arc<Mutex<HashMap<PathBuf, OpenedFileState>>>,
+    compilation_database: Arc<Mutex<Option<HashSet<PathBuf>>>>,
 }
 
 impl ClangdManager {
@@ -32,6 +33,7 @@ impl ClangdManager {
             is_initialized: Arc::new(Mutex::new(false)),
             indexing_state: Arc::new(Mutex::new(IndexingState::new())),
             opened_files: Arc::new(Mutex::new(HashMap::new())),
+            compilation_database: Arc::new(Mutex::new(None)),
         }
     }
 
@@ -285,6 +287,22 @@ impl ClangdManager {
             ));
         }
 
+        // Extract all file paths from compilation database and store them
+        let mut file_paths = HashSet::new();
+        for entry in &compile_commands {
+            if let Some(file_str) = entry.get("file").and_then(|f| f.as_str()) {
+                file_paths.insert(PathBuf::from(file_str));
+            }
+        }
+        
+        // Store compilation database
+        {
+            let mut db = self.compilation_database.lock().await;
+            *db = Some(file_paths);
+        }
+
+        info!("Stored compilation database with {} files", compile_commands.len());
+
         // Find first source file
         let first_file = compile_commands
             .iter()
@@ -351,6 +369,11 @@ impl ClangdManager {
     pub async fn get_opened_files_count(&self) -> usize {
         let opened_files = self.opened_files.lock().await;
         opened_files.len()
+    }
+
+    pub async fn get_compilation_database(&self) -> Option<HashSet<PathBuf>> {
+        let db = self.compilation_database.lock().await;
+        db.clone()
     }
 
     pub async fn open_file_if_needed(&self, file_path: &std::path::Path) -> Result<bool, LspError> {
@@ -567,6 +590,18 @@ impl ClangdManager {
         {
             let mut opened_files = self.opened_files.lock().await;
             opened_files.clear();
+        }
+
+        // Clear compilation database
+        {
+            let mut db = self.compilation_database.lock().await;
+            *db = None;
+        }
+
+        // Clear compilation database
+        {
+            let mut db = self.compilation_database.lock().await;
+            *db = None;
         }
 
         Ok(())

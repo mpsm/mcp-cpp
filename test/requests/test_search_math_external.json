@@ -1,0 +1,13 @@
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "method": "tools/call",
+  "params": {
+    "name": "search_symbols",
+    "arguments": {
+      "query": "Math",
+      "kinds": ["class"],
+      "include_external": true
+    }
+  }
+}
