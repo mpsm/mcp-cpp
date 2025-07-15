@@ -1,0 +1,2 @@
+{"jsonrpc":"2.0","id":"1","method":"tools/call","params":{"name":"analyze_symbol_context","arguments":{"symbol":"MemoryStorage","include_usage_patterns":false,"max_usage_examples":3,"include_inheritance":true}}}
+

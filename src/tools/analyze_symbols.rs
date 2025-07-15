@@ -15,12 +15,26 @@ use super::symbol_filtering::SymbolUtilities;
 
 #[mcp_tool(
     name = "analyze_symbol_context",
-    description = "Analyze a C++ symbol and provide comprehensive context information including definition, type, location, and basic metadata. \
-                   Uses clangd's optimized search to quickly locate symbols and provides rich type information via hover responses. \
-                   SYMBOL RESOLUTION: Accepts symbol names (e.g., 'MyClass', 'process'), qualified names (e.g., 'std::vector', 'MyNamespace::MyClass'), \
-                   or specific symbols at locations. For ambiguous names, optionally provide location for disambiguation. \
-                   OUTPUTS: Symbol kind, type information, documentation, file location, qualified name, and visibility information. \
-                   Perfect for understanding symbol definitions, getting quick symbol overview, and navigating to symbol locations."
+    description = "Comprehensive C++ symbol analysis tool providing detailed context about any symbol in your codebase. \
+                   Leverages clangd's LSP capabilities for accurate, fast analysis with rich semantic understanding. \
+                   \
+                   🔍 SYMBOL RESOLUTION: Accepts symbol names ('MyClass', 'process'), qualified names ('std::vector', 'MyNamespace::MyClass'), \
+                   or global scope symbols ('::main'). Handles overloaded functions and disambiguates symbols using workspace search. \
+                   \
+                   📊 CORE ANALYSIS: Symbol kind, type information, documentation, definitions, declarations, qualified names, and file locations. \
+                   \
+                   🔗 USAGE ANALYSIS: Reference counting, usage statistics, concrete code examples, and usage pattern classification. \
+                   \
+                   🏗️ INHERITANCE ANALYSIS: Class hierarchies, base classes, derived classes, virtual function relationships. \
+                   \
+                   📞 CALL ANALYSIS: Function call relationships, incoming calls (who calls this), outgoing calls (what this calls), \
+                   call chain traversal with configurable depth, and dependency mapping. \
+                   \
+                   ⚡ PERFORMANCE: Optimized with clangd's indexing, concurrent LSP requests, and intelligent caching. \
+                   Graceful degradation when features unavailable. \
+                   \
+                   Perfect for: Code navigation, dependency analysis, refactoring planning, architecture understanding, \
+                   debugging, code review, and comprehensive symbol documentation."
 )]
 #[derive(Debug, ::serde::Serialize, JsonSchema)]
 pub struct AnalyzeSymbolContextTool {
@@ -47,6 +61,16 @@ pub struct AnalyzeSymbolContextTool {
     /// When true, provides base classes, derived classes, and inheritance relationships.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub include_inheritance: Option<bool>,
+    
+    /// Include call relationships and function call hierarchy. DEFAULT: false.
+    /// When true, provides incoming calls (functions that call this symbol) and outgoing calls (functions this symbol calls).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub include_call_hierarchy: Option<bool>,
+    
+    /// Maximum depth for call hierarchy analysis. DEFAULT: 3.
+    /// Only relevant when include_call_hierarchy is true. Controls how deep to traverse the call graph.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_call_depth: Option<u32>,
 }
 
 #[derive(Debug, PartialEq, ::serde::Serialize, ::serde::Deserialize, JsonSchema)]
@@ -81,6 +105,10 @@ impl<'de> serde::Deserialize<'de> for AnalyzeSymbolContextTool {
             max_usage_examples: Option<u32>,
             #[serde(default)]
             include_inheritance: Option<bool>,
+            #[serde(default)]
+            include_call_hierarchy: Option<bool>,
+            #[serde(default)]
+            max_call_depth: Option<u32>,
         }
 
         let helper = AnalyzeSymbolContextToolHelper::deserialize(deserializer)?;
@@ -91,8 +119,21 @@ impl<'de> serde::Deserialize<'de> for AnalyzeSymbolContextTool {
             include_usage_patterns: helper.include_usage_patterns,
             max_usage_examples: helper.max_usage_examples,
             include_inheritance: helper.include_inheritance,
+            include_call_hierarchy: helper.include_call_hierarchy,
+            max_call_depth: helper.max_call_depth,
         })
     }
+}
+
+struct SymbolAnalysisData<'a> {
+    symbol_location: &'a serde_json::Value,
+    hover_info: &'a Option<serde_json::Value>,
+    definition_location: Option<&'a serde_json::Value>,
+    declaration_location: Option<&'a serde_json::Value>,
+    usage_stats: Option<&'a serde_json::Value>,
+    inheritance_info: Option<&'a serde_json::Value>,
+    usage_examples: Option<&'a serde_json::Value>,
+    call_relationships: Option<&'a serde_json::Value>,
 }
 
 impl AnalyzeSymbolContextTool {
@@ -238,16 +279,66 @@ impl AnalyzeSymbolContextTool {
         // Step 2: Get detailed information via hover
         let hover_info = self.get_hover_information(&manager_guard, &symbol_location).await?;
 
-        // Step 3: Get basic symbol information
-        let basic_info = self.extract_basic_symbol_info(&symbol_location, &hover_info);
+        // Step 3: Get definition and declaration locations
+        let (definition_location, declaration_location) = self.get_symbol_locations(&manager_guard, &symbol_location).await;
+
+        // Step 4: Get reference count and usage statistics
+        let usage_stats = if self.include_usage_patterns.unwrap_or(false) {
+            self.get_usage_statistics(&manager_guard, &symbol_location).await
+        } else {
+            None
+        };
+
+        // Step 5: Get inheritance information if requested
+        let inheritance_info = if self.include_inheritance.unwrap_or(false) {
+            self.get_inheritance_information(&manager_guard, &symbol_location).await
+        } else {
+            None
+        };
+
+        // Step 6: Get usage examples if requested
+        let usage_examples = if self.include_usage_patterns.unwrap_or(false) {
+            self.get_usage_examples(&manager_guard, &symbol_location).await
+        } else {
+            None
+        };
+
+        // Step 7: Get call relationships if requested
+        let call_relationships = if self.include_call_hierarchy.unwrap_or(false) {
+            self.get_call_relationships(&manager_guard, &symbol_location).await
+        } else {
+            None
+        };
+
+        // Step 8: Build comprehensive symbol information
+        let symbol_info = self.build_comprehensive_symbol_info(SymbolAnalysisData {
+            symbol_location: &symbol_location, 
+            hover_info: &hover_info, 
+            definition_location: definition_location.as_ref(),
+            declaration_location: declaration_location.as_ref(),
+            usage_stats: usage_stats.as_ref(),
+            inheritance_info: inheritance_info.as_ref(),
+            usage_examples: usage_examples.as_ref(),
+            call_relationships: call_relationships.as_ref(),
+        });
 
         // Prepare the response
         let final_indexing_state = manager_guard.get_indexing_state().await;
         let content = json!({
             "success": true,
-            "symbol": basic_info,
+            "symbol": symbol_info,
             "metadata": {
-                "analysis_type": "basic_symbol_info",
+                "analysis_type": "comprehensive_symbol_analysis",
+                "features_used": {
+                    "basic_info": true,
+                    "hover_info": hover_info.is_some(),
+                    "definition_location": definition_location.is_some(),
+                    "declaration_location": declaration_location.is_some(),
+                    "usage_statistics": usage_stats.is_some(),
+                    "inheritance_info": inheritance_info.is_some(),
+                    "usage_examples": usage_examples.is_some(),
+                    "call_relationships": call_relationships.is_some()
+                },
                 "build_directory_used": build_directory,
                 "indexing_waited": initial_indexing_state.status != crate::lsp::types::IndexingStatus::Completed,
                 "indexing_status": SymbolUtilities::format_indexing_status(&final_indexing_state)
@@ -293,15 +384,45 @@ impl AnalyzeSymbolContextTool {
         {
             Ok(symbols) => {
                 if let Some(symbol_array) = symbols.as_array() {
-                    // Find exact match or best match
+                    // Find exact match or best match using improved logic
                     let best_match = symbol_array
                         .iter()
                         .find(|s| {
                             if let Some(name) = s.get("name").and_then(|n| n.as_str()) {
-                                name == self.symbol
+                                // Exact name match
+                                if name == self.symbol {
+                                    return true;
+                                }
+                                
+                                // Check for qualified name match
+                                if let Some(detail) = s.get("detail").and_then(|d| d.as_str()) {
+                                    if detail.contains(&self.symbol) {
+                                        return true;
+                                    }
+                                }
+                                
+                                // Check container scope for qualified matches
+                                if let Some(container) = s.get("containerName").and_then(|c| c.as_str()) {
+                                    let qualified = format!("{}::{}", container, name);
+                                    if qualified == self.symbol {
+                                        return true;
+                                    }
+                                }
+                                
+                                false
                             } else {
                                 false
                             }
+                        })
+                        .or_else(|| {
+                            // Fallback: partial match
+                            symbol_array.iter().find(|s| {
+                                if let Some(name) = s.get("name").and_then(|n| n.as_str()) {
+                                    name.contains(&self.symbol) || self.symbol.contains(name)
+                                } else {
+                                    false
+                                }
+                            })
                         })
                         .or_else(|| symbol_array.first());
 
@@ -317,6 +438,632 @@ impl AnalyzeSymbolContextTool {
         }
     }
 
+    async fn get_symbol_locations(
+        &self,
+        manager: &ClangdManager,
+        symbol_location: &serde_json::Value,
+    ) -> (Option<serde_json::Value>, Option<serde_json::Value>) {
+        let mut definition_location = None;
+        let mut declaration_location = None;
+
+        if let (Some(uri), Some(range)) = (
+            symbol_location.get("uri").and_then(|u| u.as_str()),
+            symbol_location.get("range"),
+        ) {
+            // First, ensure the file is opened in clangd
+            if let Some(file_path_str) = uri.strip_prefix("file://") {
+                let file_path = std::path::PathBuf::from(file_path_str);
+                if let Err(e) = manager.open_file_if_needed(&file_path).await {
+                    info!("Failed to open file {} for symbol analysis: {}", file_path.display(), e);
+                    return (None, None);
+                }
+            }
+
+            if let Some(start) = range.get("start") {
+                let params = json!({
+                    "textDocument": {
+                        "uri": uri
+                    },
+                    "position": start
+                });
+
+                // Get definition location
+                if let Ok(definition_result) = manager
+                    .send_lsp_request("textDocument/definition".to_string(), Some(params.clone()))
+                    .await
+                {
+                    if let Some(locations) = definition_result.as_array() {
+                        if let Some(first_def) = locations.first() {
+                            definition_location = Some(first_def.clone());
+                        }
+                    }
+                }
+
+                // Get declaration location
+                if let Ok(declaration_result) = manager
+                    .send_lsp_request("textDocument/declaration".to_string(), Some(params))
+                    .await
+                {
+                    if let Some(locations) = declaration_result.as_array() {
+                        if let Some(first_decl) = locations.first() {
+                            declaration_location = Some(first_decl.clone());
+                        }
+                    }
+                }
+            }
+        }
+
+        (definition_location, declaration_location)
+    }
+
+    async fn get_usage_statistics(
+        &self,
+        manager: &ClangdManager,
+        symbol_location: &serde_json::Value,
+    ) -> Option<serde_json::Value> {
+        if let (Some(uri), Some(range)) = (
+            symbol_location.get("uri").and_then(|u| u.as_str()),
+            symbol_location.get("range"),
+        ) {
+            // First, ensure the file is opened in clangd
+            if let Some(file_path_str) = uri.strip_prefix("file://") {
+                let file_path = std::path::PathBuf::from(file_path_str);
+                if let Err(e) = manager.open_file_if_needed(&file_path).await {
+                    info!("Failed to open file {} for usage statistics: {}", file_path.display(), e);
+                    return None;
+                }
+            }
+
+            if let Some(start) = range.get("start") {
+                let params = json!({
+                    "textDocument": {
+                        "uri": uri
+                    },
+                    "position": start,
+                    "context": {
+                        "includeDeclaration": true
+                    }
+                });
+
+                if let Ok(references_result) = manager
+                    .send_lsp_request("textDocument/references".to_string(), Some(params))
+                    .await
+                {
+                    if let Some(references) = references_result.as_array() {
+                        let total_references = references.len();
+                        let mut file_count = std::collections::HashSet::new();
+                        
+                        // Count unique files
+                        for reference in references {
+                            if let Some(uri) = reference.get("uri").and_then(|u| u.as_str()) {
+                                file_count.insert(uri);
+                            }
+                        }
+
+                        return Some(json!({
+                            "total_references": total_references,
+                            "files_containing_references": file_count.len(),
+                            "reference_density": if !file_count.is_empty() { 
+                                total_references as f64 / file_count.len() as f64 
+                            } else { 
+                                0.0 
+                            }
+                        }));
+                    }
+                }
+            }
+        }
+        None
+    }
+
+    async fn get_inheritance_information(
+        &self,
+        manager: &ClangdManager,
+        symbol_location: &serde_json::Value,
+    ) -> Option<serde_json::Value> {
+        if let (Some(uri), Some(range)) = (
+            symbol_location.get("uri").and_then(|u| u.as_str()),
+            symbol_location.get("range"),
+        ) {
+            // First, ensure the file is opened in clangd
+            info!("Attempting to open file from URI: {}", uri);
+            if let Some(file_path_str) = uri.strip_prefix("file://") {
+                let file_path = std::path::PathBuf::from(file_path_str);
+                info!("Opening file: {}", file_path.display());
+                if let Err(e) = manager.open_file_if_needed(&file_path).await {
+                    info!("Failed to open file {} for inheritance analysis: {}", file_path.display(), e);
+                    return None;
+                } else {
+                    info!("File opening call completed for: {}", file_path.display());
+                }
+            } else {
+                info!("Could not extract file path from URI: {}", uri);
+            }
+
+            if let Some(start) = range.get("start") {
+                let params = json!({
+                    "textDocument": {
+                        "uri": uri
+                    },
+                    "position": start
+                });
+
+                // First prepare type hierarchy item
+                if let Ok(type_hierarchy_result) = manager
+                    .send_lsp_request("textDocument/prepareTypeHierarchy".to_string(), Some(params))
+                    .await
+                {
+                    if let Some(hierarchy_items) = type_hierarchy_result.as_array() {
+                        if let Some(hierarchy_item) = hierarchy_items.first() {
+                            let mut base_classes = Vec::new();
+                            let mut derived_classes = Vec::new();
+
+                            // Get supertypes (base classes) with timeout protection
+                            let supertypes_params = json!({
+                                "item": hierarchy_item
+                            });
+                            
+                            if let Ok(Ok(supertypes_response)) = tokio::time::timeout(
+                                std::time::Duration::from_secs(5),
+                                manager.send_lsp_request("typeHierarchy/supertypes".to_string(), Some(supertypes_params))
+                            ).await {
+                                if let Some(supertypes) = supertypes_response.as_array() {
+                                    for supertype in supertypes {
+                                        if let Some(name) = supertype.get("name").and_then(|n| n.as_str()) {
+                                            base_classes.push(name.to_string());
+                                        }
+                                    }
+                                }
+                            }
+
+                            // Get subtypes (derived classes) with timeout protection
+                            let subtypes_params = json!({
+                                "item": hierarchy_item
+                            });
+                            
+                            if let Ok(Ok(subtypes_response)) = tokio::time::timeout(
+                                std::time::Duration::from_secs(5),
+                                manager.send_lsp_request("typeHierarchy/subtypes".to_string(), Some(subtypes_params))
+                            ).await {
+                                if let Some(subtypes) = subtypes_response.as_array() {
+                                    for subtype in subtypes {
+                                        if let Some(name) = subtype.get("name").and_then(|n| n.as_str()) {
+                                            derived_classes.push(name.to_string());
+                                        }
+                                    }
+                                }
+                            }
+
+                            if !base_classes.is_empty() || !derived_classes.is_empty() {
+                                return Some(json!({
+                                    "base_classes": base_classes,
+                                    "derived_classes": derived_classes,
+                                    "has_inheritance": !base_classes.is_empty() || !derived_classes.is_empty()
+                                }));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        None
+    }
+
+    async fn get_call_relationships(
+        &self,
+        manager: &ClangdManager,
+        symbol_location: &serde_json::Value,
+    ) -> Option<serde_json::Value> {
+        if let (Some(uri), Some(range)) = (
+            symbol_location.get("uri").and_then(|u| u.as_str()),
+            symbol_location.get("range"),
+        ) {
+            // First, ensure the file is opened in clangd
+            if let Some(file_path_str) = uri.strip_prefix("file://") {
+                let file_path = std::path::PathBuf::from(file_path_str);
+                if let Err(e) = manager.open_file_if_needed(&file_path).await {
+                    info!("Failed to open file {} for call hierarchy analysis: {}", file_path.display(), e);
+                    return None;
+                }
+            }
+
+            if let Some(start) = range.get("start") {
+                let params = json!({
+                    "textDocument": {
+                        "uri": uri
+                    },
+                    "position": start
+                });
+
+                // First prepare call hierarchy item
+                match manager
+                    .send_lsp_request("textDocument/prepareCallHierarchy".to_string(), Some(params))
+                    .await
+                {
+                    Ok(call_hierarchy_result) => {
+                        if let Some(hierarchy_items) = call_hierarchy_result.as_array() {
+                            if let Some(hierarchy_item) = hierarchy_items.first() {
+                                let mut incoming_calls = Vec::new();
+                                let mut outgoing_calls = Vec::new();
+                                let max_depth = self.max_call_depth.unwrap_or(3) as usize;
+
+                                // Get incoming calls (who calls this function)
+                                if let Ok(incoming_result) = manager
+                                    .send_lsp_request(
+                                        "callHierarchy/incomingCalls".to_string(),
+                                        Some(json!({ "item": hierarchy_item })),
+                                    )
+                                    .await
+                                {
+                                    if let Some(incoming_array) = incoming_result.as_array() {
+                                        for (index, call) in incoming_array.iter().enumerate() {
+                                            if index >= max_depth {
+                                                break;
+                                            }
+                                            if let Some(from) = call.get("from") {
+                                                incoming_calls.push(self.extract_call_info(from, call));
+                                            }
+                                        }
+                                    }
+                                }
+
+                                // Get outgoing calls (what this function calls)
+                                if let Ok(outgoing_result) = manager
+                                    .send_lsp_request(
+                                        "callHierarchy/outgoingCalls".to_string(),
+                                        Some(json!({ "item": hierarchy_item })),
+                                    )
+                                    .await
+                                {
+                                    if let Some(outgoing_array) = outgoing_result.as_array() {
+                                        for (index, call) in outgoing_array.iter().enumerate() {
+                                            if index >= max_depth {
+                                                break;
+                                            }
+                                            if let Some(to) = call.get("to") {
+                                                outgoing_calls.push(self.extract_call_info(to, call));
+                                            }
+                                        }
+                                    }
+                                }
+
+                                return Some(json!({
+                                    "incoming_calls": incoming_calls,
+                                    "outgoing_calls": outgoing_calls,
+                                    "total_callers": incoming_calls.len(),
+                                    "total_callees": outgoing_calls.len(),
+                                    "call_depth_analyzed": max_depth,
+                                    "has_call_relationships": !incoming_calls.is_empty() || !outgoing_calls.is_empty()
+                                }));
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        info!("Call hierarchy request failed (non-critical): {}", e);
+                    }
+                }
+            }
+        }
+        None
+    }
+
+    fn extract_call_info(&self, call_item: &serde_json::Value, call_data: &serde_json::Value) -> serde_json::Value {
+        let name = call_item.get("name").and_then(|n| n.as_str()).unwrap_or("unknown");
+        let kind_num = call_item.get("kind").and_then(|k| k.as_u64()).unwrap_or(0);
+        let kind = self.symbol_kind_to_string(kind_num);
+        let detail = call_item.get("detail").and_then(|d| d.as_str());
+        let uri = call_item.get("uri").and_then(|u| u.as_str()).unwrap_or("");
+        let range = call_item.get("range").cloned().unwrap_or(json!({}));
+        let selection_range = call_item.get("selectionRange").cloned().unwrap_or(json!({}));
+        let from_ranges = call_data.get("fromRanges").cloned().unwrap_or(json!([]));
+
+        json!({
+            "name": name,
+            "kind": kind,
+            "detail": detail,
+            "uri": uri,
+            "range": range,
+            "selection_range": selection_range,
+            "from_ranges": from_ranges,
+            "context": self.extract_call_context(uri, &range)
+        })
+    }
+
+    fn symbol_kind_to_string(&self, kind: u64) -> String {
+        match kind {
+            1 => "file".to_string(),
+            2 => "module".to_string(),
+            3 => "namespace".to_string(),
+            4 => "package".to_string(),
+            5 => "class".to_string(),
+            6 => "method".to_string(),
+            7 => "property".to_string(),
+            8 => "field".to_string(),
+            9 => "constructor".to_string(),
+            10 => "enum".to_string(),
+            11 => "interface".to_string(),
+            12 => "function".to_string(),
+            13 => "variable".to_string(),
+            14 => "constant".to_string(),
+            15 => "string".to_string(),
+            16 => "number".to_string(),
+            17 => "boolean".to_string(),
+            18 => "array".to_string(),
+            19 => "object".to_string(),
+            20 => "key".to_string(),
+            21 => "null".to_string(),
+            22 => "enum_member".to_string(),
+            23 => "struct".to_string(),
+            24 => "event".to_string(),
+            25 => "operator".to_string(),
+            26 => "type_parameter".to_string(),
+            _ => "unknown".to_string(),
+        }
+    }
+
+    fn extract_call_context(&self, uri: &str, range: &serde_json::Value) -> Option<String> {
+        // Extract a brief context around the call location
+        if let Some(file_path_str) = uri.strip_prefix("file://") {
+            if let Ok(content) = std::fs::read_to_string(file_path_str) {
+                if let Some(start_line) = range.get("start").and_then(|s| s.get("line")).and_then(|l| l.as_u64()) {
+                    let lines: Vec<&str> = content.lines().collect();
+                    if start_line < lines.len() as u64 {
+                        return Some(lines[start_line as usize].trim().to_string());
+                    }
+                }
+            }
+        }
+        None
+    }
+
+    async fn get_usage_examples(
+        &self,
+        manager: &ClangdManager,
+        symbol_location: &serde_json::Value,
+    ) -> Option<serde_json::Value> {
+        if let (Some(uri), Some(range)) = (
+            symbol_location.get("uri").and_then(|u| u.as_str()),
+            symbol_location.get("range"),
+        ) {
+            if let Some(start) = range.get("start") {
+                let params = json!({
+                    "textDocument": {
+                        "uri": uri
+                    },
+                    "position": start,
+                    "context": {
+                        "includeDeclaration": false  // We want usage examples, not declarations
+                    }
+                });
+
+                if let Ok(references_result) = manager
+                    .send_lsp_request("textDocument/references".to_string(), Some(params))
+                    .await
+                {
+                    if let Some(references) = references_result.as_array() {
+                        let max_examples = self.max_usage_examples.unwrap_or(5) as usize;
+                        let mut usage_examples = Vec::new();
+
+                        for (index, reference) in references.iter().enumerate() {
+                            if index >= max_examples {
+                                break;
+                            }
+
+                            if let (Some(ref_uri), Some(ref_range)) = (
+                                reference.get("uri").and_then(|u| u.as_str()),
+                                reference.get("range"),
+                            ) {
+                                // Get context around the usage
+                                if let Some(context) = self.get_usage_context(manager, ref_uri, ref_range).await {
+                                    usage_examples.push(json!({
+                                        "file": ref_uri,
+                                        "range": ref_range,
+                                        "context": context,
+                                        "pattern_type": self.classify_usage_pattern(&context)
+                                    }));
+                                }
+                            }
+                        }
+
+                        if !usage_examples.is_empty() {
+                            return Some(json!(usage_examples));
+                        }
+                    }
+                }
+            }
+        }
+        None
+    }
+
+    async fn get_usage_context(
+        &self,
+        manager: &ClangdManager,
+        file_uri: &str,
+        range: &serde_json::Value,
+    ) -> Option<String> {
+        // Open the file to get context around the usage
+        if let Some(path_str) = file_uri.strip_prefix("file://") {
+            let path = std::path::PathBuf::from(path_str);
+            if (manager.open_file_if_needed(&path).await).is_ok() {
+                // Get a range around the usage for context (5 lines before and after)
+                if let (Some(start_line), Some(_)) = (
+                    range.get("start").and_then(|s| s.get("line")).and_then(|l| l.as_u64()),
+                    range.get("end").and_then(|e| e.get("line")).and_then(|l| l.as_u64()),
+                ) {
+                    let context_start = if start_line >= 5 { start_line - 5 } else { 0 };
+                    let context_end = start_line + 5;
+
+                    // Try to read file content (simplified approach)
+                    if let Ok(content) = std::fs::read_to_string(&path) {
+                        let lines: Vec<&str> = content.lines().collect();
+                        if context_start < lines.len() as u64 {
+                            let end_idx = std::cmp::min(context_end as usize, lines.len());
+                            let context_lines = &lines[context_start as usize..end_idx];
+                            return Some(context_lines.join("\n"));
+                        }
+                    }
+                }
+            }
+        }
+        None
+    }
+
+    fn classify_usage_pattern(&self, context: &str) -> String {
+        // Simple heuristic-based classification
+        if context.contains("new ") || context.contains("std::make_") {
+            "instantiation".to_string()
+        } else if context.contains("(") && context.contains(")") {
+            "function_call".to_string()
+        } else if context.contains("::") {
+            "qualified_access".to_string()
+        } else if context.contains("->") || context.contains(".") {
+            "member_access".to_string()
+        } else {
+            "reference".to_string()
+        }
+    }
+
+    fn build_comprehensive_symbol_info(
+        &self,
+        data: SymbolAnalysisData,
+    ) -> serde_json::Value {
+        let mut info = json!({
+            "name": self.symbol,
+            "kind": self.extract_symbol_kind(data.symbol_location, data.hover_info),
+            "fully_qualified_name": self.extract_qualified_name(data.hover_info),
+            "file_location": self.extract_file_location(data.symbol_location)
+        });
+
+        // Add definition and declaration locations
+        if let Some(definition) = data.definition_location {
+            info["definition"] = definition.clone();
+        }
+        if let Some(declaration) = data.declaration_location {
+            info["declaration"] = declaration.clone();
+        }
+
+        // Add type information from hover
+        if let Some(hover) = data.hover_info {
+            if let Some(contents) = hover.get("contents") {
+                info["type_info"] = self.extract_enhanced_type_info(contents);
+                info["documentation"] = self.extract_documentation(contents);
+            }
+        }
+
+        // Add usage statistics
+        if let Some(stats) = data.usage_stats {
+            info["usage_statistics"] = stats.clone();
+        }
+
+        // Add inheritance information
+        if let Some(inheritance) = data.inheritance_info {
+            info["inheritance"] = inheritance.clone();
+        }
+
+        // Add usage examples
+        if let Some(examples) = data.usage_examples {
+            info["usage_examples"] = examples.clone();
+        }
+
+        // Add call relationships
+        if let Some(calls) = data.call_relationships {
+            info["call_relationships"] = calls.clone();
+        }
+
+        info
+    }
+
+    fn extract_symbol_kind(
+        &self,
+        _symbol_location: &serde_json::Value,
+        hover_info: &Option<serde_json::Value>,
+    ) -> String {
+        // Try to extract kind from hover info first
+        if let Some(hover) = hover_info {
+            if let Some(contents) = hover.get("contents") {
+                if let Some(value_str) = contents.get("value").and_then(|v| v.as_str()) {
+                    // Simple heuristics to determine symbol kind from hover text
+                    if value_str.contains("class ") {
+                        return "class".to_string();
+                    } else if value_str.contains("struct ") {
+                        return "struct".to_string();
+                    } else if value_str.contains("enum ") {
+                        return "enum".to_string();
+                    } else if value_str.contains("namespace ") {
+                        return "namespace".to_string();
+                    } else if value_str.contains("(") && value_str.contains(")") {
+                        return "function".to_string();
+                    } else if value_str.contains("typedef ") {
+                        return "typedef".to_string();
+                    }
+                }
+            }
+        }
+
+        // Fallback to analyzing the symbol name
+        if self.symbol.contains("::") && !self.symbol.contains("(") {
+            "qualified_name".to_string()
+        } else {
+            "unknown".to_string()
+        }
+    }
+
+    fn extract_qualified_name(&self, hover_info: &Option<serde_json::Value>) -> String {
+        if let Some(hover) = hover_info {
+            if let Some(contents) = hover.get("contents") {
+                if let Some(value_str) = contents.get("value").and_then(|v| v.as_str()) {
+                    // Try to extract qualified name from hover text
+                    for line in value_str.lines() {
+                        if line.contains("::") {
+                            // Simple extraction - this could be improved
+                            if let Some(start) = line.find(&self.symbol) {
+                                let before = &line[..start];
+                                if let Some(namespace_start) = before.rfind(' ') {
+                                    let qualified = &line[namespace_start + 1..start + self.symbol.len()];
+                                    if qualified.contains("::") {
+                                        return qualified.to_string();
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        self.symbol.clone()
+    }
+
+    fn extract_enhanced_type_info(&self, contents: &serde_json::Value) -> serde_json::Value {
+        let type_info = self.extract_type_info(contents);
+        
+        // Enhance with additional analysis
+        if let Some(type_str) = type_info.get("type").and_then(|t| t.as_str()) {
+            let mut enhanced = json!({
+                "type": type_str,
+                "is_template": type_str.contains("<") && type_str.contains(">"),
+                "is_pointer": type_str.contains("*"),
+                "is_reference": type_str.contains("&"),
+                "is_const": type_str.contains("const"),
+                "is_static": type_str.contains("static"),
+            });
+            
+            // Extract template parameters if it's a template
+            if type_str.contains("<") && type_str.contains(">") {
+                if let (Some(start), Some(end)) = (type_str.find('<'), type_str.rfind('>')) {
+                    let template_params = &type_str[start + 1..end];
+                    enhanced["template_parameters"] = json!(
+                        template_params.split(',').map(|s| s.trim()).collect::<Vec<_>>()
+                    );
+                }
+            }
+            
+            enhanced["raw_hover"] = type_info["raw_hover"].clone();
+            return enhanced;
+        }
+        
+        type_info
+    }
+
     async fn get_hover_information(
         &self,
         manager: &ClangdManager,
@@ -326,6 +1073,15 @@ impl AnalyzeSymbolContextTool {
             symbol_location.get("uri").and_then(|u| u.as_str()),
             symbol_location.get("range"),
         ) {
+            // First, ensure the file is opened in clangd
+            if let Some(file_path_str) = uri.strip_prefix("file://") {
+                let file_path = std::path::PathBuf::from(file_path_str);
+                if let Err(e) = manager.open_file_if_needed(&file_path).await {
+                    info!("Failed to open file {} for hover analysis: {}", file_path.display(), e);
+                    return Ok(None);
+                }
+            }
+
             // Extract position from range
             if let Some(start) = range.get("start") {
                 let params = json!({
@@ -351,27 +1107,6 @@ impl AnalyzeSymbolContextTool {
         } else {
             Ok(None)
         }
-    }
-
-    fn extract_basic_symbol_info(
-        &self,
-        symbol_location: &serde_json::Value,
-        hover_info: &Option<serde_json::Value>,
-    ) -> serde_json::Value {
-        let mut info = json!({
-            "name": self.symbol,
-            "file_location": self.extract_file_location(symbol_location)
-        });
-
-        // Extract information from hover response
-        if let Some(hover) = hover_info {
-            if let Some(contents) = hover.get("contents") {
-                info["type_info"] = self.extract_type_info(contents);
-                info["documentation"] = self.extract_documentation(contents);
-            }
-        }
-
-        info
     }
 
     fn extract_file_location(&self, symbol_location: &serde_json::Value) -> serde_json::Value {

@@ -1,0 +1,1 @@
+{"jsonrpc":"2.0","id":"1","method":"tools/call","params":{"name":"analyze_symbol_context","arguments":{"symbol":"Math","include_usage_patterns":true,"max_usage_examples":3,"include_inheritance":false}}}

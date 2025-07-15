@@ -178,6 +178,38 @@ impl IndexingState {
     }
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CallRelationships {
+    pub incoming_calls: Vec<CallHierarchyCall>,
+    pub outgoing_calls: Vec<CallHierarchyCall>,
+    pub call_depth: u32,
+    pub total_callers: usize,
+    pub total_callees: usize,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CallHierarchyCall {
+    pub name: String,
+    pub kind: String,
+    pub detail: Option<String>,
+    pub uri: String,
+    pub range: CallRange,
+    pub selection_range: CallRange,
+    pub from_ranges: Vec<CallRange>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CallRange {
+    pub start: CallPosition,
+    pub end: CallPosition,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CallPosition {
+    pub line: u32,
+    pub character: u32,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -307,5 +339,21 @@ mod tests {
         assert_eq!(serialized.get("percentage").unwrap(), 50);
         assert_eq!(serialized.get("message").unwrap(), "Processing files");
         assert_eq!(serialized.get("estimated_completion_seconds").unwrap(), 30);
+    }
+
+    #[test]
+    fn test_call_relationships_serialization() {
+        let relationships = CallRelationships {
+            incoming_calls: vec![],
+            outgoing_calls: vec![],
+            call_depth: 2,
+            total_callers: 5,
+            total_callees: 3,
+        };
+
+        let serialized = serde_json::to_value(&relationships).unwrap();
+        assert_eq!(serialized.get("call_depth").unwrap(), 2);
+        assert_eq!(serialized.get("total_callers").unwrap(), 5);
+        assert_eq!(serialized.get("total_callees").unwrap(), 3);
     }
 }
