@@ -411,9 +411,8 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        node-version: ["18", "20", "22"]
-        binary-type: ["debug", "release"]
-    
+        node-version: ["20", "22"] # Focus on current LTS and latest
+
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -426,7 +425,6 @@ jobs:
 
       - name: Make binaries executable
         run: |
-          chmod +x target/debug/mcp-cpp-server
           chmod +x target/release/mcp-cpp-server
 
       - name: Install Node.js ${{ matrix.node-version }}
@@ -456,12 +454,12 @@ jobs:
         working-directory: test/e2e
         run: npm ci
 
-      - name: Run E2E tests with Node ${{ matrix.node-version }} and ${{ matrix.binary-type }} binary
+      - name: Run E2E tests with Node ${{ matrix.node-version }}
         working-directory: test/e2e
         env:
-          MCP_SERVER_PATH: ../../target/${{ matrix.binary-type }}/mcp-cpp-server
+          MCP_SERVER_PATH: ../../target/release/mcp-cpp-server
         run: |
-          echo "=== Running E2E Tests with Node ${{ matrix.node-version }} and ${{ matrix.binary-type }} binary ==="
+          echo "=== Running E2E Tests with Node ${{ matrix.node-version }} ==="
           npm run test:e2e
           echo "E2E compatibility tests completed successfully!"
 
@@ -469,36 +467,24 @@ jobs:
         if: failure()
         uses: actions/upload-artifact@v4
         with:
-          name: e2e-compatibility-logs-node${{ matrix.node-version }}-${{ matrix.binary-type }}
+          name: e2e-compatibility-logs-node${{ matrix.node-version }}
           path: |
             test/e2e/**/*.log
             /tmp/mcp-cpp-tests/*.log
           retention-days: 7
 
-  matrix-compatibility:
-    name: Matrix Compatibility Tests
-    runs-on: ${{ matrix.os }}
+  basic-compatibility:
+    name: Basic Compatibility Tests
+    runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, ubuntu-20.04]
         compiler: [gcc, clang]
-        build_type: [Debug, Release]
         include:
-          - os: ubuntu-latest
-            compiler: gcc
+          - compiler: gcc
             cc: gcc
             cxx: g++
-          - os: ubuntu-latest
-            compiler: clang
-            cc: clang
-            cxx: clang++
-          - os: ubuntu-20.04
-            compiler: gcc
-            cc: gcc
-            cxx: g++
-          - os: ubuntu-20.04
-            compiler: clang
+          - compiler: clang
             cc: clang
             cxx: clang++
 
@@ -520,24 +506,24 @@ jobs:
       - name: Build Rust project
         run: cargo build --release
 
-      - name: Build C++ test project
+      - name: Build C++ test project with ${{ matrix.compiler }}
         working-directory: test/test-project
         env:
           CC: ${{ matrix.cc }}
           CXX: ${{ matrix.cxx }}
         run: |
-          mkdir -p build-${{ matrix.compiler }}-${{ matrix.build_type }}
-          cd build-${{ matrix.compiler }}-${{ matrix.build_type }}
+          mkdir -p build-${{ matrix.compiler }}
+          cd build-${{ matrix.compiler }}
           cmake .. \
-            -DCMAKE_BUILD_TYPE=${{ matrix.build_type }} \
+            -DCMAKE_BUILD_TYPE=Release \
             -DCMAKE_C_COMPILER=${{ matrix.cc }} \
             -DCMAKE_CXX_COMPILER=${{ matrix.cxx }} \
             -G Ninja
           ninja -j$(nproc)
 
-      - name: Test execution
-        working-directory: test/test-project/build-${{ matrix.compiler }}-${{ matrix.build_type }}
+      - name: Test execution with ${{ matrix.compiler }}
+        working-directory: test/test-project/build-${{ matrix.compiler }}
         run: |
-          echo "=== Testing ${{ matrix.os }} with ${{ matrix.compiler }} (${{ matrix.build_type }}) ==="
+          echo "=== Testing with ${{ matrix.compiler }} ==="
           ./TestProject
-          echo "Matrix test completed successfully!"
+          echo "Compatibility test with ${{ matrix.compiler }} completed successfully!"

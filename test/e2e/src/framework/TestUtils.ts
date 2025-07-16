@@ -159,7 +159,14 @@ export class TestUtils {
         'debug',
         'mcp-cpp-server'
       ),
-      path.join(process.cwd(), '..', '..', 'target', 'release', 'mcp-cpp-server'),
+      path.join(
+        process.cwd(),
+        '..',
+        '..',
+        'target',
+        'release',
+        'mcp-cpp-server'
+      ),
       path.join(process.cwd(), '..', '..', 'target', 'debug', 'mcp-cpp-server'),
       // Try relative to the current working directory
       path.resolve('target', 'release', 'mcp-cpp-server'),
