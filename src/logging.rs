@@ -188,7 +188,7 @@ mod tests {
         let config = LogConfig::default();
         assert_eq!(config.level, "info");
         assert_eq!(config.file_path, None);
-        assert_eq!(config.json_format, false);
+        assert!(!config.json_format);
     }
 
     #[test]
@@ -204,7 +204,7 @@ mod tests {
         let config = LogConfig::from_env();
         assert_eq!(config.level, "info");
         assert_eq!(config.file_path, None);
-        assert_eq!(config.json_format, false);
+        assert!(!config.json_format);
 
         // Test with environment variables
         unsafe {

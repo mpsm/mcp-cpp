@@ -1,7 +1,7 @@
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 use std::collections::{HashMap, HashSet};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tokio::sync::Mutex;
 use tracing::{info, warn};
@@ -646,7 +646,7 @@ impl ClangdManager {
         Ok(())
     }
 
-    fn determine_project_root(build_directory: &PathBuf) -> Option<PathBuf> {
+    fn determine_project_root(build_directory: &Path) -> Option<PathBuf> {
         // Try to read the actual source directory from CMakeCache.txt
         let cache_file = build_directory.join("CMakeCache.txt");
 
