@@ -6,7 +6,7 @@ use serde_json::json;
 use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::Mutex;
-use tracing::{info, instrument};
+use tracing::{warn, info, instrument};
 
 use crate::cmake::CmakeProjectStatus;
 use crate::lsp::ClangdManager;
@@ -362,16 +362,18 @@ impl SearchSymbolsTool {
     ) -> Result<CallToolResult, CallToolError> {
         // Check current indexing state before waiting
         let initial_indexing_state = manager.get_indexing_state().await;
-        info!("Initial indexing state: {:?}", initial_indexing_state.status);
+        info!("🔍 SearchSymbolsTool::search_workspace() - Initial indexing state: {:?}, is_indexing: {}, message: {:?}", 
+              initial_indexing_state.status, initial_indexing_state.is_indexing(), initial_indexing_state.message);
         
         // Wait for indexing to complete if not already completed
         if initial_indexing_state.status != crate::lsp::types::IndexingStatus::Completed {
-            info!("Waiting for indexing completion before workspace symbol search (current status: {:?})", initial_indexing_state.status);
+            info!("⏳ SearchSymbolsTool::search_workspace() - Waiting for indexing completion before workspace symbol search (current status: {:?})", initial_indexing_state.status);
             if let Err(e) = manager
                 .wait_for_indexing_completion(std::time::Duration::from_secs(30))
                 .await
             {
                 let final_indexing_state = manager.get_indexing_state().await;
+                warn!("⏰ SearchSymbolsTool::search_workspace() - Indexing wait timed out: {}, final state: {:?}", e, final_indexing_state);
                 let content = json!({
                     "success": false,
                     "error": format!("Indexing timeout: {}", e),
@@ -389,6 +391,8 @@ impl SearchSymbolsTool {
                     serialize_result(&content),
                 )]));
             }
+        } else {
+            info!("✅ SearchSymbolsTool::search_workspace() - Indexing already completed, proceeding with symbol search");
         }
 
         // Send workspace symbol request with user's query
@@ -396,18 +400,27 @@ impl SearchSymbolsTool {
             "query": self.query
         });
 
+        info!("📡 SearchSymbolsTool::search_workspace() - Sending workspace/symbol LSP request with query: '{}'", self.query);
         match manager
             .send_lsp_request("workspace/symbol".to_string(), Some(params))
             .await
         {
             Ok(symbols) => {
+                info!("✅ SearchSymbolsTool::search_workspace() - LSP request succeeded, received response");
                 let symbol_array = symbols.as_array().unwrap_or(&vec![]).clone();
+                info!("📊 SearchSymbolsTool::search_workspace() - Raw symbols count: {}", symbol_array.len());
                 
                 // Apply external filtering and other filters
                 let include_external = self.include_external.unwrap_or(false);
+                info!("🔍 SearchSymbolsTool::search_workspace() - Applying filtering: include_external={}, kinds={:?}", include_external, self.kinds);
                 let filtered_symbols = SymbolFilter::filter_symbols(symbol_array, include_external, &self.kinds, manager).await;
+                info!("📊 SearchSymbolsTool::search_workspace() - Filtered symbols count: {}", filtered_symbols.len());
+                
                 let limited_symbols = SymbolUtilities::limit_results(filtered_symbols, self.max_results);
+                info!("📊 SearchSymbolsTool::search_workspace() - Limited symbols count: {}", limited_symbols.len());
+                
                 let converted_symbols = SymbolUtilities::convert_symbol_kinds(limited_symbols);
+                info!("📊 SearchSymbolsTool::search_workspace() - Final symbols count: {}", converted_symbols.len());
 
                 let final_indexing_state = manager.get_indexing_state().await;
                 let opened_files_count = manager.get_opened_files_count().await;
@@ -426,11 +439,13 @@ impl SearchSymbolsTool {
                     }
                 });
 
+                info!("🎉 SearchSymbolsTool::search_workspace() - Successfully prepared response");
                 Ok(CallToolResult::text_content(vec![TextContent::from(
                     serialize_result(&content),
                 )]))
             }
             Err(e) => {
+                warn!("❌ SearchSymbolsTool::search_workspace() - LSP request failed: {}", e);
                 let indexing_state = manager.get_indexing_state().await;
                 let content = json!({
                     "success": false,

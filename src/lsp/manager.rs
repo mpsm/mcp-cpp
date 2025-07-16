@@ -447,24 +447,32 @@ impl ClangdManager {
         let start = std::time::Instant::now();
 
         info!(
-            "Waiting for indexing completion with timeout: {:?}",
+            "⏳ ClangdManager::wait_for_indexing_completion() - Starting wait with timeout: {:?}",
             timeout
         );
 
+        let mut loop_count = 0;
         loop {
             let indexing_state = self.get_indexing_state().await;
+            loop_count += 1;
+
+            // Log every 10th iteration to avoid spam, but always log first few
+            if loop_count <= 5 || loop_count % 10 == 0 {
+                info!("🔄 ClangdManager::wait_for_indexing_completion() - Loop #{}, elapsed: {:?}, status: {:?}, is_indexing: {}, message: {:?}, percentage: {:?}", 
+                      loop_count, start.elapsed(), indexing_state.status, indexing_state.is_indexing(), indexing_state.message, indexing_state.percentage);
+            }
 
             // Only return when status is specifically Completed, not just when is_indexing() is false
             if indexing_state.status == crate::lsp::types::IndexingStatus::Completed {
-                info!("Indexing completed successfully");
+                info!("✅ ClangdManager::wait_for_indexing_completion() - Indexing completed successfully after {} loops and {:?}", loop_count, start.elapsed());
                 return Ok(());
             }
 
             if start.elapsed() > timeout {
-                warn!("Indexing timeout reached after {:?} - current status: {:?}", timeout, indexing_state.status);
+                warn!("⏰ ClangdManager::wait_for_indexing_completion() - Timeout reached after {:?} ({} loops) - current status: {:?}", timeout, loop_count, indexing_state.status);
                 return Err(LspError::ProcessError(format!(
-                    "Indexing did not complete within timeout of {:?}. Current status: {:?}",
-                    timeout, indexing_state.status
+                    "Indexing did not complete within timeout of {:?}. Current status: {:?} after {} loops",
+                    timeout, indexing_state.status, loop_count
                 )));
             }
 

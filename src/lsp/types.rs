@@ -129,25 +129,38 @@ impl Default for IndexingState {
 
 impl IndexingState {
     pub fn new() -> Self {
-        Self::default()
+        use tracing::info;
+        let state = Self::default();
+        info!("🔄 IndexingState::new() - Created new indexing state: {:?}", state.status);
+        state
     }
 
     pub fn start_indexing(&mut self, title: Option<String>) {
+        use tracing::info;
+        let old_status = self.status.clone();
         self.status = IndexingStatus::InProgress;
         self.files_processed = 0;
         self.total_files = None;
         self.percentage = None;
-        self.message = title;
+        self.message = title.clone();
         self.start_time = Some(std::time::Instant::now());
         self.estimated_completion_seconds = None;
+        info!("🚀 IndexingState::start_indexing() - Status transition: {:?} → {:?}, title: {:?}", 
+              old_status, self.status, title);
     }
 
     pub fn update_progress(&mut self, message: Option<String>, percentage: Option<u8>) {
+        use tracing::info;
+        
         if self.status != IndexingStatus::InProgress {
+            info!("⚠️  IndexingState::update_progress() - Ignored because status is {:?}, not InProgress", self.status);
             return;
         }
 
-        self.message = message;
+        let old_message = self.message.clone();
+        let old_percentage = self.percentage;
+        
+        self.message = message.clone();
         self.percentage = percentage;
 
         // Calculate time estimate based on progress
@@ -164,13 +177,23 @@ impl IndexingState {
         if self.estimated_completion_seconds.is_none() && self.total_files.is_none_or(|t| t <= 1) {
             self.estimated_completion_seconds = Some(1);
         }
+        
+        info!("📊 IndexingState::update_progress() - Progress update: message: {:?} → {:?}, percentage: {:?} → {:?}, estimated_completion: {:?}s", 
+              old_message, self.message, old_percentage, self.percentage, self.estimated_completion_seconds);
     }
 
     pub fn complete_indexing(&mut self) {
+        use tracing::info;
+        let old_status = self.status.clone();
+        let old_percentage = self.percentage;
+        
         self.status = IndexingStatus::Completed;
         self.percentage = Some(100);
         self.estimated_completion_seconds = Some(0);
         self.message = None; // Clear message when indexing is completed
+        
+        info!("✅ IndexingState::complete_indexing() - Status transition: {:?} → {:?}, percentage: {:?} → {:?}", 
+              old_status, self.status, old_percentage, self.percentage);
     }
 
     pub fn is_indexing(&self) -> bool {

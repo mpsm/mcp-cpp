@@ -6,7 +6,7 @@ use serde_json::json;
 use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::Mutex;
-use tracing::{info, instrument};
+use tracing::{warn, info, instrument};
 
 use crate::cmake::CmakeProjectStatus;
 use crate::lsp::ClangdManager;
@@ -228,8 +228,8 @@ impl AnalyzeSymbolContextTool {
         &self,
         clangd_manager: &Arc<Mutex<ClangdManager>>,
     ) -> Result<CallToolResult, CallToolError> {
-        info!("Analyzing symbol context: symbol='{}', location={:?}", 
-              self.symbol, self.location);
+        info!("🔍 AnalyzeSymbolContextTool::call_tool() - Starting analysis: symbol='{}', location={:?}, include_usage_patterns={}, include_inheritance={}, include_call_hierarchy={}", 
+              self.symbol, self.location, self.include_usage_patterns.unwrap_or(false), self.include_inheritance.unwrap_or(false), self.include_call_hierarchy.unwrap_or(false));
 
         // Handle automatic clangd setup if needed
         let build_path = match Self::resolve_build_directory() {
@@ -306,15 +306,21 @@ impl AnalyzeSymbolContextTool {
             .map(|p| p.display().to_string())
             .unwrap_or_else(|| "none".to_string());
 
+        info!("🔧 AnalyzeSymbolContextTool::call_tool() - Using build directory: {}", build_directory);
+
         // Wait for indexing completion to ensure accurate results
         let initial_indexing_state = manager_guard.get_indexing_state().await;
+        info!("🔍 AnalyzeSymbolContextTool::call_tool() - Initial indexing state: {:?}, is_indexing: {}, message: {:?}", 
+              initial_indexing_state.status, initial_indexing_state.is_indexing(), initial_indexing_state.message);
+        
         if initial_indexing_state.status != crate::lsp::types::IndexingStatus::Completed {
-            info!("Waiting for indexing completion before symbol analysis");
+            info!("⏳ AnalyzeSymbolContextTool::call_tool() - Waiting for indexing completion before symbol analysis");
             if let Err(e) = manager_guard
                 .wait_for_indexing_completion(std::time::Duration::from_secs(30))
                 .await
             {
                 let final_indexing_state = manager_guard.get_indexing_state().await;
+                warn!("⏰ AnalyzeSymbolContextTool::call_tool() - Indexing wait timed out: {}, final state: {:?}", e, final_indexing_state);
                 let content = json!({
                     "success": false,
                     "error": format!("Indexing timeout: {}", e),
@@ -327,12 +333,19 @@ impl AnalyzeSymbolContextTool {
                     serialize_result(&content),
                 )]));
             }
+        } else {
+            info!("✅ AnalyzeSymbolContextTool::call_tool() - Indexing already completed, proceeding with analysis");
         }
 
         // Step 1: Find the symbol using workspace search
+        info!("🔍 AnalyzeSymbolContextTool::call_tool() - Step 1: Finding symbol location for '{}'", self.symbol);
         let symbol_location = match self.find_symbol_location(&manager_guard).await {
-            Ok(Some(location)) => location,
+            Ok(Some(location)) => {
+                info!("✅ AnalyzeSymbolContextTool::call_tool() - Step 1: Found symbol location: {:?}", location);
+                location
+            },
             Ok(None) => {
+                warn!("❌ AnalyzeSymbolContextTool::call_tool() - Step 1: Symbol '{}' not found in workspace", self.symbol);
                 let indexing_state = manager_guard.get_indexing_state().await;
                 let content = json!({
                     "success": false,
@@ -348,6 +361,7 @@ impl AnalyzeSymbolContextTool {
                 )]));
             }
             Err(e) => {
+                warn!("❌ AnalyzeSymbolContextTool::call_tool() - Step 1: Symbol search failed: {}", e);
                 let indexing_state = manager_guard.get_indexing_state().await;
                 let content = json!({
                     "success": false,
@@ -363,36 +377,56 @@ impl AnalyzeSymbolContextTool {
         };
 
         // Step 2: Get detailed information via hover
+        info!("🔍 AnalyzeSymbolContextTool::call_tool() - Step 2: Getting hover information");
         let hover_info = self.get_hover_information(&manager_guard, &symbol_location).await?;
+        info!("✅ AnalyzeSymbolContextTool::call_tool() - Step 2: Got hover information");
 
         // Step 3: Get definition and declaration locations
+        info!("🔍 AnalyzeSymbolContextTool::call_tool() - Step 3: Getting symbol locations (definition/declaration)");
         let (definition_location, declaration_location) = self.get_symbol_locations(&manager_guard, &symbol_location).await;
+        info!("✅ AnalyzeSymbolContextTool::call_tool() - Step 3: Got symbol locations");
 
         // Step 4: Get reference count and usage statistics
         let usage_stats = if self.include_usage_patterns.unwrap_or(false) {
-            self.get_usage_statistics(&manager_guard, &symbol_location).await
+            info!("🔍 AnalyzeSymbolContextTool::call_tool() - Step 4: Getting usage statistics");
+            let result = self.get_usage_statistics(&manager_guard, &symbol_location).await;
+            info!("✅ AnalyzeSymbolContextTool::call_tool() - Step 4: Got usage statistics");
+            result
         } else {
+            info!("⏭️  AnalyzeSymbolContextTool::call_tool() - Step 4: Skipping usage statistics");
             None
         };
 
         // Step 5: Get inheritance information if requested
         let inheritance_info = if self.include_inheritance.unwrap_or(false) {
-            self.get_inheritance_information(&manager_guard, &symbol_location).await
+            info!("🔍 AnalyzeSymbolContextTool::call_tool() - Step 5: Getting inheritance information");
+            let result = self.get_inheritance_information(&manager_guard, &symbol_location).await;
+            info!("✅ AnalyzeSymbolContextTool::call_tool() - Step 5: Got inheritance information");
+            result
         } else {
+            info!("⏭️  AnalyzeSymbolContextTool::call_tool() - Step 5: Skipping inheritance information");
             None
         };
 
         // Step 6: Get usage examples if requested
         let usage_examples = if self.include_usage_patterns.unwrap_or(false) {
-            self.get_usage_examples(&manager_guard, &symbol_location).await
+            info!("🔍 AnalyzeSymbolContextTool::call_tool() - Step 6: Getting usage examples");
+            let result = self.get_usage_examples(&manager_guard, &symbol_location).await;
+            info!("✅ AnalyzeSymbolContextTool::call_tool() - Step 6: Got usage examples");
+            result
         } else {
+            info!("⏭️  AnalyzeSymbolContextTool::call_tool() - Step 6: Skipping usage examples");
             None
         };
 
         // Step 7: Get call relationships if requested
         let call_relationships = if self.include_call_hierarchy.unwrap_or(false) {
-            self.get_call_relationships(&manager_guard, &symbol_location).await
+            info!("🔍 AnalyzeSymbolContextTool::call_tool() - Step 7: Getting call relationships");
+            let result = self.get_call_relationships(&manager_guard, &symbol_location).await;
+            info!("✅ AnalyzeSymbolContextTool::call_tool() - Step 7: Got call relationships");
+            result
         } else {
+            info!("⏭️  AnalyzeSymbolContextTool::call_tool() - Step 7: Skipping call relationships");
             None
         };
 
@@ -447,8 +481,11 @@ impl AnalyzeSymbolContextTool {
         &self,
         manager: &ClangdManager,
     ) -> Result<Option<serde_json::Value>, String> {
+        info!("🔍 AnalyzeSymbolContextTool::find_symbol_location() - Looking for symbol: '{}'", self.symbol);
+        
         // If location is provided, use it directly for hover
         if let Some(location) = &self.location {
+            info!("✅ AnalyzeSymbolContextTool::find_symbol_location() - Using provided location: {:?}", location);
             return Ok(Some(json!({
                 "uri": location.file_uri,
                 "range": {
@@ -469,12 +506,15 @@ impl AnalyzeSymbolContextTool {
             "query": self.symbol
         });
 
+        info!("📡 AnalyzeSymbolContextTool::find_symbol_location() - Sending workspace/symbol LSP request");
         match manager
             .send_lsp_request("workspace/symbol".to_string(), Some(params))
             .await
         {
             Ok(symbols) => {
+                info!("✅ AnalyzeSymbolContextTool::find_symbol_location() - Got workspace/symbol response");
                 if let Some(symbol_array) = symbols.as_array() {
+                    info!("📊 AnalyzeSymbolContextTool::find_symbol_location() - Found {} symbols", symbol_array.len());
                     // Find exact match or best match using improved logic
                     let best_match = symbol_array
                         .iter()

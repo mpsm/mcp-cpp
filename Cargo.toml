@@ -5,6 +5,7 @@ edition = "2024"
 
 [dependencies]
 async-trait = "0.1.88"
+chrono = { version = "0.4", features = ["serde"] }
 clap = { version = "4.5.27", features = ["derive"] }
 rust-mcp-sdk = { git = "https://github.com/rust-mcp-stack/rust-mcp-sdk", version = "0.5.0", features = [
     "macros",

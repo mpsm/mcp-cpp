@@ -3,6 +3,7 @@ use std::collections::HashMap;
 use std::process::Stdio;
 use std::sync::Arc;
 use std::time::Instant;
+use tokio::fs::OpenOptions;
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{Child, Command};
 use tokio::sync::Mutex;
@@ -120,6 +121,7 @@ pub struct LspClient {
     pending_requests: Arc<Mutex<HashMap<String, tokio::sync::oneshot::Sender<JsonRpcResponse>>>>,
     stdin: Arc<Mutex<tokio::process::ChildStdin>>,
     reader_task: Option<JoinHandle<()>>,
+    stderr_task: Option<JoinHandle<()>>,
     shutdown_signal: Arc<Mutex<Option<tokio::sync::oneshot::Sender<()>>>>,
 }
 
@@ -159,6 +161,11 @@ impl LspClient {
             .stdout
             .take()
             .ok_or_else(|| LspError::ProcessError("Failed to get stdout".to_string()))?;
+
+        let stderr = process
+            .stderr
+            .take()
+            .ok_or_else(|| LspError::ProcessError("Failed to get stderr".to_string()))?;
 
         let pending_requests: Arc<
             Mutex<HashMap<String, tokio::sync::oneshot::Sender<JsonRpcResponse>>>,
@@ -255,11 +262,91 @@ impl LspClient {
             info!("LSP reader task terminated");
         });
 
+        // Start stderr logging task to capture clangd logs
+        let stderr_task = tokio::spawn(async move {
+            let mut stderr_reader = BufReader::new(stderr);
+            
+            // Create or open the clangd log file in the current directory
+            let log_file_path = "mcp-cpp-clangd.log";
+            let mut log_file = match OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(log_file_path)
+                .await
+            {
+                Ok(file) => {
+                    info!("Clangd logs will be written to: {}", log_file_path);
+                    file
+                }
+                Err(e) => {
+                    warn!("Failed to open clangd log file {}: {}", log_file_path, e);
+                    return;
+                }
+            };
+
+            // Add a timestamp header to the log file
+            let timestamp = chrono::Utc::now().format("%Y-%m-%d %H:%M:%S UTC");
+            if let Err(e) = log_file.write_all(format!("\n=== CLANGD SESSION STARTED: {} ===\n", timestamp).as_bytes()).await {
+                warn!("Failed to write header to clangd log file: {}", e);
+            }
+
+            let mut line = String::new();
+            loop {
+                line.clear();
+                match stderr_reader.read_line(&mut line).await {
+                    Ok(0) => {
+                        info!("Clangd stderr stream ended");
+                        break;
+                    }
+                    Ok(_) => {
+                        // Write the line to the log file with timestamp
+                        let timestamp = chrono::Utc::now().format("%Y-%m-%d %H:%M:%S.%3f");
+                        let log_entry = format!("[{}] {}", timestamp, line);
+                        
+                        if let Err(e) = log_file.write_all(log_entry.as_bytes()).await {
+                            warn!("Failed to write to clangd log file: {}", e);
+                        } else {
+                            // Flush immediately for real-time logging
+                            let _ = log_file.flush().await;
+                        }
+                        
+                        // Also log important messages to our tracing system
+                        let line_trimmed = line.trim();
+                        if !line_trimmed.is_empty() {
+                            if line_trimmed.contains("error") || line_trimmed.contains("Error") || 
+                               line_trimmed.contains("failed") || line_trimmed.contains("Failed") {
+                                warn!("clangd stderr: {}", line_trimmed);
+                            } else if line_trimmed.contains("Indexed") || 
+                                     line_trimmed.contains("backgroundIndexProgress") ||
+                                     line_trimmed.contains("compilation database") {
+                                info!("clangd stderr: {}", line_trimmed);
+                            } else {
+                                debug!("clangd stderr: {}", line_trimmed);
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        warn!("Error reading clangd stderr: {}", e);
+                        break;
+                    }
+                }
+            }
+            
+            // Add session end marker
+            let timestamp = chrono::Utc::now().format("%Y-%m-%d %H:%M:%S UTC");
+            if let Err(e) = log_file.write_all(format!("=== CLANGD SESSION ENDED: {} ===\n\n", timestamp).as_bytes()).await {
+                warn!("Failed to write footer to clangd log file: {}", e);
+            }
+            
+            info!("Clangd stderr logging task terminated");
+        });
+
         let client = Self {
             process,
             pending_requests,
             stdin: stdin_clone.clone(),
             reader_task: Some(reader_task),
+            stderr_task: Some(stderr_task),
             shutdown_signal,
         };
 
@@ -399,6 +486,23 @@ impl LspClient {
             }
         }
 
+        // Step 3a: Wait for stderr task to finish (with timeout)
+        if let Some(stderr_task) = self.stderr_task.take() {
+            match tokio::time::timeout(std::time::Duration::from_secs(3), stderr_task).await {
+                Ok(Ok(())) => {
+                    info!("Stderr logging task terminated cleanly");
+                }
+                Ok(Err(e)) => {
+                    shutdown_errors.push("Stderr task failed during shutdown");
+                    warn!("Stderr task failed: {}", e);
+                }
+                Err(_) => {
+                    shutdown_errors.push("Timeout waiting for stderr task");
+                    warn!("Stderr task did not terminate within timeout");
+                }
+            }
+        }
+
         // Step 4: Force kill the process if still running
         match self.process.try_wait() {
             Ok(Some(_)) => {
@@ -480,13 +584,18 @@ impl LspClient {
                 }
                 "$/progress" => {
                     // Progress updates
+                    info!("🔔 LspClient::handle_notification() - Received $/progress notification");
                     if let Some(params) = &response.params {
+                        info!("🔍 LspClient::handle_notification() - Progress params: {:?}", params);
                         if let (Some(token), Some(value)) =
                             (params.get("token"), params.get("value"))
                         {
                             if let Some(token_str) = token.as_str() {
+                                info!("🏷️  LspClient::handle_notification() - Progress token: {:?}", token_str);
                                 if token_str == "backgroundIndexProgress" {
+                                    info!("🎯 LspClient::handle_notification() - Matched backgroundIndexProgress token");
                                     if let Some(kind) = value.get("kind").and_then(|k| k.as_str()) {
+                                        info!("📝 LspClient::handle_notification() - Progress kind: {:?}", kind);
                                         match kind {
                                             "begin" => {
                                                 let title = value
@@ -495,7 +604,7 @@ impl LspClient {
                                                     .map(|s| s.to_string());
 
                                                 info!(
-                                                    "🔍 Indexing started: {}",
+                                                    "🔍 LspClient::handle_notification() - Indexing started: {}",
                                                     title
                                                         .as_deref()
                                                         .unwrap_or("Background indexing")
@@ -503,6 +612,7 @@ impl LspClient {
 
                                                 // Update indexing state
                                                 let mut state = indexing_state.lock().await;
+                                                info!("🔄 LspClient::handle_notification() - Acquired indexing state lock, calling start_indexing()");
                                                 state.start_indexing(title);
                                             }
                                             "report" => {
@@ -516,30 +626,42 @@ impl LspClient {
                                                     .map(|p| p as u8);
 
                                                 info!(
-                                                    "📊 Indexing progress: {} ({}%)",
+                                                    "📊 LspClient::handle_notification() - Indexing progress: {} ({}%)",
                                                     message.as_deref().unwrap_or("Processing"),
                                                     percentage.unwrap_or(0)
                                                 );
 
                                                 // Update indexing state
                                                 let mut state = indexing_state.lock().await;
+                                                info!("🔄 LspClient::handle_notification() - Acquired indexing state lock, calling update_progress()");
                                                 state.update_progress(message, percentage);
                                             }
                                             "end" => {
-                                                info!("✅ Indexing completed!");
+                                                info!("✅ LspClient::handle_notification() - Indexing completed!");
 
                                                 // Update indexing state
                                                 let mut state = indexing_state.lock().await;
+                                                info!("🔄 LspClient::handle_notification() - Acquired indexing state lock, calling complete_indexing()");
                                                 state.complete_indexing();
                                             }
                                             _ => {
-                                                debug!("Unknown progress kind: {}", kind);
+                                                info!("❓ LspClient::handle_notification() - Unknown progress kind: {}", kind);
                                             }
                                         }
+                                    } else {
+                                        info!("⚠️  LspClient::handle_notification() - No 'kind' field in progress value");
                                     }
+                                } else {
+                                    info!("🚫 LspClient::handle_notification() - Token '{}' does not match 'backgroundIndexProgress'", token_str);
                                 }
+                            } else {
+                                info!("⚠️  LspClient::handle_notification() - Token is not a string");
                             }
+                        } else {
+                            info!("⚠️  LspClient::handle_notification() - Missing token or value in progress params");
                         }
+                    } else {
+                        info!("⚠️  LspClient::handle_notification() - No params in $/progress notification");
                     }
                 }
                 "textDocument/clangd.fileStatus" => {
@@ -605,6 +727,11 @@ impl Drop for LspClient {
         // Abort the reader task if it's still running
         if let Some(reader_task) = self.reader_task.take() {
             reader_task.abort();
+        }
+
+        // Abort the stderr task if it's still running
+        if let Some(stderr_task) = self.stderr_task.take() {
+            stderr_task.abort();
         }
 
         // Force kill the process - this is synchronous for Drop
