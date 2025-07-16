@@ -27,6 +27,13 @@ use super::symbol_filtering::{SymbolFilter, SymbolUtilities};
                    • Prefix matching: 'get_' → finds all getter methods
                    • Partial matching: 'Math' → MathUtils, BasicMath, etc.
 
+                   ⚠️ WILDCARD LIMITATIONS:
+                   • Traditional wildcards NOT supported: 'Math*' does NOT find symbols starting with 'Math'
+                   • Bare '*' returns empty results (clangd evaluates as false)
+                   • Trailing '*' is ignored: 'get*' searches for 'get' only
+                   • Use fuzzy search instead: 'Math' finds Math, MathUtils, MathClass, etc.
+                   • For broader searches use: namespace patterns ('std::', 'MyNS::') or short prefixes
+
                    📋 SYMBOL KIND TAXONOMY:
                    Comprehensive support for all C++ constructs: classes • structs • enums • functions
                    • methods • variables • fields • namespaces • typedefs • macros • constructors
@@ -78,6 +85,11 @@ pub struct SearchSymbolsTool {
     /// • Global scope: "::main", "::global_var" → global symbols only
     /// • Prefix matching: "get_" → finds all getters, "set_" → all setters
     /// • Class methods: "MyClass::" → all class members
+    /// 
+    /// WILDCARD LIMITATIONS:
+    /// • Traditional wildcards NOT supported: "Math*" does NOT work as expected
+    /// • Bare "*" returns empty results - use fuzzy search instead
+    /// • Use "Math" to find Math, MathUtils, MathClass, etc.
     pub query: String,
     
     /// Optional symbol kinds to filter results by type. DEFAULT: all kinds.

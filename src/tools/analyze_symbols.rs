@@ -339,7 +339,12 @@ impl AnalyzeSymbolContextTool {
 
         // Step 1: Find the symbol using workspace search
         info!("🔍 AnalyzeSymbolContextTool::call_tool() - Step 1: Finding symbol location for '{}'", self.symbol);
-        let symbol_location = match self.find_symbol_location(&manager_guard).await {
+        let indexing_completion_time = if initial_indexing_state.status == crate::lsp::types::IndexingStatus::Completed {
+            Some(std::time::Instant::now())
+        } else {
+            None
+        };
+        let symbol_location = match self.find_symbol_location(&manager_guard, indexing_completion_time).await {
             Ok(Some(location)) => {
                 info!("✅ AnalyzeSymbolContextTool::call_tool() - Step 1: Found symbol location: {:?}", location);
                 location
@@ -352,7 +357,7 @@ impl AnalyzeSymbolContextTool {
                     "error": "symbol_not_found",
                     "message": format!("Symbol '{}' not found in workspace. Check spelling or ensure symbol is indexed.", self.symbol),
                     "symbol": self.symbol,
-                    "suggestions": self.get_similar_symbols(&manager_guard).await,
+                    "suggestions": self.get_similar_symbols(&manager_guard, indexing_completion_time).await,
                     "indexing_status": SymbolUtilities::format_indexing_status(&indexing_state)
                 });
 
@@ -480,6 +485,7 @@ impl AnalyzeSymbolContextTool {
     async fn find_symbol_location(
         &self,
         manager: &ClangdManager,
+        indexing_completion_time: Option<std::time::Instant>,
     ) -> Result<Option<serde_json::Value>, String> {
         info!("🔍 AnalyzeSymbolContextTool::find_symbol_location() - Looking for symbol: '{}'", self.symbol);
         
@@ -507,65 +513,104 @@ impl AnalyzeSymbolContextTool {
         });
 
         info!("📡 AnalyzeSymbolContextTool::find_symbol_location() - Sending workspace/symbol LSP request");
-        match manager
-            .send_lsp_request("workspace/symbol".to_string(), Some(params))
-            .await
-        {
-            Ok(symbols) => {
-                info!("✅ AnalyzeSymbolContextTool::find_symbol_location() - Got workspace/symbol response");
-                if let Some(symbol_array) = symbols.as_array() {
-                    info!("📊 AnalyzeSymbolContextTool::find_symbol_location() - Found {} symbols", symbol_array.len());
-                    // Find exact match or best match using improved logic
-                    let best_match = symbol_array
-                        .iter()
-                        .find(|s| {
-                            if let Some(name) = s.get("name").and_then(|n| n.as_str()) {
-                                // Exact name match
-                                if name == self.symbol {
-                                    return true;
-                                }
-                                
-                                // Check for qualified name match
-                                if let Some(detail) = s.get("detail").and_then(|d| d.as_str()) {
-                                    if detail.contains(&self.symbol) {
-                                        return true;
+        
+        // Check if we should apply backoff strategy (within 5s of indexing completion)
+        let should_apply_backoff = if let Some(completion_time) = indexing_completion_time {
+            let elapsed = completion_time.elapsed();
+            let within_window = elapsed < std::time::Duration::from_secs(5);
+            info!("🕐 AnalyzeSymbolContextTool::find_symbol_location() - Indexing completed {}ms ago, applying backoff: {}", 
+                  elapsed.as_millis(), within_window);
+            within_window
+        } else {
+            info!("🕐 AnalyzeSymbolContextTool::find_symbol_location() - No recent indexing completion, skipping backoff");
+            false
+        };
+        
+        // Implement backoff strategy for empty results only if recently indexed
+        let max_retries = if should_apply_backoff { 5 } else { 1 };
+        let mut attempt = 0;
+        
+        loop {
+            attempt += 1;
+            
+            match manager
+                .send_lsp_request("workspace/symbol".to_string(), Some(params.clone()))
+                .await
+            {
+                Ok(symbols) => {
+                    info!("✅ AnalyzeSymbolContextTool::find_symbol_location() - Got workspace/symbol response (attempt {})", attempt);
+                    if let Some(symbol_array) = symbols.as_array() {
+                        info!("📊 AnalyzeSymbolContextTool::find_symbol_location() - Found {} symbols (attempt {})", symbol_array.len(), attempt);
+                        
+                        // If we have symbols, proceed with matching
+                        if !symbol_array.is_empty() {
+                            // Find exact match or best match using improved logic
+                            let best_match = symbol_array
+                                .iter()
+                                .find(|s| {
+                                    if let Some(name) = s.get("name").and_then(|n| n.as_str()) {
+                                        // Exact name match
+                                        if name == self.symbol {
+                                            return true;
+                                        }
+                                        
+                                        // Check for qualified name match
+                                        if let Some(detail) = s.get("detail").and_then(|d| d.as_str()) {
+                                            if detail.contains(&self.symbol) {
+                                                return true;
+                                            }
+                                        }
+                                        
+                                        // Check container scope for qualified matches
+                                        if let Some(container) = s.get("containerName").and_then(|c| c.as_str()) {
+                                            let qualified = format!("{}::{}", container, name);
+                                            if qualified == self.symbol {
+                                                return true;
+                                            }
+                                        }
+                                        
+                                        false
+                                    } else {
+                                        false
                                     }
-                                }
-                                
-                                // Check container scope for qualified matches
-                                if let Some(container) = s.get("containerName").and_then(|c| c.as_str()) {
-                                    let qualified = format!("{}::{}", container, name);
-                                    if qualified == self.symbol {
-                                        return true;
-                                    }
-                                }
-                                
-                                false
-                            } else {
-                                false
-                            }
-                        })
-                        .or_else(|| {
-                            // Fallback: partial match
-                            symbol_array.iter().find(|s| {
-                                if let Some(name) = s.get("name").and_then(|n| n.as_str()) {
-                                    name.contains(&self.symbol) || self.symbol.contains(name)
-                                } else {
-                                    false
-                                }
-                            })
-                        })
-                        .or_else(|| symbol_array.first());
+                                })
+                                .or_else(|| {
+                                    // Fallback: partial match
+                                    symbol_array.iter().find(|s| {
+                                        if let Some(name) = s.get("name").and_then(|n| n.as_str()) {
+                                            name.contains(&self.symbol) || self.symbol.contains(name)
+                                        } else {
+                                            false
+                                        }
+                                    })
+                                })
+                                .or_else(|| symbol_array.first());
 
-                    if let Some(symbol) = best_match {
-                        if let Some(location) = symbol.get("location") {
-                            return Ok(Some(location.clone()));
+                            if let Some(symbol) = best_match {
+                                if let Some(location) = symbol.get("location") {
+                                    return Ok(Some(location.clone()));
+                                }
+                            }
                         }
+                        
+                        // If we got empty results and haven't exhausted retries, wait and try again
+                        if symbol_array.is_empty() && attempt < max_retries && should_apply_backoff {
+                            info!("⏳ AnalyzeSymbolContextTool::find_symbol_location() - Empty results on attempt {} ({}ms after indexing), retrying in 1s...", 
+                                  attempt, indexing_completion_time.unwrap().elapsed().as_millis());
+                            tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+                            continue;
+                        }
+                        
+                        // Either we have symbols but no matches, or we've exhausted retries
+                        return Ok(None);
                     }
+                    return Ok(None);
                 }
-                Ok(None)
+                Err(e) => {
+                    // On error, don't retry - return immediately
+                    return Err(format!("LSP workspace/symbol request failed: {}", e));
+                }
             }
-            Err(e) => Err(format!("LSP workspace/symbol request failed: {}", e)),
         }
     }
 
@@ -1172,28 +1217,18 @@ impl AnalyzeSymbolContextTool {
     fn extract_enhanced_type_info(&self, contents: &serde_json::Value) -> serde_json::Value {
         let type_info = self.extract_type_info(contents);
         
-        // Enhance with additional analysis
+        // Just return the raw information from clangd - no error-prone parsing
         if let Some(type_str) = type_info.get("type").and_then(|t| t.as_str()) {
-            let mut enhanced = json!({
+            let enhanced = json!({
                 "type": type_str,
                 "is_template": type_str.contains("<") && type_str.contains(">"),
                 "is_pointer": type_str.contains("*"),
                 "is_reference": type_str.contains("&"),
                 "is_const": type_str.contains("const"),
                 "is_static": type_str.contains("static"),
+                "raw_hover": type_info["raw_hover"].clone()
             });
             
-            // Extract template parameters if it's a template
-            if type_str.contains("<") && type_str.contains(">") {
-                if let (Some(start), Some(end)) = (type_str.find('<'), type_str.rfind('>')) {
-                    let template_params = &type_str[start + 1..end];
-                    enhanced["template_parameters"] = json!(
-                        template_params.split(',').map(|s| s.trim()).collect::<Vec<_>>()
-                    );
-                }
-            }
-            
-            enhanced["raw_hover"] = type_info["raw_hover"].clone();
             return enhanced;
         }
         
@@ -1432,7 +1467,7 @@ impl AnalyzeSymbolContextTool {
         members
     }
 
-    async fn get_similar_symbols(&self, manager: &ClangdManager) -> Vec<String> {
+    async fn get_similar_symbols(&self, manager: &ClangdManager, _indexing_completion_time: Option<std::time::Instant>) -> Vec<String> {
         // Try to find symbols with similar names
         let query = if self.symbol.len() > 3 {
             self.symbol[..3].to_string()
