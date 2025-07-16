@@ -65,19 +65,49 @@ impl ListBuildDirsTool {
 
         match CmakeProjectStatus::analyze_current_directory() {
             Ok(status) => {
+                let build_dirs = status.build_directories.iter().map(|bd| {
+                    // Check if compile_commands.json exists
+                    let compile_commands_exists = bd.path.join("compile_commands.json").exists();
+                    
+                    json!({
+                        "path": bd.path,
+                        "generator": bd.generator,
+                        "build_type": bd.build_type,
+                        "options": bd.configured_options.iter().cloned().collect::<std::collections::HashMap<_, _>>(),
+                        "compile_commands_exists": compile_commands_exists
+                    })
+                }).collect::<Vec<_>>();
+
+                let project_name = status.project_root
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .unwrap_or("unknown")
+                    .to_string();
+
                 let content = json!({
-                    "summary": Self::generate_summary(&status)
+                    "project_name": project_name,
+                    "project_root": status.project_root,
+                    "build_dirs": build_dirs
                 });
 
-                info!("Successfully listed CMake build directories");
+                info!("Successfully listed {} CMake build directories", build_dirs.len());
 
                 Ok(CallToolResult::text_content(vec![TextContent::from(
                     serialize_result(&content),
                 )]))
             }
             Err(CmakeError::NotCmakeProject) => {
+                let current_dir = std::env::current_dir().unwrap_or_default();
+                let project_name = current_dir
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .map(|s| s.to_string());
+
                 let content = json!({
-                    "summary": "Not a CMake project"
+                    "project_name": project_name,
+                    "project_root": current_dir,
+                    "build_dirs": [],
+                    "error": "Not a CMake project - no CMakeLists.txt found"
                 });
 
                 info!("Directory is not a CMake project");
@@ -87,8 +117,17 @@ impl ListBuildDirsTool {
                 )]))
             }
             Err(CmakeError::MultipleIssues(issues)) => {
+                let current_dir = std::env::current_dir().unwrap_or_default();
+                let project_name = current_dir
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .map(|s| s.to_string());
+
                 let content = json!({
-                    "summary": format!("CMake project with {} issues", issues.len())
+                    "project_name": project_name,
+                    "project_root": current_dir,
+                    "build_dirs": [],
+                    "error": format!("CMake project has issues: {}", issues.join(", "))
                 });
 
                 error!("Multiple issues detected: {:?}", issues);
@@ -98,20 +137,17 @@ impl ListBuildDirsTool {
                 )]))
             }
             Err(e) => {
-                let error_msg = format!("Failed to analyze project: {}", e);
+                let current_dir = std::env::current_dir().unwrap_or_default();
+                
                 let content = json!({
-                    "success": false,
-                    "project_type": "unknown",
-                    "is_configured": false,
-                    "error": error_msg,
-                    "build_directories": [],
-                    "issues": [error_msg.clone()],
-                    "summary": "Analysis failed"
+                    "project_name": null,
+                    "project_root": current_dir,
+                    "build_dirs": [],
+                    "error": format!("Failed to analyze project: {}", e)
                 });
 
                 error!("Project analysis failed: {}", e);
 
-                // Return error result with JSON content
                 Ok(CallToolResult::text_content(vec![TextContent::from(
                     serialize_result(&content),
                 )]))
