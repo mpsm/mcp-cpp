@@ -2,14 +2,18 @@
 name = "mcp-cpp-server"
 version = "0.1.0"
 edition = "2024"
+license = "MIT"
+description = "A high-performance Model Context Protocol (MCP) server for C++ code analysis using clangd LSP integration"
+repository = "https://github.com/mpsm/mcp-cpp"
+authors = ["mpsm"]
+keywords = ["mcp", "cpp", "clangd", "lsp", "code-analysis"]
+categories = ["development-tools", "command-line-utilities"]
 
 [dependencies]
 async-trait = "0.1.88"
 chrono = { version = "0.4", features = ["serde"] }
 clap = { version = "4.5.27", features = ["derive"] }
-rust-mcp-sdk = { version = "0.5.0", features = [
-    "macros",
-] }
+rust-mcp-sdk = { version = "0.5.0", features = ["macros"] }
 serde = { version = "1.0.219", features = ["derive"] }
 serde_json = "1.0.140"
 thiserror = "2.0.12"
