@@ -10,6 +10,7 @@
     "test:coverage": "vitest run --coverage",
     "test:framework": "vitest run src/framework/__tests__",
     "test:e2e": "vitest run src/tests",
+    "test:full": "./scripts/run-tests.sh",
     "lint": "eslint src/**/*.ts",
     "lint:fix": "eslint src/**/*.ts --fix",
     "format": "prettier --write src/**/*.ts",

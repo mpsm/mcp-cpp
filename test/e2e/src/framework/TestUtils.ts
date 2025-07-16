@@ -124,8 +124,31 @@ export class TestUtils {
    * Find the MCP server binary path
    */
   static async findMcpServer(): Promise<string> {
+    // Check if MCP_SERVER_PATH environment variable is set (useful for CI)
+    const envPath = process.env.MCP_SERVER_PATH;
+    if (envPath) {
+      try {
+        await fs.access(envPath);
+        return path.resolve(envPath);
+      } catch {
+        throw new Error(
+          `MCP server binary not found at specified path: ${envPath}`
+        );
+      }
+    }
+
     // Look for the binary in the standard cargo target directory
     const possiblePaths = [
+      path.resolve(
+        __dirname,
+        '..',
+        '..',
+        '..',
+        '..',
+        'target',
+        'release',
+        'mcp-cpp-server'
+      ),
       path.resolve(
         __dirname,
         '..',
@@ -136,31 +159,14 @@ export class TestUtils {
         'debug',
         'mcp-cpp-server'
       ),
-      path.resolve(
-        __dirname,
-        '..',
-        '..',
-        '..',
-        '..',
-        'target',
-        'release',
-        'mcp-cpp-server'
-      ),
+      path.join(process.cwd(), '..', '..', 'target', 'release', 'mcp-cpp-server'),
       path.join(process.cwd(), '..', '..', 'target', 'debug', 'mcp-cpp-server'),
-      path.join(
-        process.cwd(),
-        '..',
-        '..',
-        'target',
-        'release',
-        'mcp-cpp-server'
-      ),
       // Try relative to the current working directory
-      path.resolve('target', 'debug', 'mcp-cpp-server'),
       path.resolve('target', 'release', 'mcp-cpp-server'),
+      path.resolve('target', 'debug', 'mcp-cpp-server'),
       // Try from the project root
-      path.resolve('..', '..', 'target', 'debug', 'mcp-cpp-server'),
       path.resolve('..', '..', 'target', 'release', 'mcp-cpp-server'),
+      path.resolve('..', '..', 'target', 'debug', 'mcp-cpp-server'),
     ];
 
     for (const serverPath of possiblePaths) {
