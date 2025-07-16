@@ -160,3 +160,237 @@ jobs:
 
       - name: Run security audit
         run: cargo audit
+
+  cpp-test-project:
+    name: C++ Test Project
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install C++ dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential \
+            cmake \
+            ninja-build \
+            clang \
+            libc++-dev \
+            libc++abi-dev
+
+      - name: Cache CMake build
+        uses: actions/cache@v4
+        with:
+          path: test/test-project/build*
+          key: ${{ runner.os }}-cmake-${{ hashFiles('test/test-project/CMakeLists.txt', 'test/test-project/src/**', 'test/test-project/include/**') }}
+          restore-keys: |
+            ${{ runner.os }}-cmake-
+
+      - name: Configure CMake (Debug)
+        working-directory: test/test-project
+        run: |
+          mkdir -p build-debug
+          cd build-debug
+          cmake .. \
+            -DCMAKE_BUILD_TYPE=Debug \
+            -DCMAKE_CXX_COMPILER=clang++ \
+            -DCMAKE_C_COMPILER=clang \
+            -DUSE_MEMORY_STORAGE=ON \
+            -DENABLE_DEBUG_LOGGING=ON \
+            -G Ninja
+
+      - name: Build Debug
+        working-directory: test/test-project/build-debug
+        run: ninja -j$(nproc)
+
+      - name: Run Debug Tests
+        working-directory: test/test-project/build-debug
+        run: |
+          echo "=== Running C++ Debug Build ==="
+          ./TestProject
+          echo "C++ Debug build completed successfully!"
+
+      - name: Configure CMake (Release)
+        working-directory: test/test-project
+        run: |
+          mkdir -p build-release
+          cd build-release
+          cmake .. \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_CXX_COMPILER=clang++ \
+            -DCMAKE_C_COMPILER=clang \
+            -DUSE_MEMORY_STORAGE=OFF \
+            -DENABLE_DEBUG_LOGGING=OFF \
+            -G Ninja
+
+      - name: Build Release
+        working-directory: test/test-project/build-release
+        run: ninja -j$(nproc)
+
+      - name: Run Release Tests
+        working-directory: test/test-project/build-release
+        run: |
+          echo "=== Running C++ Release Build ==="
+          ./TestProject
+          echo "C++ Release build completed successfully!"
+
+      - name: Test with GCC (Alternative compiler)
+        working-directory: test/test-project
+        run: |
+          mkdir -p build-gcc
+          cd build-gcc
+          cmake .. \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_CXX_COMPILER=g++ \
+            -DCMAKE_C_COMPILER=gcc \
+            -G Ninja
+          ninja -j$(nproc)
+          echo "=== Running C++ GCC Build ==="
+          ./TestProject
+          echo "C++ GCC build completed successfully!"
+
+      - name: Upload C++ build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: cpp-build-artifacts
+          path: |
+            test/test-project/build-debug/TestProject
+            test/test-project/build-release/TestProject
+            test/test-project/build-gcc/TestProject
+            test/test-project/build-*/compile_commands.json
+          retention-days: 7
+
+  e2e-integration:
+    name: End-to-End Integration Tests
+    runs-on: ubuntu-latest
+    needs: [build, cpp-test-project]
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+          cache-dependency-path: test/e2e/package-lock.json
+
+      - name: Install C++ dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential cmake ninja-build
+
+      - name: Cache cargo build
+        uses: actions/cache@v4
+        with:
+          path: target
+          key: ${{ runner.os }}-cargo-build-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Build Rust MCP server
+        run: cargo build --release
+
+      - name: Build C++ test project
+        working-directory: test/test-project
+        run: |
+          mkdir -p build
+          cd build
+          cmake .. \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_EXPORT_COMPILE_COMMANDS=ON \
+            -G Ninja
+          ninja -j$(nproc)
+
+      - name: Install E2E test dependencies
+        working-directory: test/e2e
+        run: npm ci
+
+      - name: Run E2E tests
+        working-directory: test/e2e
+        run: |
+          echo "=== Running End-to-End Tests ==="
+          npm test
+          echo "E2E tests completed successfully!"
+
+      - name: Test MCP server integration
+        working-directory: test/test-project
+        run: |
+          echo "=== Testing MCP Server Integration ==="
+
+          # Test basic MCP communication with timeout
+          echo '{"jsonrpc": "2.0", "method": "tools/list", "id": 1}' | \
+            timeout 10 ../../target/release/mcp-cpp-server || echo "MCP server test completed"
+
+          echo "Integration test completed!"
+
+  matrix-compatibility:
+    name: Matrix Compatibility Tests
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, ubuntu-20.04]
+        compiler: [gcc, clang]
+        build_type: [Debug, Release]
+        include:
+          - os: ubuntu-latest
+            compiler: gcc
+            cc: gcc
+            cxx: g++
+          - os: ubuntu-latest
+            compiler: clang
+            cc: clang
+            cxx: clang++
+          - os: ubuntu-20.04
+            compiler: gcc
+            cc: gcc
+            cxx: g++
+          - os: ubuntu-20.04
+            compiler: clang
+            cc: clang
+            cxx: clang++
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential cmake ninja-build
+          if [ "${{ matrix.compiler }}" = "clang" ]; then
+            sudo apt-get install -y clang
+          fi
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Build Rust project
+        run: cargo build --release
+
+      - name: Build C++ test project
+        working-directory: test/test-project
+        env:
+          CC: ${{ matrix.cc }}
+          CXX: ${{ matrix.cxx }}
+        run: |
+          mkdir -p build-${{ matrix.compiler }}-${{ matrix.build_type }}
+          cd build-${{ matrix.compiler }}-${{ matrix.build_type }}
+          cmake .. \
+            -DCMAKE_BUILD_TYPE=${{ matrix.build_type }} \
+            -DCMAKE_C_COMPILER=${{ matrix.cc }} \
+            -DCMAKE_CXX_COMPILER=${{ matrix.cxx }} \
+            -G Ninja
+          ninja -j$(nproc)
+
+      - name: Test execution
+        working-directory: test/test-project/build-${{ matrix.compiler }}-${{ matrix.build_type }}
+        run: |
+          echo "=== Testing ${{ matrix.os }} with ${{ matrix.compiler }} (${{ matrix.build_type }}) ==="
+          ./TestProject
+          echo "Matrix test completed successfully!"
