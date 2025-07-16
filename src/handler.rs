@@ -1,14 +1,13 @@
 use async_trait::async_trait;
 use rust_mcp_sdk::schema::{
-    CallToolRequest, CallToolResult, ListResourcesRequest, ListResourcesResult, ListToolsRequest,
-    ListToolsResult, ReadResourceRequest, ReadResourceResult, RpcError,
+    CallToolRequest, CallToolResult, ListToolsRequest,
+    ListToolsResult, RpcError,
     schema_utils::CallToolError,
 };
 use rust_mcp_sdk::{McpServer, mcp_server::ServerHandler};
 use tracing::{Level, info};
 
 use crate::lsp::manager::ClangdManager;
-use crate::resources::LspResources;
 use crate::tools::CppTools;
 use crate::{log_mcp_message, log_timing};
 use std::sync::Arc;
@@ -78,46 +77,4 @@ impl ServerHandler for CppServerHandler {
         result
     }
 
-    async fn handle_list_resources_request(
-        &self,
-        request: ListResourcesRequest,
-        _runtime: &dyn McpServer,
-    ) -> std::result::Result<ListResourcesResult, RpcError> {
-        let start = Instant::now();
-
-        log_mcp_message!(Level::INFO, "incoming", "list_resources", &request);
-        info!("Listing available resources");
-
-        let result =
-            LspResources::list_resources(request).map_err(|_e| RpcError::internal_error())?;
-
-        log_mcp_message!(Level::INFO, "outgoing", "list_resources", &result);
-        log_timing!(Level::DEBUG, "list_resources", start.elapsed());
-
-        Ok(result)
-    }
-
-    async fn handle_read_resource_request(
-        &self,
-        request: ReadResourceRequest,
-        _runtime: &dyn McpServer,
-    ) -> std::result::Result<ReadResourceResult, RpcError> {
-        let start = Instant::now();
-        let uri = request.params.uri.clone();
-
-        log_mcp_message!(Level::INFO, "incoming", "read_resource", &request);
-        info!("Reading resource: {}", uri);
-
-        let result =
-            LspResources::read_resource(request).map_err(|_e| RpcError::internal_error())?;
-
-        log_mcp_message!(Level::INFO, "outgoing", "read_resource", &result);
-        log_timing!(
-            Level::DEBUG,
-            &format!("read_resource_{}", uri),
-            start.elapsed()
-        );
-
-        Ok(result)
-    }
 }

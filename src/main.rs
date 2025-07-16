@@ -2,7 +2,6 @@ mod cmake;
 mod handler;
 mod logging;
 mod lsp;
-mod resources;
 mod tools;
 
 use clap::Parser;
@@ -10,7 +9,7 @@ use handler::CppServerHandler;
 use logging::{LogConfig, init_logging};
 use rust_mcp_sdk::schema::{
     Implementation, InitializeResult, LATEST_PROTOCOL_VERSION, ServerCapabilities,
-    ServerCapabilitiesResources, ServerCapabilitiesTools,
+    ServerCapabilitiesTools,
 };
 
 use rust_mcp_sdk::{
@@ -57,10 +56,6 @@ async fn main() -> SdkResult<()> {
         },
         capabilities: ServerCapabilities {
             tools: Some(ServerCapabilitiesTools { list_changed: None }),
-            resources: Some(ServerCapabilitiesResources {
-                subscribe: None,
-                list_changed: None,
-            }),
             ..Default::default()
         },
         meta: None,
