@@ -97,7 +97,7 @@ impl CmakeProjectStatus {
                 match Self::analyze_build_directory(project_root, dir_path) {
                     Ok(build_dir) => build_dirs.push(build_dir),
                     Err(e) => {
-                        let issue = format!("Build directory {:?}: {}", dir_path, e);
+                        let issue = format!("Build directory {dir_path:?}: {e}");
                         warn!("{}", issue);
                         issues.push(issue);
                     }
@@ -142,10 +142,7 @@ impl CmakeProjectStatus {
                     build_dir.configured_options = options;
                 }
                 Err(e) => {
-                    return Err(CmakeError::CorruptedCache(format!(
-                        "{:?}: {}",
-                        cache_file, e
-                    )));
+                    return Err(CmakeError::CorruptedCache(format!("{cache_file:?}: {e}")));
                 }
             }
         }

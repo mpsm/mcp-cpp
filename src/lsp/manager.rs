@@ -237,7 +237,7 @@ impl ClangdManager {
         )
         .await
         .map_err(|_| LspError::ProcessError("Timeout during LSP initialize request".to_string()))?
-        .map_err(|e| LspError::ProcessError(format!("LSP initialize request failed: {}", e)))?;
+        .map_err(|e| LspError::ProcessError(format!("LSP initialize request failed: {e}")))?;
         info!("LSP initialize request completed");
 
         // Step 2: Send initialized notification
@@ -248,7 +248,7 @@ impl ClangdManager {
         )
         .await
         .map_err(|_| LspError::ProcessError("Timeout during initialized notification".to_string()))?
-        .map_err(|e| LspError::ProcessError(format!("Initialized notification failed: {}", e)))?;
+        .map_err(|e| LspError::ProcessError(format!("Initialized notification failed: {e}")))?;
         info!("LSP initialization sequence completed");
 
         // Step 3: Trigger indexing by opening first file from compile_commands.json
@@ -260,7 +260,7 @@ impl ClangdManager {
         .map_err(|_| {
             LspError::ProcessError("Timeout during file opening for indexing trigger".to_string())
         })?
-        .map_err(|e| LspError::ProcessError(format!("Failed to trigger indexing: {}", e)))?;
+        .map_err(|e| LspError::ProcessError(format!("Failed to trigger indexing: {e}")))?;
 
         Ok(())
     }
@@ -275,18 +275,12 @@ impl ClangdManager {
         let compile_commands_path = build_directory.join("compile_commands.json");
         let compile_commands_content =
             std::fs::read_to_string(&compile_commands_path).map_err(|e| {
-                LspError::BuildDirectoryError(format!(
-                    "Failed to read compile_commands.json: {}",
-                    e
-                ))
+                LspError::BuildDirectoryError(format!("Failed to read compile_commands.json: {e}"))
             })?;
 
         let compile_commands: Vec<serde_json::Value> =
             serde_json::from_str(&compile_commands_content).map_err(|e| {
-                LspError::BuildDirectoryError(format!(
-                    "Failed to parse compile_commands.json: {}",
-                    e
-                ))
+                LspError::BuildDirectoryError(format!("Failed to parse compile_commands.json: {e}"))
             })?;
 
         if compile_commands.is_empty() {
@@ -359,9 +353,7 @@ impl ClangdManager {
         .map_err(|_| {
             LspError::ProcessError("Timeout during textDocument/didOpen notification".to_string())
         })?
-        .map_err(|e| {
-            LspError::ProcessError(format!("Failed to send didOpen notification: {}", e))
-        })?;
+        .map_err(|e| LspError::ProcessError(format!("Failed to send didOpen notification: {e}")))?;
         info!("File opened, background indexing should now start");
 
         Ok(())
@@ -547,7 +539,7 @@ impl ClangdManager {
                 if e.kind() == std::io::ErrorKind::NotFound {
                     LspError::ClangdNotFound
                 } else {
-                    LspError::ProcessError(format!("Failed to check clangd version: {}", e))
+                    LspError::ProcessError(format!("Failed to check clangd version: {e}"))
                 }
             })?;
 
@@ -581,17 +573,15 @@ impl ClangdManager {
 
     fn parse_clangd_version(&self, version_output: &str) -> Result<u32, LspError> {
         // Look for pattern like "clangd version X.Y.Z" or "version X.Y.Z"
-        let version_regex = regex::Regex::new(r"(?i)version\s+(\d+)\.?").map_err(|e| {
-            LspError::ProcessError(format!("Failed to create version regex: {}", e))
-        })?;
+        let version_regex = regex::Regex::new(r"(?i)version\s+(\d+)\.?")
+            .map_err(|e| LspError::ProcessError(format!("Failed to create version regex: {e}")))?;
 
         if let Some(captures) = version_regex.captures(version_output) {
             if let Some(version_match) = captures.get(1) {
                 let version_str = version_match.as_str();
                 return version_str.parse::<u32>().map_err(|e| {
                     LspError::ProcessError(format!(
-                        "Failed to parse version number '{}': {}",
-                        version_str, e
+                        "Failed to parse version number '{version_str}': {e}"
                     ))
                 });
             }

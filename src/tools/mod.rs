@@ -21,7 +21,7 @@ pub use search_symbols::SearchSymbolsTool;
 /// Helper function to serialize JSON content and handle errors gracefully
 pub fn serialize_result(content: &serde_json::Value) -> String {
     serde_json::to_string_pretty(content)
-        .unwrap_or_else(|e| format!("Error serializing result: {}", e))
+        .unwrap_or_else(|e| format!("Error serializing result: {e}"))
 }
 
 /// MCP Tool Design Guidelines
@@ -76,7 +76,7 @@ impl CppTools {
                 let tool: ListBuildDirsTool = serde_json::from_value(arguments).map_err(|e| {
                     CallToolError::new(std::io::Error::new(
                         std::io::ErrorKind::InvalidInput,
-                        format!("Failed to deserialize list_build_dirs arguments: {}", e),
+                        format!("Failed to deserialize list_build_dirs arguments: {e}"),
                     ))
                 })?;
                 tool.call_tool()
@@ -85,7 +85,7 @@ impl CppTools {
                 let tool: SearchSymbolsTool = serde_json::from_value(arguments).map_err(|e| {
                     CallToolError::new(std::io::Error::new(
                         std::io::ErrorKind::InvalidInput,
-                        format!("Failed to deserialize search_symbols arguments: {}", e),
+                        format!("Failed to deserialize search_symbols arguments: {e}"),
                     ))
                 })?;
                 tool.call_tool(clangd_manager).await
@@ -95,17 +95,13 @@ impl CppTools {
                     serde_json::from_value(arguments).map_err(|e| {
                         CallToolError::new(std::io::Error::new(
                             std::io::ErrorKind::InvalidInput,
-                            format!(
-                                "Failed to deserialize analyze_symbol_context arguments: {}",
-                                e
-                            ),
+                            format!("Failed to deserialize analyze_symbol_context arguments: {e}"),
                         ))
                     })?;
                 tool.call_tool(clangd_manager).await
             }
             _ => Err(CallToolError::unknown_tool(format!(
-                "Unknown tool: {}",
-                tool_name
+                "Unknown tool: {tool_name}"
             ))),
         }
     }

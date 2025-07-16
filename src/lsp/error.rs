@@ -31,14 +31,10 @@ impl From<LspError> for CallToolError {
             LspError::NotSetup => CallToolError::new(std::io::Error::new(
                 std::io::ErrorKind::InvalidInput,
                 format!(
-                    "{}. Workflow: 1. Optional: cpp_project_status, 2. Required: setup_clangd, 3. Use: lsp_request. See lsp://workflow resource for details.",
-                    error
+                    "{error}. Workflow: 1. Optional: cpp_project_status, 2. Required: setup_clangd, 3. Use: lsp_request. See lsp://workflow resource for details."
                 ),
             )),
-            _ => CallToolError::new(std::io::Error::new(
-                std::io::ErrorKind::Other,
-                error.to_string(),
-            )),
+            _ => CallToolError::new(std::io::Error::other(error.to_string())),
         }
     }
 }

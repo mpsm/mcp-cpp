@@ -68,7 +68,7 @@ impl ListBuildDirsTool {
                 let build_dirs = status.build_directories.iter().map(|bd| {
                     // Check if compile_commands.json exists
                     let compile_commands_exists = bd.path.join("compile_commands.json").exists();
-                    
+
                     json!({
                         "path": bd.path,
                         "generator": bd.generator,
@@ -78,7 +78,8 @@ impl ListBuildDirsTool {
                     })
                 }).collect::<Vec<_>>();
 
-                let project_name = status.project_root
+                let project_name = status
+                    .project_root
                     .file_name()
                     .and_then(|n| n.to_str())
                     .unwrap_or("unknown")
@@ -90,7 +91,10 @@ impl ListBuildDirsTool {
                     "build_dirs": build_dirs
                 });
 
-                info!("Successfully listed {} CMake build directories", build_dirs.len());
+                info!(
+                    "Successfully listed {} CMake build directories",
+                    build_dirs.len()
+                );
 
                 Ok(CallToolResult::text_content(vec![TextContent::from(
                     serialize_result(&content),
@@ -138,7 +142,7 @@ impl ListBuildDirsTool {
             }
             Err(e) => {
                 let current_dir = std::env::current_dir().unwrap_or_default();
-                
+
                 let content = json!({
                     "project_name": null,
                     "project_root": current_dir,
@@ -151,48 +155,6 @@ impl ListBuildDirsTool {
                 Ok(CallToolResult::text_content(vec![TextContent::from(
                     serialize_result(&content),
                 )]))
-            }
-        }
-    }
-
-    fn generate_summary(status: &CmakeProjectStatus) -> String {
-        if !status.is_cmake_project {
-            return "Not a CMake project".to_string();
-        }
-
-        match status.build_directories.len() {
-            0 => "CMake project (not configured)".to_string(),
-            1 => {
-                let bd = &status.build_directories[0];
-                let generator = bd.generator.as_deref().unwrap_or("unknown generator");
-                let build_type = bd.build_type.as_deref().unwrap_or("unspecified");
-                format!(
-                    "CMake project configured with {} ({})",
-                    generator, build_type
-                )
-            }
-            n => {
-                let generators: Vec<String> = status
-                    .build_directories
-                    .iter()
-                    .filter_map(|bd| bd.generator.as_ref())
-                    .cloned()
-                    .collect();
-                let unique_generators: std::collections::HashSet<_> =
-                    generators.into_iter().collect();
-
-                if unique_generators.len() == 1 {
-                    let generator = unique_generators
-                        .into_iter()
-                        .next()
-                        .unwrap_or_else(|| "unknown generator".to_string());
-                    format!("CMake project with {} build directories ({})", n, generator)
-                } else {
-                    format!(
-                        "CMake project with {} build directories (multiple generators)",
-                        n
-                    )
-                }
             }
         }
     }

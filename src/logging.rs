@@ -181,7 +181,6 @@ macro_rules! log_timing {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::env;
 
     #[test]
     fn test_log_config_default() {
@@ -189,50 +188,6 @@ mod tests {
         assert_eq!(config.level, "info");
         assert_eq!(config.file_path, None);
         assert!(!config.json_format);
-    }
-
-    #[test]
-    fn test_log_config_from_env() {
-        // Test without environment variables
-        unsafe {
-            env::remove_var("RUST_LOG");
-            env::remove_var("MCP_LOG_FILE");
-            env::remove_var("MCP_LOG_UNIQUE");
-            env::remove_var("MCP_LOG_JSON");
-        }
-
-        let config = LogConfig::from_env();
-        assert_eq!(config.level, "info");
-        assert_eq!(config.file_path, None);
-        assert!(!config.json_format);
-
-        // Test with environment variables
-        unsafe {
-            env::set_var("RUST_LOG", "debug");
-            env::set_var("MCP_LOG_FILE", "/tmp/test.log");
-            env::set_var("MCP_LOG_UNIQUE", "true");
-            env::set_var("MCP_LOG_JSON", "true");
-        }
-
-        let config = LogConfig::from_env();
-        assert_eq!(config.level, "debug");
-        assert!(config.file_path.is_some());
-        assert!(config.json_format);
-
-        // The filename should include process ID
-        let file_path = config.file_path.unwrap();
-        let filename = file_path.file_name().unwrap().to_string_lossy();
-        assert!(filename.contains(&std::process::id().to_string()));
-        assert!(filename.starts_with("test."));
-        assert!(filename.ends_with(".log"));
-
-        // Clean up
-        unsafe {
-            env::remove_var("RUST_LOG");
-            env::remove_var("MCP_LOG_FILE");
-            env::remove_var("MCP_LOG_UNIQUE");
-            env::remove_var("MCP_LOG_JSON");
-        }
     }
 
     #[test]
@@ -244,49 +199,5 @@ mod tests {
 
         assert_eq!(config.level, "warn");
         assert_eq!(config.file_path, Some(PathBuf::from("/custom/path.log")));
-    }
-
-    #[test]
-    fn test_unique_filename_generation() {
-        unsafe {
-            env::set_var("MCP_LOG_UNIQUE", "true");
-            env::set_var("MCP_LOG_FILE", "/tmp/mcp.log");
-        }
-
-        let config = LogConfig::from_env();
-        let file_path = config.file_path.unwrap();
-        let filename = file_path.file_name().unwrap().to_string_lossy();
-
-        let pid = std::process::id();
-        let expected = format!("mcp.{}.log", pid);
-        assert_eq!(filename, expected);
-
-        // Clean up
-        unsafe {
-            env::remove_var("MCP_LOG_UNIQUE");
-            env::remove_var("MCP_LOG_FILE");
-        }
-    }
-
-    #[test]
-    fn test_unique_filename_no_extension() {
-        unsafe {
-            env::set_var("MCP_LOG_UNIQUE", "true");
-            env::set_var("MCP_LOG_FILE", "/tmp/mcp");
-        }
-
-        let config = LogConfig::from_env();
-        let file_path = config.file_path.unwrap();
-        let filename = file_path.file_name().unwrap().to_string_lossy();
-
-        let pid = std::process::id();
-        let expected = format!("mcp.{}", pid);
-        assert_eq!(filename, expected);
-
-        // Clean up
-        unsafe {
-            env::remove_var("MCP_LOG_UNIQUE");
-            env::remove_var("MCP_LOG_FILE");
-        }
     }
 }

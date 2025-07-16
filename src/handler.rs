@@ -74,7 +74,7 @@ impl ServerHandler for CppServerHandler {
         log_mcp_message!(Level::INFO, "outgoing", "call_tool", &result);
         log_timing!(
             Level::DEBUG,
-            &format!("call_tool_{}", tool_name),
+            &format!("call_tool_{tool_name}"),
             start.elapsed()
         );
 

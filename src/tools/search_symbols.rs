@@ -276,7 +276,7 @@ impl SearchSymbolsTool {
             let file_uri = if file_path.starts_with("file://") {
                 file_path.clone()
             } else {
-                format!("file://{}", file_path)
+                format!("file://{file_path}")
             };
 
             // Convert URI to file path for opening
@@ -544,7 +544,7 @@ impl SearchSymbolsTool {
             },
             Err(e) => {
                 info!("Not a CMake project or failed to analyze: {}", e);
-                Err(format!("Failed to analyze build directories: {}", e))
+                Err(format!("Failed to analyze build directories: {e}"))
             }
         }
     }

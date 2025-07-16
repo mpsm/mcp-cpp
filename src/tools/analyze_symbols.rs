@@ -645,7 +645,7 @@ impl AnalyzeSymbolContextTool {
                                         if let Some(container) =
                                             s.get("containerName").and_then(|c| c.as_str())
                                         {
-                                            let qualified = format!("{}::{}", container, name);
+                                            let qualified = format!("{container}::{name}");
                                             if qualified == self.symbol {
                                                 return true;
                                             }
@@ -695,7 +695,7 @@ impl AnalyzeSymbolContextTool {
                 }
                 Err(e) => {
                     // On error, don't retry - return immediately
-                    return Err(format!("LSP workspace/symbol request failed: {}", e));
+                    return Err(format!("LSP workspace/symbol request failed: {e}"));
                 }
             }
         }
@@ -1213,7 +1213,7 @@ impl AnalyzeSymbolContextTool {
                         .and_then(|e| e.get("line"))
                         .and_then(|l| l.as_u64()),
                 ) {
-                    let context_start = if start_line >= 5 { start_line - 5 } else { 0 };
+                    let context_start = start_line.saturating_sub(5);
                     let context_end = start_line + 5;
 
                     // Try to read file content (simplified approach)
@@ -1688,7 +1688,7 @@ impl AnalyzeSymbolContextTool {
             },
             Err(e) => {
                 info!("Not a CMake project or failed to analyze: {}", e);
-                Err(format!("Failed to analyze build directories: {}", e))
+                Err(format!("Failed to analyze build directories: {e}"))
             }
         }
     }

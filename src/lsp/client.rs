@@ -54,7 +54,7 @@ impl LspMessageParser {
                 // Skip empty lines or other headers
                 LspParseResult::Incomplete
             }
-            Err(e) => LspParseResult::ReadError(format!("Failed to read header: {}", e)),
+            Err(e) => LspParseResult::ReadError(format!("Failed to read header: {e}")),
         }
     }
 
@@ -76,13 +76,13 @@ impl LspMessageParser {
 
         // Read the empty line separator
         if let Err(e) = reader.read_line(&mut line).await {
-            return LspParseResult::ReadError(format!("Failed to read separator: {}", e));
+            return LspParseResult::ReadError(format!("Failed to read separator: {e}"));
         }
 
         // Read the JSON content
         let mut content = vec![0u8; content_length];
         if let Err(e) = reader.read_exact(&mut content).await {
-            return LspParseResult::ReadError(format!("Failed to read message body: {}", e));
+            return LspParseResult::ReadError(format!("Failed to read message body: {e}"));
         }
 
         // Convert to string and parse JSON
@@ -100,7 +100,7 @@ impl LspMessageParser {
                 }
                 result
             }
-            Err(e) => LspParseResult::ParseError(format!("Invalid UTF-8 in message: {}", e)),
+            Err(e) => LspParseResult::ParseError(format!("Invalid UTF-8 in message: {e}")),
         }
     }
 
@@ -109,8 +109,7 @@ impl LspMessageParser {
         match serde_json::from_str::<JsonRpcResponse>(json_str) {
             Ok(response) => LspParseResult::Response(response),
             Err(e) => LspParseResult::ParseError(format!(
-                "Invalid JSON response: {} - Content: {}",
-                e, json_str
+                "Invalid JSON response: {e} - Content: {json_str}"
             )),
         }
     }
@@ -148,7 +147,7 @@ impl LspClient {
             if e.kind() == std::io::ErrorKind::NotFound {
                 LspError::ClangdNotFound
             } else {
-                LspError::ProcessError(format!("Failed to start clangd: {}", e))
+                LspError::ProcessError(format!("Failed to start clangd: {e}"))
             }
         })?;
 
@@ -287,7 +286,7 @@ impl LspClient {
             // Add a timestamp header to the log file
             let timestamp = chrono::Utc::now().format("%Y-%m-%d %H:%M:%S UTC");
             if let Err(e) = log_file
-                .write_all(format!("\n=== CLANGD SESSION STARTED: {} ===\n", timestamp).as_bytes())
+                .write_all(format!("\n=== CLANGD SESSION STARTED: {timestamp} ===\n").as_bytes())
                 .await
             {
                 warn!("Failed to write header to clangd log file: {}", e);
@@ -304,7 +303,7 @@ impl LspClient {
                     Ok(_) => {
                         // Write the line to the log file with timestamp
                         let timestamp = chrono::Utc::now().format("%Y-%m-%d %H:%M:%S.%3f");
-                        let log_entry = format!("[{}] {}", timestamp, line);
+                        let log_entry = format!("[{timestamp}] {line}");
 
                         if let Err(e) = log_file.write_all(log_entry.as_bytes()).await {
                             warn!("Failed to write to clangd log file: {}", e);
@@ -342,7 +341,7 @@ impl LspClient {
             // Add session end marker
             let timestamp = chrono::Utc::now().format("%Y-%m-%d %H:%M:%S UTC");
             if let Err(e) = log_file
-                .write_all(format!("=== CLANGD SESSION ENDED: {} ===\n\n", timestamp).as_bytes())
+                .write_all(format!("=== CLANGD SESSION ENDED: {timestamp} ===\n\n").as_bytes())
                 .await
             {
                 warn!("Failed to write footer to clangd log file: {}", e);
@@ -389,7 +388,7 @@ impl LspClient {
             Ok(Ok(response)) => {
                 log_timing!(
                     Level::DEBUG,
-                    &format!("lsp_request_{}", method),
+                    &format!("lsp_request_{method}"),
                     start.elapsed()
                 );
                 Ok(response)
@@ -566,11 +565,11 @@ impl LspClient {
         stdin_guard
             .write_all(content.as_bytes())
             .await
-            .map_err(|e| LspError::ProcessError(format!("Failed to write to stdin: {}", e)))?;
+            .map_err(|e| LspError::ProcessError(format!("Failed to write to stdin: {e}")))?;
         stdin_guard
             .flush()
             .await
-            .map_err(|e| LspError::ProcessError(format!("Failed to flush stdin: {}", e)))?;
+            .map_err(|e| LspError::ProcessError(format!("Failed to flush stdin: {e}")))?;
 
         Ok(())
     }
@@ -844,7 +843,7 @@ mod tests {
             LspParseResult::EndOfStream => {
                 // Expected
             }
-            other => panic!("Expected EndOfStream, got {:?}", other),
+            other => panic!("Expected EndOfStream, got {other:?}"),
         }
     }
 
@@ -859,10 +858,7 @@ mod tests {
             LspParseResult::ReadError(_) => {
                 // Expected - we don't have enough data for the full message
             }
-            other => panic!(
-                "Expected ReadError due to incomplete message, got {:?}",
-                other
-            ),
+            other => panic!("Expected ReadError due to incomplete message, got {other:?}"),
         }
     }
 
@@ -875,7 +871,7 @@ mod tests {
             LspParseResult::Incomplete => {
                 // Expected - non-Content-Length headers are skipped
             }
-            other => panic!("Expected Incomplete, got {:?}", other),
+            other => panic!("Expected Incomplete, got {other:?}"),
         }
     }
 }
