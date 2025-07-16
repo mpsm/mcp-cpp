@@ -119,6 +119,63 @@ export class TestUtils {
       MCP_LOG_JSON: 'false', // Keep human-readable for easier debugging
     };
   }
+
+  /**
+   * Find the MCP server binary path
+   */
+  static async findMcpServer(): Promise<string> {
+    // Look for the binary in the standard cargo target directory
+    const possiblePaths = [
+      path.resolve(
+        __dirname,
+        '..',
+        '..',
+        '..',
+        '..',
+        'target',
+        'debug',
+        'mcp-cpp-server'
+      ),
+      path.resolve(
+        __dirname,
+        '..',
+        '..',
+        '..',
+        '..',
+        'target',
+        'release',
+        'mcp-cpp-server'
+      ),
+      path.join(process.cwd(), '..', '..', 'target', 'debug', 'mcp-cpp-server'),
+      path.join(
+        process.cwd(),
+        '..',
+        '..',
+        'target',
+        'release',
+        'mcp-cpp-server'
+      ),
+      // Try relative to the current working directory
+      path.resolve('target', 'debug', 'mcp-cpp-server'),
+      path.resolve('target', 'release', 'mcp-cpp-server'),
+      // Try from the project root
+      path.resolve('..', '..', 'target', 'debug', 'mcp-cpp-server'),
+      path.resolve('..', '..', 'target', 'release', 'mcp-cpp-server'),
+    ];
+
+    for (const serverPath of possiblePaths) {
+      try {
+        await fs.access(serverPath);
+        return serverPath;
+      } catch {
+        // Continue checking other paths
+      }
+    }
+
+    throw new Error(
+      'MCP server binary not found. Please run "cargo build" first.'
+    );
+  }
 }
 
 export type LogLevel = 'ERROR' | 'WARN' | 'INFO' | 'DEBUG' | 'TRACE';
@@ -137,3 +194,6 @@ export interface LogAnalysis {
   errors: LogEntry[];
   warnings: LogEntry[];
 }
+
+// Named export for convenience
+export const findMcpServer = TestUtils.findMcpServer;
