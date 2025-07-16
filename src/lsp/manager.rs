@@ -302,14 +302,17 @@ impl ClangdManager {
                 file_paths.insert(PathBuf::from(file_str));
             }
         }
-        
+
         // Store compilation database
         {
             let mut db = self.compilation_database.lock().await;
             *db = Some(file_paths);
         }
 
-        info!("Stored compilation database with {} files", compile_commands.len());
+        info!(
+            "Stored compilation database with {} files",
+            compile_commands.len()
+        );
 
         // Find first source file
         let first_file = compile_commands
@@ -425,7 +428,8 @@ impl ClangdManager {
                 "File {} changed, closing before reopening",
                 file_path.display()
             );
-            self.close_file_internal(file_path, &existing_state.file_uri).await?;
+            self.close_file_internal(file_path, &existing_state.file_uri)
+                .await?;
         }
 
         // Send textDocument/didOpen notification
@@ -471,18 +475,32 @@ impl ClangdManager {
 
             // Log every 10th iteration to avoid spam, but always log first few
             if loop_count <= 5 || loop_count % 10 == 0 {
-                info!("🔄 ClangdManager::wait_for_indexing_completion() - Loop #{}, elapsed: {:?}, status: {:?}, is_indexing: {}, message: {:?}, percentage: {:?}", 
-                      loop_count, start.elapsed(), indexing_state.status, indexing_state.is_indexing(), indexing_state.message, indexing_state.percentage);
+                info!(
+                    "🔄 ClangdManager::wait_for_indexing_completion() - Loop #{}, elapsed: {:?}, status: {:?}, is_indexing: {}, message: {:?}, percentage: {:?}",
+                    loop_count,
+                    start.elapsed(),
+                    indexing_state.status,
+                    indexing_state.is_indexing(),
+                    indexing_state.message,
+                    indexing_state.percentage
+                );
             }
 
             // Only return when status is specifically Completed, not just when is_indexing() is false
             if indexing_state.status == crate::lsp::types::IndexingStatus::Completed {
-                info!("✅ ClangdManager::wait_for_indexing_completion() - Indexing completed successfully after {} loops and {:?}", loop_count, start.elapsed());
+                info!(
+                    "✅ ClangdManager::wait_for_indexing_completion() - Indexing completed successfully after {} loops and {:?}",
+                    loop_count,
+                    start.elapsed()
+                );
                 return Ok(());
             }
 
             if start.elapsed() > timeout {
-                warn!("⏰ ClangdManager::wait_for_indexing_completion() - Timeout reached after {:?} ({} loops) - current status: {:?}", timeout, loop_count, indexing_state.status);
+                warn!(
+                    "⏰ ClangdManager::wait_for_indexing_completion() - Timeout reached after {:?} ({} loops) - current status: {:?}",
+                    timeout, loop_count, indexing_state.status
+                );
                 return Err(LspError::ProcessError(format!(
                     "Indexing did not complete within timeout of {:?}. Current status: {:?} after {} loops",
                     timeout, indexing_state.status, loop_count
@@ -631,7 +649,7 @@ impl ClangdManager {
     fn determine_project_root(build_directory: &PathBuf) -> Option<PathBuf> {
         // Try to read the actual source directory from CMakeCache.txt
         let cache_file = build_directory.join("CMakeCache.txt");
-        
+
         if let Ok(content) = std::fs::read_to_string(&cache_file) {
             // Look for CMAKE_SOURCE_DIR entry in CMakeCache.txt
             for line in content.lines() {
@@ -641,7 +659,7 @@ impl ClangdManager {
                 }
             }
         }
-        
+
         // Fallback: assume build directory is a subdirectory of project root
         build_directory.parent().map(|p| p.to_path_buf())
     }

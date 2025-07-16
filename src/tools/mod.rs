@@ -1,12 +1,12 @@
 //! MCP Tool implementations for C++ code analysis
-//! 
+//!
 //! This module contains all the MCP tools that provide C++ code analysis capabilities
 //! using clangd LSP server integration.
 
-pub mod cmake_tools;
-pub mod symbol_filtering;
-pub mod search_symbols;
 pub mod analyze_symbols;
+pub mod cmake_tools;
+pub mod search_symbols;
+pub mod symbol_filtering;
 
 use rust_mcp_sdk::schema::{CallToolResult, schema_utils::CallToolError};
 use std::sync::Arc;
@@ -14,9 +14,9 @@ use tokio::sync::Mutex;
 
 use crate::lsp::ClangdManager;
 
+pub use analyze_symbols::AnalyzeSymbolContextTool;
 pub use cmake_tools::ListBuildDirsTool;
 pub use search_symbols::SearchSymbolsTool;
-pub use analyze_symbols::AnalyzeSymbolContextTool;
 
 /// Helper function to serialize JSON content and handle errors gracefully
 pub fn serialize_result(content: &serde_json::Value) -> String {
@@ -68,7 +68,7 @@ impl CppTools {
         clangd_manager: &Arc<Mutex<ClangdManager>>,
     ) -> Result<CallToolResult, CallToolError> {
         use tracing::info;
-        
+
         info!("Handling tool call: {}", tool_name);
 
         match tool_name {
@@ -76,7 +76,7 @@ impl CppTools {
                 let tool: ListBuildDirsTool = serde_json::from_value(arguments).map_err(|e| {
                     CallToolError::new(std::io::Error::new(
                         std::io::ErrorKind::InvalidInput,
-                        format!("Failed to deserialize list_build_dirs arguments: {}", e)
+                        format!("Failed to deserialize list_build_dirs arguments: {}", e),
                     ))
                 })?;
                 tool.call_tool()
@@ -85,18 +85,22 @@ impl CppTools {
                 let tool: SearchSymbolsTool = serde_json::from_value(arguments).map_err(|e| {
                     CallToolError::new(std::io::Error::new(
                         std::io::ErrorKind::InvalidInput,
-                        format!("Failed to deserialize search_symbols arguments: {}", e)
+                        format!("Failed to deserialize search_symbols arguments: {}", e),
                     ))
                 })?;
                 tool.call_tool(clangd_manager).await
             }
             "analyze_symbol_context" => {
-                let tool: AnalyzeSymbolContextTool = serde_json::from_value(arguments).map_err(|e| {
-                    CallToolError::new(std::io::Error::new(
-                        std::io::ErrorKind::InvalidInput,
-                        format!("Failed to deserialize analyze_symbol_context arguments: {}", e)
-                    ))
-                })?;
+                let tool: AnalyzeSymbolContextTool =
+                    serde_json::from_value(arguments).map_err(|e| {
+                        CallToolError::new(std::io::Error::new(
+                            std::io::ErrorKind::InvalidInput,
+                            format!(
+                                "Failed to deserialize analyze_symbol_context arguments: {}",
+                                e
+                            ),
+                        ))
+                    })?;
                 tool.call_tool(clangd_manager).await
             }
             _ => Err(CallToolError::unknown_tool(format!(

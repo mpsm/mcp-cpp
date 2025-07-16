@@ -22,7 +22,9 @@ impl SymbolFilter {
                 .filter(|symbol| {
                     if let Some(kind) = symbol.get("kind").and_then(|k| k.as_u64()) {
                         let kind_name = SymbolUtilities::symbol_kind_to_string(kind);
-                        kinds.iter().any(|k| k.to_lowercase() == kind_name.to_lowercase())
+                        kinds
+                            .iter()
+                            .any(|k| k.to_lowercase() == kind_name.to_lowercase())
                     } else {
                         false
                     }
@@ -54,8 +56,11 @@ impl SymbolFilter {
             None
         };
 
-        let _symbol_name = symbol.get("name").and_then(|n| n.as_str()).unwrap_or("unknown");
-        
+        let _symbol_name = symbol
+            .get("name")
+            .and_then(|n| n.as_str())
+            .unwrap_or("unknown");
+
         if let Some(path) = file_path {
             // First check if it's directly in the compilation database (source files)
             if let Some(db) = compilation_database {
@@ -87,8 +92,12 @@ impl SymbolFilter {
         kinds: &Option<Vec<String>>,
         manager: &ClangdManager,
     ) -> Vec<serde_json::Value> {
-        debug!("🔍 Filtering {} symbols, include_external={}", symbols.len(), include_external);
-        
+        debug!(
+            "🔍 Filtering {} symbols, include_external={}",
+            symbols.len(),
+            include_external
+        );
+
         if include_external {
             // Include all symbols when external is enabled
             debug!("✅ Including all symbols (external enabled)");
@@ -98,19 +107,21 @@ impl SymbolFilter {
             let compilation_database = manager.get_compilation_database().await;
             let project_root = manager.get_project_root().await;
             debug!("📁 Using compilation database and project root for project filtering");
-            
+
             let filtered: Vec<_> = symbols
                 .into_iter()
                 .filter(|symbol| {
                     Self::is_project_symbol(symbol, &compilation_database, &project_root)
                 })
                 .collect();
-            
-            debug!("📊 After project filtering: {} symbols remaining", filtered.len());
+
+            debug!(
+                "📊 After project filtering: {} symbols remaining",
+                filtered.len()
+            );
             Self::apply_kind_filter(filtered, kinds)
         }
     }
-
 }
 
 /// Symbol utility functions for common operations
@@ -166,7 +177,10 @@ impl SymbolUtilities {
     }
 
     /// Limit the number of results returned
-    pub fn limit_results(symbols: Vec<serde_json::Value>, max_results: Option<u32>) -> Vec<serde_json::Value> {
+    pub fn limit_results(
+        symbols: Vec<serde_json::Value>,
+        max_results: Option<u32>,
+    ) -> Vec<serde_json::Value> {
         let max_results = max_results.unwrap_or(100) as usize;
         symbols.into_iter().take(max_results).collect()
     }
@@ -202,7 +216,7 @@ impl SymbolUtilities {
             // Simple fuzzy matching - check if query is contained in symbol name (case insensitive)
             let query_lower = query.to_lowercase();
             let name_lower = name.to_lowercase();
-            
+
             if !name_lower.contains(&query_lower) {
                 return false;
             }
@@ -214,7 +228,10 @@ impl SymbolUtilities {
         if let Some(kinds) = kinds {
             if let Some(kind) = symbol.get("kind").and_then(|k| k.as_u64()) {
                 let kind_name = Self::symbol_kind_to_string(kind);
-                if !kinds.iter().any(|k| k.to_lowercase() == kind_name.to_lowercase()) {
+                if !kinds
+                    .iter()
+                    .any(|k| k.to_lowercase() == kind_name.to_lowercase())
+                {
                     return false;
                 }
             }
@@ -244,15 +261,29 @@ mod tests {
         });
 
         // Test basic query matching
-        assert!(SymbolUtilities::matches_query_and_filters(&symbol, "test", &None));
-        assert!(SymbolUtilities::matches_query_and_filters(&symbol, "Class", &None));
-        assert!(!SymbolUtilities::matches_query_and_filters(&symbol, "function", &None));
+        assert!(SymbolUtilities::matches_query_and_filters(
+            &symbol, "test", &None
+        ));
+        assert!(SymbolUtilities::matches_query_and_filters(
+            &symbol, "Class", &None
+        ));
+        assert!(!SymbolUtilities::matches_query_and_filters(
+            &symbol, "function", &None
+        ));
 
         // Test kind filtering
         let class_kinds = Some(vec!["class".to_string()]);
         let function_kinds = Some(vec!["function".to_string()]);
-        
-        assert!(SymbolUtilities::matches_query_and_filters(&symbol, "test", &class_kinds));
-        assert!(!SymbolUtilities::matches_query_and_filters(&symbol, "test", &function_kinds));
+
+        assert!(SymbolUtilities::matches_query_and_filters(
+            &symbol,
+            "test",
+            &class_kinds
+        ));
+        assert!(!SymbolUtilities::matches_query_and_filters(
+            &symbol,
+            "test",
+            &function_kinds
+        ));
     }
 }

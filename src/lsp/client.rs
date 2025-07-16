@@ -265,7 +265,7 @@ impl LspClient {
         // Start stderr logging task to capture clangd logs
         let stderr_task = tokio::spawn(async move {
             let mut stderr_reader = BufReader::new(stderr);
-            
+
             // Create or open the clangd log file in the current directory
             let log_file_path = "mcp-cpp-clangd.log";
             let mut log_file = match OpenOptions::new()
@@ -286,7 +286,10 @@ impl LspClient {
 
             // Add a timestamp header to the log file
             let timestamp = chrono::Utc::now().format("%Y-%m-%d %H:%M:%S UTC");
-            if let Err(e) = log_file.write_all(format!("\n=== CLANGD SESSION STARTED: {} ===\n", timestamp).as_bytes()).await {
+            if let Err(e) = log_file
+                .write_all(format!("\n=== CLANGD SESSION STARTED: {} ===\n", timestamp).as_bytes())
+                .await
+            {
                 warn!("Failed to write header to clangd log file: {}", e);
             }
 
@@ -302,23 +305,27 @@ impl LspClient {
                         // Write the line to the log file with timestamp
                         let timestamp = chrono::Utc::now().format("%Y-%m-%d %H:%M:%S.%3f");
                         let log_entry = format!("[{}] {}", timestamp, line);
-                        
+
                         if let Err(e) = log_file.write_all(log_entry.as_bytes()).await {
                             warn!("Failed to write to clangd log file: {}", e);
                         } else {
                             // Flush immediately for real-time logging
                             let _ = log_file.flush().await;
                         }
-                        
+
                         // Also log important messages to our tracing system
                         let line_trimmed = line.trim();
                         if !line_trimmed.is_empty() {
-                            if line_trimmed.contains("error") || line_trimmed.contains("Error") || 
-                               line_trimmed.contains("failed") || line_trimmed.contains("Failed") {
+                            if line_trimmed.contains("error")
+                                || line_trimmed.contains("Error")
+                                || line_trimmed.contains("failed")
+                                || line_trimmed.contains("Failed")
+                            {
                                 warn!("clangd stderr: {}", line_trimmed);
-                            } else if line_trimmed.contains("Indexed") || 
-                                     line_trimmed.contains("backgroundIndexProgress") ||
-                                     line_trimmed.contains("compilation database") {
+                            } else if line_trimmed.contains("Indexed")
+                                || line_trimmed.contains("backgroundIndexProgress")
+                                || line_trimmed.contains("compilation database")
+                            {
                                 info!("clangd stderr: {}", line_trimmed);
                             } else {
                                 debug!("clangd stderr: {}", line_trimmed);
@@ -331,13 +338,16 @@ impl LspClient {
                     }
                 }
             }
-            
+
             // Add session end marker
             let timestamp = chrono::Utc::now().format("%Y-%m-%d %H:%M:%S UTC");
-            if let Err(e) = log_file.write_all(format!("=== CLANGD SESSION ENDED: {} ===\n\n", timestamp).as_bytes()).await {
+            if let Err(e) = log_file
+                .write_all(format!("=== CLANGD SESSION ENDED: {} ===\n\n", timestamp).as_bytes())
+                .await
+            {
                 warn!("Failed to write footer to clangd log file: {}", e);
             }
-            
+
             info!("Clangd stderr logging task terminated");
         });
 
@@ -586,16 +596,27 @@ impl LspClient {
                     // Progress updates
                     info!("🔔 LspClient::handle_notification() - Received $/progress notification");
                     if let Some(params) = &response.params {
-                        info!("🔍 LspClient::handle_notification() - Progress params: {:?}", params);
+                        info!(
+                            "🔍 LspClient::handle_notification() - Progress params: {:?}",
+                            params
+                        );
                         if let (Some(token), Some(value)) =
                             (params.get("token"), params.get("value"))
                         {
                             if let Some(token_str) = token.as_str() {
-                                info!("🏷️  LspClient::handle_notification() - Progress token: {:?}", token_str);
+                                info!(
+                                    "🏷️  LspClient::handle_notification() - Progress token: {:?}",
+                                    token_str
+                                );
                                 if token_str == "backgroundIndexProgress" {
-                                    info!("🎯 LspClient::handle_notification() - Matched backgroundIndexProgress token");
+                                    info!(
+                                        "🎯 LspClient::handle_notification() - Matched backgroundIndexProgress token"
+                                    );
                                     if let Some(kind) = value.get("kind").and_then(|k| k.as_str()) {
-                                        info!("📝 LspClient::handle_notification() - Progress kind: {:?}", kind);
+                                        info!(
+                                            "📝 LspClient::handle_notification() - Progress kind: {:?}",
+                                            kind
+                                        );
                                         match kind {
                                             "begin" => {
                                                 let title = value
@@ -612,7 +633,9 @@ impl LspClient {
 
                                                 // Update indexing state
                                                 let mut state = indexing_state.lock().await;
-                                                info!("🔄 LspClient::handle_notification() - Acquired indexing state lock, calling start_indexing()");
+                                                info!(
+                                                    "🔄 LspClient::handle_notification() - Acquired indexing state lock, calling start_indexing()"
+                                                );
                                                 state.start_indexing(title);
                                             }
                                             "report" => {
@@ -633,35 +656,55 @@ impl LspClient {
 
                                                 // Update indexing state
                                                 let mut state = indexing_state.lock().await;
-                                                info!("🔄 LspClient::handle_notification() - Acquired indexing state lock, calling update_progress()");
+                                                info!(
+                                                    "🔄 LspClient::handle_notification() - Acquired indexing state lock, calling update_progress()"
+                                                );
                                                 state.update_progress(message, percentage);
                                             }
                                             "end" => {
-                                                info!("✅ LspClient::handle_notification() - Indexing completed!");
+                                                info!(
+                                                    "✅ LspClient::handle_notification() - Indexing completed!"
+                                                );
 
                                                 // Update indexing state
                                                 let mut state = indexing_state.lock().await;
-                                                info!("🔄 LspClient::handle_notification() - Acquired indexing state lock, calling complete_indexing()");
+                                                info!(
+                                                    "🔄 LspClient::handle_notification() - Acquired indexing state lock, calling complete_indexing()"
+                                                );
                                                 state.complete_indexing();
                                             }
                                             _ => {
-                                                info!("❓ LspClient::handle_notification() - Unknown progress kind: {}", kind);
+                                                info!(
+                                                    "❓ LspClient::handle_notification() - Unknown progress kind: {}",
+                                                    kind
+                                                );
                                             }
                                         }
                                     } else {
-                                        info!("⚠️  LspClient::handle_notification() - No 'kind' field in progress value");
+                                        info!(
+                                            "⚠️  LspClient::handle_notification() - No 'kind' field in progress value"
+                                        );
                                     }
                                 } else {
-                                    info!("🚫 LspClient::handle_notification() - Token '{}' does not match 'backgroundIndexProgress'", token_str);
+                                    info!(
+                                        "🚫 LspClient::handle_notification() - Token '{}' does not match 'backgroundIndexProgress'",
+                                        token_str
+                                    );
                                 }
                             } else {
-                                info!("⚠️  LspClient::handle_notification() - Token is not a string");
+                                info!(
+                                    "⚠️  LspClient::handle_notification() - Token is not a string"
+                                );
                             }
                         } else {
-                            info!("⚠️  LspClient::handle_notification() - Missing token or value in progress params");
+                            info!(
+                                "⚠️  LspClient::handle_notification() - Missing token or value in progress params"
+                            );
                         }
                     } else {
-                        info!("⚠️  LspClient::handle_notification() - No params in $/progress notification");
+                        info!(
+                            "⚠️  LspClient::handle_notification() - No params in $/progress notification"
+                        );
                     }
                 }
                 "textDocument/clangd.fileStatus" => {

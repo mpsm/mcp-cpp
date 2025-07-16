@@ -1,7 +1,6 @@
 use async_trait::async_trait;
 use rust_mcp_sdk::schema::{
-    CallToolRequest, CallToolResult, ListToolsRequest,
-    ListToolsResult, RpcError,
+    CallToolRequest, CallToolResult, ListToolsRequest, ListToolsResult, RpcError,
     schema_utils::CallToolError,
 };
 use rust_mcp_sdk::{McpServer, mcp_server::ServerHandler};
@@ -63,9 +62,14 @@ impl ServerHandler for CppServerHandler {
 
         let result = CppTools::handle_call(
             &tool_name,
-            request.params.arguments.map(serde_json::Value::Object).unwrap_or(serde_json::Value::Null),
+            request
+                .params
+                .arguments
+                .map(serde_json::Value::Object)
+                .unwrap_or(serde_json::Value::Null),
             &self.clangd_manager,
-        ).await;
+        )
+        .await;
 
         log_mcp_message!(Level::INFO, "outgoing", "call_tool", &result);
         log_timing!(
@@ -76,5 +80,4 @@ impl ServerHandler for CppServerHandler {
 
         result
     }
-
 }

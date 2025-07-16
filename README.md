@@ -1,5 +1,10 @@
 # C++ MCP Server
 
+[![CI](https://github.com/mpsm/mcp-cpp/actions/workflows/ci.yml/badge.svg)](https://github.com/mpsm/mcp-cpp/actions/workflows/ci.yml)
+[![License](https://img.shields.io/github/license/mpsm/mcp-cpp)](LICENSE)
+[![Rust](https://img.shields.io/badge/rust-2024%2B-orange.svg)](https://www.rust-lang.org)
+[![Crates.io](https://img.shields.io/crates/v/mcp-cpp-server?label=crates.io)](https://crates.io/crates/mcp-cpp-server)
+
 A high-performance Model Context Protocol (MCP) server providing comprehensive C++ code analysis capabilities through integration with clangd Language Server Protocol (LSP). Designed to enable AI agents to work with C++ codebases with the same semantic understanding as modern IDEs.
 
 ## Why This MCP Server?

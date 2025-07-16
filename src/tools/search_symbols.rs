@@ -6,12 +6,12 @@ use serde_json::json;
 use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::Mutex;
-use tracing::{warn, info, instrument};
+use tracing::{info, instrument, warn};
 
-use crate::cmake::CmakeProjectStatus;
-use crate::lsp::ClangdManager;
 use super::serialize_result;
 use super::symbol_filtering::{SymbolFilter, SymbolUtilities};
+use crate::cmake::CmakeProjectStatus;
+use crate::lsp::ClangdManager;
 
 #[mcp_tool(
     name = "search_symbols",
@@ -77,7 +77,7 @@ use super::symbol_filtering::{SymbolFilter, SymbolUtilities};
 #[derive(Debug, ::serde::Serialize, JsonSchema)]
 pub struct SearchSymbolsTool {
     /// Search query using clangd's native syntax. REQUIRED.
-    /// 
+    ///
     /// SYNTAX OPTIONS:
     /// • Fuzzy matching: "vector" → finds std::vector, my_vector, vector_impl
     /// • Qualified names: "std::vector", "MyNamespace::MyClass"
@@ -85,49 +85,49 @@ pub struct SearchSymbolsTool {
     /// • Global scope: "::main", "::global_var" → global symbols only
     /// • Prefix matching: "get_" → finds all getters, "set_" → all setters
     /// • Class methods: "MyClass::" → all class members
-    /// 
+    ///
     /// WILDCARD LIMITATIONS:
     /// • Traditional wildcards NOT supported: "Math*" does NOT work as expected
     /// • Bare "*" returns empty results - use fuzzy search instead
     /// • Use "Math" to find Math, MathUtils, MathClass, etc.
     pub query: String,
-    
+
     /// Optional symbol kinds to filter results by type. DEFAULT: all kinds.
-    /// 
-    /// SUPPORTED KINDS: "class", "struct", "enum", "function", "method", "variable", 
+    ///
+    /// SUPPORTED KINDS: "class", "struct", "enum", "function", "method", "variable",
     /// "field", "namespace", "typedef", "macro", "constructor", "destructor", "operator",
-    /// "interface", "property", "event", "constant", "array", "boolean", "key", "null", 
+    /// "interface", "property", "event", "constant", "array", "boolean", "key", "null",
     /// "number", "object", "string", "enumMember", "typeParameter"
-    /// 
+    ///
     /// EXAMPLES: ["class", "struct"] → only classes and structs
     ///           ["function", "method"] → only callable symbols
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub kinds: Option<Vec<String>>,
-    
+
     /// Optional file paths to limit search scope. DEFAULT: entire workspace.
-    /// 
+    ///
     /// FORMATS ACCEPTED:
     /// • Relative paths: "src/math.cpp", "include/utils.h"
-    /// • Absolute paths: "/home/project/src/main.cpp" 
+    /// • Absolute paths: "/home/project/src/main.cpp"
     /// • Directory patterns: "src/", "include/math/"
-    /// 
-    /// BEHAVIOR: When specified, uses document symbol search for detailed 
+    ///
+    /// BEHAVIOR: When specified, uses document symbol search for detailed
     /// per-file results instead of workspace-wide search.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub files: Option<Vec<String>>,
-    
+
     /// Maximum number of results to return. DEFAULT: 100. RANGE: 1-1000.
-    /// 
-    /// Use lower values (10-50) for quick exploration, higher values (200-1000) 
+    ///
+    /// Use lower values (10-50) for quick exploration, higher values (200-1000)
     /// for comprehensive analysis. Results are ranked by clangd relevance scoring.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_results: Option<u32>,
-    
+
     /// Include external symbols from system libraries. DEFAULT: false.
-    /// 
+    ///
     /// PROJECT SCOPE (false): Only project files and project-specific headers
     /// EXTERNAL SCOPE (true): Includes std::, boost::, system headers, third-party libs
-    /// 
+    ///
     /// PERFORMANCE NOTE: External scope adds ~1-3 seconds for comprehensive searches.
     /// Project boundaries auto-detected via CMake compilation database analysis.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -153,7 +153,7 @@ impl<'de> serde::Deserialize<'de> for SearchSymbolsTool {
         }
 
         let helper = SearchSymbolsToolHelper::deserialize(deserializer)?;
-        
+
         Ok(SearchSymbolsTool {
             query: helper.query,
             kinds: helper.kinds,
@@ -170,8 +170,10 @@ impl SearchSymbolsTool {
         &self,
         clangd_manager: &Arc<Mutex<ClangdManager>>,
     ) -> Result<CallToolResult, CallToolError> {
-        info!("Searching symbols: query='{}', kinds={:?}, files={:?}, max_results={:?}, include_external={:?}", 
-              self.query, self.kinds, self.files, self.max_results, self.include_external);
+        info!(
+            "Searching symbols: query='{}', kinds={:?}, files={:?}, max_results={:?}, include_external={:?}",
+            self.query, self.kinds, self.files, self.max_results, self.include_external
+        );
 
         // Handle automatic clangd setup if needed
         let build_path = match Self::resolve_build_directory() {
@@ -310,11 +312,15 @@ impl SearchSymbolsTool {
                                 let matching_symbols: Vec<_> = symbol_array
                                     .iter()
                                     .filter(|symbol| {
-                                        SymbolUtilities::matches_query_and_filters(symbol, &self.query, &self.kinds)
+                                        SymbolUtilities::matches_query_and_filters(
+                                            symbol,
+                                            &self.query,
+                                            &self.kinds,
+                                        )
                                     })
                                     .cloned()
                                     .collect();
-                                
+
                                 all_symbols.extend(matching_symbols);
                             }
                         }
@@ -341,7 +347,8 @@ impl SearchSymbolsTool {
 
         // Apply external filtering and limit results
         let include_external = self.include_external.unwrap_or(false);
-        let filtered_symbols = SymbolFilter::filter_symbols(all_symbols, include_external, &self.kinds, manager).await;
+        let filtered_symbols =
+            SymbolFilter::filter_symbols(all_symbols, include_external, &self.kinds, manager).await;
         let limited_symbols = SymbolUtilities::limit_results(filtered_symbols, self.max_results);
         let converted_symbols = SymbolUtilities::convert_symbol_kinds(limited_symbols);
 
@@ -374,18 +381,28 @@ impl SearchSymbolsTool {
     ) -> Result<CallToolResult, CallToolError> {
         // Check current indexing state before waiting
         let initial_indexing_state = manager.get_indexing_state().await;
-        info!("🔍 SearchSymbolsTool::search_workspace() - Initial indexing state: {:?}, is_indexing: {}, message: {:?}", 
-              initial_indexing_state.status, initial_indexing_state.is_indexing(), initial_indexing_state.message);
-        
+        info!(
+            "🔍 SearchSymbolsTool::search_workspace() - Initial indexing state: {:?}, is_indexing: {}, message: {:?}",
+            initial_indexing_state.status,
+            initial_indexing_state.is_indexing(),
+            initial_indexing_state.message
+        );
+
         // Wait for indexing to complete if not already completed
         if initial_indexing_state.status != crate::lsp::types::IndexingStatus::Completed {
-            info!("⏳ SearchSymbolsTool::search_workspace() - Waiting for indexing completion before workspace symbol search (current status: {:?})", initial_indexing_state.status);
+            info!(
+                "⏳ SearchSymbolsTool::search_workspace() - Waiting for indexing completion before workspace symbol search (current status: {:?})",
+                initial_indexing_state.status
+            );
             if let Err(e) = manager
                 .wait_for_indexing_completion(std::time::Duration::from_secs(30))
                 .await
             {
                 let final_indexing_state = manager.get_indexing_state().await;
-                warn!("⏰ SearchSymbolsTool::search_workspace() - Indexing wait timed out: {}, final state: {:?}", e, final_indexing_state);
+                warn!(
+                    "⏰ SearchSymbolsTool::search_workspace() - Indexing wait timed out: {}, final state: {:?}",
+                    e, final_indexing_state
+                );
                 let content = json!({
                     "success": false,
                     "error": format!("Indexing timeout: {}", e),
@@ -393,7 +410,7 @@ impl SearchSymbolsTool {
                     "query": self.query,
                     "initial_status": match initial_indexing_state.status {
                         crate::lsp::types::IndexingStatus::NotStarted => "not_started",
-                        crate::lsp::types::IndexingStatus::InProgress => "in_progress", 
+                        crate::lsp::types::IndexingStatus::InProgress => "in_progress",
                         crate::lsp::types::IndexingStatus::Completed => "completed",
                     },
                     "indexing_status": SymbolUtilities::format_indexing_status(&final_indexing_state)
@@ -404,7 +421,9 @@ impl SearchSymbolsTool {
                 )]));
             }
         } else {
-            info!("✅ SearchSymbolsTool::search_workspace() - Indexing already completed, proceeding with symbol search");
+            info!(
+                "✅ SearchSymbolsTool::search_workspace() - Indexing already completed, proceeding with symbol search"
+            );
         }
 
         // Send workspace symbol request with user's query
@@ -412,27 +431,54 @@ impl SearchSymbolsTool {
             "query": self.query
         });
 
-        info!("📡 SearchSymbolsTool::search_workspace() - Sending workspace/symbol LSP request with query: '{}'", self.query);
+        info!(
+            "📡 SearchSymbolsTool::search_workspace() - Sending workspace/symbol LSP request with query: '{}'",
+            self.query
+        );
         match manager
             .send_lsp_request("workspace/symbol".to_string(), Some(params))
             .await
         {
             Ok(symbols) => {
-                info!("✅ SearchSymbolsTool::search_workspace() - LSP request succeeded, received response");
+                info!(
+                    "✅ SearchSymbolsTool::search_workspace() - LSP request succeeded, received response"
+                );
                 let symbol_array = symbols.as_array().unwrap_or(&vec![]).clone();
-                info!("📊 SearchSymbolsTool::search_workspace() - Raw symbols count: {}", symbol_array.len());
-                
+                info!(
+                    "📊 SearchSymbolsTool::search_workspace() - Raw symbols count: {}",
+                    symbol_array.len()
+                );
+
                 // Apply external filtering and other filters
                 let include_external = self.include_external.unwrap_or(false);
-                info!("🔍 SearchSymbolsTool::search_workspace() - Applying filtering: include_external={}, kinds={:?}", include_external, self.kinds);
-                let filtered_symbols = SymbolFilter::filter_symbols(symbol_array, include_external, &self.kinds, manager).await;
-                info!("📊 SearchSymbolsTool::search_workspace() - Filtered symbols count: {}", filtered_symbols.len());
-                
-                let limited_symbols = SymbolUtilities::limit_results(filtered_symbols, self.max_results);
-                info!("📊 SearchSymbolsTool::search_workspace() - Limited symbols count: {}", limited_symbols.len());
-                
+                info!(
+                    "🔍 SearchSymbolsTool::search_workspace() - Applying filtering: include_external={}, kinds={:?}",
+                    include_external, self.kinds
+                );
+                let filtered_symbols = SymbolFilter::filter_symbols(
+                    symbol_array,
+                    include_external,
+                    &self.kinds,
+                    manager,
+                )
+                .await;
+                info!(
+                    "📊 SearchSymbolsTool::search_workspace() - Filtered symbols count: {}",
+                    filtered_symbols.len()
+                );
+
+                let limited_symbols =
+                    SymbolUtilities::limit_results(filtered_symbols, self.max_results);
+                info!(
+                    "📊 SearchSymbolsTool::search_workspace() - Limited symbols count: {}",
+                    limited_symbols.len()
+                );
+
                 let converted_symbols = SymbolUtilities::convert_symbol_kinds(limited_symbols);
-                info!("📊 SearchSymbolsTool::search_workspace() - Final symbols count: {}", converted_symbols.len());
+                info!(
+                    "📊 SearchSymbolsTool::search_workspace() - Final symbols count: {}",
+                    converted_symbols.len()
+                );
 
                 let final_indexing_state = manager.get_indexing_state().await;
                 let opened_files_count = manager.get_opened_files_count().await;
@@ -457,7 +503,10 @@ impl SearchSymbolsTool {
                 )]))
             }
             Err(e) => {
-                warn!("❌ SearchSymbolsTool::search_workspace() - LSP request failed: {}", e);
+                warn!(
+                    "❌ SearchSymbolsTool::search_workspace() - LSP request failed: {}",
+                    e
+                );
                 let indexing_state = manager.get_indexing_state().await;
                 let content = json!({
                     "success": false,
@@ -515,7 +564,10 @@ mod tests {
         });
         let tool: SearchSymbolsTool = serde_json::from_value(json_data).unwrap();
         assert_eq!(tool.query, "vector");
-        assert_eq!(tool.kinds, Some(vec!["class".to_string(), "function".to_string()]));
+        assert_eq!(
+            tool.kinds,
+            Some(vec!["class".to_string(), "function".to_string()])
+        );
         assert_eq!(tool.max_results, Some(50));
         assert_eq!(tool.include_external, None);
         assert_eq!(tool.files, None);

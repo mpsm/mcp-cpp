@@ -5,8 +5,8 @@ use rust_mcp_sdk::schema::{CallToolResult, TextContent, schema_utils::CallToolEr
 use serde_json::json;
 use tracing::{error, info, instrument};
 
-use crate::cmake::{CmakeError, CmakeProjectStatus};
 use super::serialize_result;
+use crate::cmake::{CmakeError, CmakeProjectStatus};
 
 #[mcp_tool(
     name = "list_build_dirs",

@@ -6,12 +6,12 @@ use serde_json::json;
 use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::Mutex;
-use tracing::{warn, info, instrument};
+use tracing::{info, instrument, warn};
 
-use crate::cmake::CmakeProjectStatus;
-use crate::lsp::ClangdManager;
 use super::serialize_result;
 use super::symbol_filtering::SymbolUtilities;
+use crate::cmake::CmakeProjectStatus;
+use crate::lsp::ClangdManager;
 
 #[mcp_tool(
     name = "analyze_symbol_context",
@@ -81,66 +81,66 @@ use super::symbol_filtering::SymbolUtilities;
 #[derive(Debug, ::serde::Serialize, JsonSchema)]
 pub struct AnalyzeSymbolContextTool {
     /// The symbol name to analyze. REQUIRED.
-    /// 
+    ///
     /// EXAMPLES:
     /// • Simple names: "MyClass", "factorial", "calculateSum"
     /// • Fully qualified: "std::vector", "MyNamespace::MyClass"  
     /// • Global scope: "::main", "::global_var"
     /// • Methods: "MyClass::method" (class context will be analyzed)
-    /// 
-    /// For overloaded functions or template specializations, consider providing 
+    ///
+    /// For overloaded functions or template specializations, consider providing
     /// the optional 'location' parameter for precise disambiguation.
     pub symbol: String,
-    
+
     /// Optional file location to disambiguate symbols with identical names.
-    /// 
+    ///
     /// USE WHEN: Multiple symbols exist with the same name (overloaded functions,
     /// template specializations, symbols in different namespaces/classes).
-    /// 
+    ///
     /// FORMATS ACCEPTED:
-    /// • Relative path: "src/math.cpp" 
+    /// • Relative path: "src/math.cpp"
     /// • Absolute path: "/home/project/src/math.cpp"
     /// • File URI: "file:///home/project/src/math.cpp"
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub location: Option<SymbolLocation>,
-    
+
     /// Include usage patterns and concrete code examples. DEFAULT: false.
-    /// 
+    ///
     /// ENABLES: Reference counting, usage statistics, file distribution analysis,
     /// and up to 'max_usage_examples' concrete code snippets showing how the symbol is used.
-    /// 
+    ///
     /// PERFORMANCE NOTE: Adds ~2-5 seconds to analysis time for heavily used symbols.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub include_usage_patterns: Option<bool>,
-    
+
     /// Maximum number of usage examples to include. DEFAULT: 5. RANGE: 1-20.
-    /// 
+    ///
     /// Only relevant when 'include_usage_patterns' is true.
     /// Each example includes file location, code context, and usage pattern classification.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_usage_examples: Option<u32>,
-    
+
     /// Include class inheritance and hierarchy information. DEFAULT: false.
-    /// 
+    ///
     /// ENABLES: Base class discovery, derived class mapping, virtual function analysis.
     /// APPLIES TO: Classes, structs, interfaces - ignored for functions/variables.
-    /// 
+    ///
     /// PERFORMANCE NOTE: Adds ~1-3 seconds for complex inheritance hierarchies.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub include_inheritance: Option<bool>,
-    
+
     /// Include function call relationships and dependency analysis. DEFAULT: false.
-    /// 
+    ///
     /// ENABLES: Incoming calls (who calls this), outgoing calls (what this calls),
     /// call chain traversal up to 'max_call_depth' levels.
     /// APPLIES TO: Functions, methods, constructors - ignored for variables/types.
-    /// 
+    ///
     /// PERFORMANCE NOTE: Adds ~2-8 seconds depending on call complexity and depth.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub include_call_hierarchy: Option<bool>,
-    
+
     /// Maximum depth for call hierarchy traversal. DEFAULT: 3. RANGE: 1-10.
-    /// 
+    ///
     /// Only relevant when 'include_call_hierarchy' is true.
     /// Controls how deep to follow the call chain (depth 1 = direct calls only,
     /// depth 3 = calls → calls of calls → calls of calls of calls).
@@ -151,22 +151,22 @@ pub struct AnalyzeSymbolContextTool {
 #[derive(Debug, PartialEq, ::serde::Serialize, ::serde::Deserialize, JsonSchema)]
 pub struct SymbolLocation {
     /// File path or URI where the symbol is located.
-    /// 
+    ///
     /// ACCEPTED FORMATS:
     /// • Relative path: "src/math.cpp", "include/utils.h"
-    /// • Absolute path: "/home/project/src/math.cpp" 
+    /// • Absolute path: "/home/project/src/math.cpp"
     /// • File URI: "file:///home/project/src/math.cpp"
     pub file_uri: String,
-    
+
     /// Precise position within the file for disambiguation.
-    /// Use this to target a specific occurrence when multiple symbols 
+    /// Use this to target a specific occurrence when multiple symbols
     /// with the same name exist in the same file.
     pub position: SymbolPosition,
 }
 
 #[derive(Debug, PartialEq, ::serde::Serialize, ::serde::Deserialize, JsonSchema)]
 pub struct SymbolPosition {
-    /// Line number (0-based indexing). 
+    /// Line number (0-based indexing).
     /// Example: line 0 = first line, line 10 = eleventh line
     pub line: u32,
     /// Character position within the line (0-based indexing).
@@ -197,7 +197,7 @@ impl<'de> serde::Deserialize<'de> for AnalyzeSymbolContextTool {
         }
 
         let helper = AnalyzeSymbolContextToolHelper::deserialize(deserializer)?;
-        
+
         Ok(AnalyzeSymbolContextTool {
             symbol: helper.symbol,
             location: helper.location,
@@ -228,8 +228,14 @@ impl AnalyzeSymbolContextTool {
         &self,
         clangd_manager: &Arc<Mutex<ClangdManager>>,
     ) -> Result<CallToolResult, CallToolError> {
-        info!("🔍 AnalyzeSymbolContextTool::call_tool() - Starting analysis: symbol='{}', location={:?}, include_usage_patterns={}, include_inheritance={}, include_call_hierarchy={}", 
-              self.symbol, self.location, self.include_usage_patterns.unwrap_or(false), self.include_inheritance.unwrap_or(false), self.include_call_hierarchy.unwrap_or(false));
+        info!(
+            "🔍 AnalyzeSymbolContextTool::call_tool() - Starting analysis: symbol='{}', location={:?}, include_usage_patterns={}, include_inheritance={}, include_call_hierarchy={}",
+            self.symbol,
+            self.location,
+            self.include_usage_patterns.unwrap_or(false),
+            self.include_inheritance.unwrap_or(false),
+            self.include_call_hierarchy.unwrap_or(false)
+        );
 
         // Handle automatic clangd setup if needed
         let build_path = match Self::resolve_build_directory() {
@@ -306,21 +312,33 @@ impl AnalyzeSymbolContextTool {
             .map(|p| p.display().to_string())
             .unwrap_or_else(|| "none".to_string());
 
-        info!("🔧 AnalyzeSymbolContextTool::call_tool() - Using build directory: {}", build_directory);
+        info!(
+            "🔧 AnalyzeSymbolContextTool::call_tool() - Using build directory: {}",
+            build_directory
+        );
 
         // Wait for indexing completion to ensure accurate results
         let initial_indexing_state = manager_guard.get_indexing_state().await;
-        info!("🔍 AnalyzeSymbolContextTool::call_tool() - Initial indexing state: {:?}, is_indexing: {}, message: {:?}", 
-              initial_indexing_state.status, initial_indexing_state.is_indexing(), initial_indexing_state.message);
-        
+        info!(
+            "🔍 AnalyzeSymbolContextTool::call_tool() - Initial indexing state: {:?}, is_indexing: {}, message: {:?}",
+            initial_indexing_state.status,
+            initial_indexing_state.is_indexing(),
+            initial_indexing_state.message
+        );
+
         if initial_indexing_state.status != crate::lsp::types::IndexingStatus::Completed {
-            info!("⏳ AnalyzeSymbolContextTool::call_tool() - Waiting for indexing completion before symbol analysis");
+            info!(
+                "⏳ AnalyzeSymbolContextTool::call_tool() - Waiting for indexing completion before symbol analysis"
+            );
             if let Err(e) = manager_guard
                 .wait_for_indexing_completion(std::time::Duration::from_secs(30))
                 .await
             {
                 let final_indexing_state = manager_guard.get_indexing_state().await;
-                warn!("⏰ AnalyzeSymbolContextTool::call_tool() - Indexing wait timed out: {}, final state: {:?}", e, final_indexing_state);
+                warn!(
+                    "⏰ AnalyzeSymbolContextTool::call_tool() - Indexing wait timed out: {}, final state: {:?}",
+                    e, final_indexing_state
+                );
                 let content = json!({
                     "success": false,
                     "error": format!("Indexing timeout: {}", e),
@@ -334,23 +352,38 @@ impl AnalyzeSymbolContextTool {
                 )]));
             }
         } else {
-            info!("✅ AnalyzeSymbolContextTool::call_tool() - Indexing already completed, proceeding with analysis");
+            info!(
+                "✅ AnalyzeSymbolContextTool::call_tool() - Indexing already completed, proceeding with analysis"
+            );
         }
 
         // Step 1: Find the symbol using workspace search
-        info!("🔍 AnalyzeSymbolContextTool::call_tool() - Step 1: Finding symbol location for '{}'", self.symbol);
-        let indexing_completion_time = if initial_indexing_state.status == crate::lsp::types::IndexingStatus::Completed {
-            Some(std::time::Instant::now())
-        } else {
-            None
-        };
-        let symbol_location = match self.find_symbol_location(&manager_guard, indexing_completion_time).await {
+        info!(
+            "🔍 AnalyzeSymbolContextTool::call_tool() - Step 1: Finding symbol location for '{}'",
+            self.symbol
+        );
+        let indexing_completion_time =
+            if initial_indexing_state.status == crate::lsp::types::IndexingStatus::Completed {
+                Some(std::time::Instant::now())
+            } else {
+                None
+            };
+        let symbol_location = match self
+            .find_symbol_location(&manager_guard, indexing_completion_time)
+            .await
+        {
             Ok(Some(location)) => {
-                info!("✅ AnalyzeSymbolContextTool::call_tool() - Step 1: Found symbol location: {:?}", location);
+                info!(
+                    "✅ AnalyzeSymbolContextTool::call_tool() - Step 1: Found symbol location: {:?}",
+                    location
+                );
                 location
-            },
+            }
             Ok(None) => {
-                warn!("❌ AnalyzeSymbolContextTool::call_tool() - Step 1: Symbol '{}' not found in workspace", self.symbol);
+                warn!(
+                    "❌ AnalyzeSymbolContextTool::call_tool() - Step 1: Symbol '{}' not found in workspace",
+                    self.symbol
+                );
                 let indexing_state = manager_guard.get_indexing_state().await;
                 let content = json!({
                     "success": false,
@@ -366,7 +399,10 @@ impl AnalyzeSymbolContextTool {
                 )]));
             }
             Err(e) => {
-                warn!("❌ AnalyzeSymbolContextTool::call_tool() - Step 1: Symbol search failed: {}", e);
+                warn!(
+                    "❌ AnalyzeSymbolContextTool::call_tool() - Step 1: Symbol search failed: {}",
+                    e
+                );
                 let indexing_state = manager_guard.get_indexing_state().await;
                 let content = json!({
                     "success": false,
@@ -383,18 +419,26 @@ impl AnalyzeSymbolContextTool {
 
         // Step 2: Get detailed information via hover
         info!("🔍 AnalyzeSymbolContextTool::call_tool() - Step 2: Getting hover information");
-        let hover_info = self.get_hover_information(&manager_guard, &symbol_location).await?;
+        let hover_info = self
+            .get_hover_information(&manager_guard, &symbol_location)
+            .await?;
         info!("✅ AnalyzeSymbolContextTool::call_tool() - Step 2: Got hover information");
 
         // Step 3: Get definition and declaration locations
-        info!("🔍 AnalyzeSymbolContextTool::call_tool() - Step 3: Getting symbol locations (definition/declaration)");
-        let (definition_location, declaration_location) = self.get_symbol_locations(&manager_guard, &symbol_location).await;
+        info!(
+            "🔍 AnalyzeSymbolContextTool::call_tool() - Step 3: Getting symbol locations (definition/declaration)"
+        );
+        let (definition_location, declaration_location) = self
+            .get_symbol_locations(&manager_guard, &symbol_location)
+            .await;
         info!("✅ AnalyzeSymbolContextTool::call_tool() - Step 3: Got symbol locations");
 
         // Step 4: Get reference count and usage statistics
         let usage_stats = if self.include_usage_patterns.unwrap_or(false) {
             info!("🔍 AnalyzeSymbolContextTool::call_tool() - Step 4: Getting usage statistics");
-            let result = self.get_usage_statistics(&manager_guard, &symbol_location).await;
+            let result = self
+                .get_usage_statistics(&manager_guard, &symbol_location)
+                .await;
             info!("✅ AnalyzeSymbolContextTool::call_tool() - Step 4: Got usage statistics");
             result
         } else {
@@ -404,19 +448,27 @@ impl AnalyzeSymbolContextTool {
 
         // Step 5: Get inheritance information if requested
         let inheritance_info = if self.include_inheritance.unwrap_or(false) {
-            info!("🔍 AnalyzeSymbolContextTool::call_tool() - Step 5: Getting inheritance information");
-            let result = self.get_inheritance_information(&manager_guard, &symbol_location).await;
+            info!(
+                "🔍 AnalyzeSymbolContextTool::call_tool() - Step 5: Getting inheritance information"
+            );
+            let result = self
+                .get_inheritance_information(&manager_guard, &symbol_location)
+                .await;
             info!("✅ AnalyzeSymbolContextTool::call_tool() - Step 5: Got inheritance information");
             result
         } else {
-            info!("⏭️  AnalyzeSymbolContextTool::call_tool() - Step 5: Skipping inheritance information");
+            info!(
+                "⏭️  AnalyzeSymbolContextTool::call_tool() - Step 5: Skipping inheritance information"
+            );
             None
         };
 
         // Step 6: Get usage examples if requested
         let usage_examples = if self.include_usage_patterns.unwrap_or(false) {
             info!("🔍 AnalyzeSymbolContextTool::call_tool() - Step 6: Getting usage examples");
-            let result = self.get_usage_examples(&manager_guard, &symbol_location).await;
+            let result = self
+                .get_usage_examples(&manager_guard, &symbol_location)
+                .await;
             info!("✅ AnalyzeSymbolContextTool::call_tool() - Step 6: Got usage examples");
             result
         } else {
@@ -427,21 +479,27 @@ impl AnalyzeSymbolContextTool {
         // Step 7: Get call relationships if requested
         let call_relationships = if self.include_call_hierarchy.unwrap_or(false) {
             info!("🔍 AnalyzeSymbolContextTool::call_tool() - Step 7: Getting call relationships");
-            let result = self.get_call_relationships(&manager_guard, &symbol_location).await;
+            let result = self
+                .get_call_relationships(&manager_guard, &symbol_location)
+                .await;
             info!("✅ AnalyzeSymbolContextTool::call_tool() - Step 7: Got call relationships");
             result
         } else {
-            info!("⏭️  AnalyzeSymbolContextTool::call_tool() - Step 7: Skipping call relationships");
+            info!(
+                "⏭️  AnalyzeSymbolContextTool::call_tool() - Step 7: Skipping call relationships"
+            );
             None
         };
 
         // Step 8: Get class members if symbol is a class or struct
-        let class_members = self.get_class_members(&manager_guard, &symbol_location, &hover_info).await;
+        let class_members = self
+            .get_class_members(&manager_guard, &symbol_location, &hover_info)
+            .await;
 
         // Step 9: Build comprehensive symbol information
         let symbol_info = self.build_comprehensive_symbol_info(SymbolAnalysisData {
-            symbol_location: &symbol_location, 
-            hover_info: &hover_info, 
+            symbol_location: &symbol_location,
+            hover_info: &hover_info,
             definition_location: definition_location.as_ref(),
             declaration_location: declaration_location.as_ref(),
             usage_stats: usage_stats.as_ref(),
@@ -487,11 +545,17 @@ impl AnalyzeSymbolContextTool {
         manager: &ClangdManager,
         indexing_completion_time: Option<std::time::Instant>,
     ) -> Result<Option<serde_json::Value>, String> {
-        info!("🔍 AnalyzeSymbolContextTool::find_symbol_location() - Looking for symbol: '{}'", self.symbol);
-        
+        info!(
+            "🔍 AnalyzeSymbolContextTool::find_symbol_location() - Looking for symbol: '{}'",
+            self.symbol
+        );
+
         // If location is provided, use it directly for hover
         if let Some(location) = &self.location {
-            info!("✅ AnalyzeSymbolContextTool::find_symbol_location() - Using provided location: {:?}", location);
+            info!(
+                "✅ AnalyzeSymbolContextTool::find_symbol_location() - Using provided location: {:?}",
+                location
+            );
             return Ok(Some(json!({
                 "uri": location.file_uri,
                 "range": {
@@ -512,36 +576,50 @@ impl AnalyzeSymbolContextTool {
             "query": self.symbol
         });
 
-        info!("📡 AnalyzeSymbolContextTool::find_symbol_location() - Sending workspace/symbol LSP request");
-        
+        info!(
+            "📡 AnalyzeSymbolContextTool::find_symbol_location() - Sending workspace/symbol LSP request"
+        );
+
         // Check if we should apply backoff strategy (within 5s of indexing completion)
         let should_apply_backoff = if let Some(completion_time) = indexing_completion_time {
             let elapsed = completion_time.elapsed();
             let within_window = elapsed < std::time::Duration::from_secs(5);
-            info!("🕐 AnalyzeSymbolContextTool::find_symbol_location() - Indexing completed {}ms ago, applying backoff: {}", 
-                  elapsed.as_millis(), within_window);
+            info!(
+                "🕐 AnalyzeSymbolContextTool::find_symbol_location() - Indexing completed {}ms ago, applying backoff: {}",
+                elapsed.as_millis(),
+                within_window
+            );
             within_window
         } else {
-            info!("🕐 AnalyzeSymbolContextTool::find_symbol_location() - No recent indexing completion, skipping backoff");
+            info!(
+                "🕐 AnalyzeSymbolContextTool::find_symbol_location() - No recent indexing completion, skipping backoff"
+            );
             false
         };
-        
+
         // Implement backoff strategy for empty results only if recently indexed
         let max_retries = if should_apply_backoff { 5 } else { 1 };
         let mut attempt = 0;
-        
+
         loop {
             attempt += 1;
-            
+
             match manager
                 .send_lsp_request("workspace/symbol".to_string(), Some(params.clone()))
                 .await
             {
                 Ok(symbols) => {
-                    info!("✅ AnalyzeSymbolContextTool::find_symbol_location() - Got workspace/symbol response (attempt {})", attempt);
+                    info!(
+                        "✅ AnalyzeSymbolContextTool::find_symbol_location() - Got workspace/symbol response (attempt {})",
+                        attempt
+                    );
                     if let Some(symbol_array) = symbols.as_array() {
-                        info!("📊 AnalyzeSymbolContextTool::find_symbol_location() - Found {} symbols (attempt {})", symbol_array.len(), attempt);
-                        
+                        info!(
+                            "📊 AnalyzeSymbolContextTool::find_symbol_location() - Found {} symbols (attempt {})",
+                            symbol_array.len(),
+                            attempt
+                        );
+
                         // If we have symbols, proceed with matching
                         if !symbol_array.is_empty() {
                             // Find exact match or best match using improved logic
@@ -553,22 +631,26 @@ impl AnalyzeSymbolContextTool {
                                         if name == self.symbol {
                                             return true;
                                         }
-                                        
+
                                         // Check for qualified name match
-                                        if let Some(detail) = s.get("detail").and_then(|d| d.as_str()) {
+                                        if let Some(detail) =
+                                            s.get("detail").and_then(|d| d.as_str())
+                                        {
                                             if detail.contains(&self.symbol) {
                                                 return true;
                                             }
                                         }
-                                        
+
                                         // Check container scope for qualified matches
-                                        if let Some(container) = s.get("containerName").and_then(|c| c.as_str()) {
+                                        if let Some(container) =
+                                            s.get("containerName").and_then(|c| c.as_str())
+                                        {
                                             let qualified = format!("{}::{}", container, name);
                                             if qualified == self.symbol {
                                                 return true;
                                             }
                                         }
-                                        
+
                                         false
                                     } else {
                                         false
@@ -578,7 +660,8 @@ impl AnalyzeSymbolContextTool {
                                     // Fallback: partial match
                                     symbol_array.iter().find(|s| {
                                         if let Some(name) = s.get("name").and_then(|n| n.as_str()) {
-                                            name.contains(&self.symbol) || self.symbol.contains(name)
+                                            name.contains(&self.symbol)
+                                                || self.symbol.contains(name)
                                         } else {
                                             false
                                         }
@@ -592,15 +675,19 @@ impl AnalyzeSymbolContextTool {
                                 }
                             }
                         }
-                        
+
                         // If we got empty results and haven't exhausted retries, wait and try again
-                        if symbol_array.is_empty() && attempt < max_retries && should_apply_backoff {
-                            info!("⏳ AnalyzeSymbolContextTool::find_symbol_location() - Empty results on attempt {} ({}ms after indexing), retrying in 1s...", 
-                                  attempt, indexing_completion_time.unwrap().elapsed().as_millis());
+                        if symbol_array.is_empty() && attempt < max_retries && should_apply_backoff
+                        {
+                            info!(
+                                "⏳ AnalyzeSymbolContextTool::find_symbol_location() - Empty results on attempt {} ({}ms after indexing), retrying in 1s...",
+                                attempt,
+                                indexing_completion_time.unwrap().elapsed().as_millis()
+                            );
                             tokio::time::sleep(std::time::Duration::from_secs(1)).await;
                             continue;
                         }
-                        
+
                         // Either we have symbols but no matches, or we've exhausted retries
                         return Ok(None);
                     }
@@ -630,7 +717,11 @@ impl AnalyzeSymbolContextTool {
             if let Some(file_path_str) = uri.strip_prefix("file://") {
                 let file_path = std::path::PathBuf::from(file_path_str);
                 if let Err(e) = manager.open_file_if_needed(&file_path).await {
-                    info!("Failed to open file {} for symbol analysis: {}", file_path.display(), e);
+                    info!(
+                        "Failed to open file {} for symbol analysis: {}",
+                        file_path.display(),
+                        e
+                    );
                     return (None, None);
                 }
             }
@@ -685,7 +776,11 @@ impl AnalyzeSymbolContextTool {
             if let Some(file_path_str) = uri.strip_prefix("file://") {
                 let file_path = std::path::PathBuf::from(file_path_str);
                 if let Err(e) = manager.open_file_if_needed(&file_path).await {
-                    info!("Failed to open file {} for usage statistics: {}", file_path.display(), e);
+                    info!(
+                        "Failed to open file {} for usage statistics: {}",
+                        file_path.display(),
+                        e
+                    );
                     return None;
                 }
             }
@@ -708,7 +803,7 @@ impl AnalyzeSymbolContextTool {
                     if let Some(references) = references_result.as_array() {
                         let total_references = references.len();
                         let mut file_count = std::collections::HashSet::new();
-                        
+
                         // Count unique files
                         for reference in references {
                             if let Some(uri) = reference.get("uri").and_then(|u| u.as_str()) {
@@ -719,10 +814,10 @@ impl AnalyzeSymbolContextTool {
                         return Some(json!({
                             "total_references": total_references,
                             "files_containing_references": file_count.len(),
-                            "reference_density": if !file_count.is_empty() { 
-                                total_references as f64 / file_count.len() as f64 
-                            } else { 
-                                0.0 
+                            "reference_density": if !file_count.is_empty() {
+                                total_references as f64 / file_count.len() as f64
+                            } else {
+                                0.0
                             }
                         }));
                     }
@@ -747,7 +842,11 @@ impl AnalyzeSymbolContextTool {
                 let file_path = std::path::PathBuf::from(file_path_str);
                 info!("Opening file: {}", file_path.display());
                 if let Err(e) = manager.open_file_if_needed(&file_path).await {
-                    info!("Failed to open file {} for inheritance analysis: {}", file_path.display(), e);
+                    info!(
+                        "Failed to open file {} for inheritance analysis: {}",
+                        file_path.display(),
+                        e
+                    );
                     return None;
                 } else {
                     info!("File opening call completed for: {}", file_path.display());
@@ -766,7 +865,10 @@ impl AnalyzeSymbolContextTool {
 
                 // First prepare type hierarchy item
                 if let Ok(type_hierarchy_result) = manager
-                    .send_lsp_request("textDocument/prepareTypeHierarchy".to_string(), Some(params))
+                    .send_lsp_request(
+                        "textDocument/prepareTypeHierarchy".to_string(),
+                        Some(params),
+                    )
                     .await
                 {
                     if let Some(hierarchy_items) = type_hierarchy_result.as_array() {
@@ -778,14 +880,21 @@ impl AnalyzeSymbolContextTool {
                             let supertypes_params = json!({
                                 "item": hierarchy_item
                             });
-                            
+
                             if let Ok(Ok(supertypes_response)) = tokio::time::timeout(
                                 std::time::Duration::from_secs(5),
-                                manager.send_lsp_request("typeHierarchy/supertypes".to_string(), Some(supertypes_params))
-                            ).await {
+                                manager.send_lsp_request(
+                                    "typeHierarchy/supertypes".to_string(),
+                                    Some(supertypes_params),
+                                ),
+                            )
+                            .await
+                            {
                                 if let Some(supertypes) = supertypes_response.as_array() {
                                     for supertype in supertypes {
-                                        if let Some(name) = supertype.get("name").and_then(|n| n.as_str()) {
+                                        if let Some(name) =
+                                            supertype.get("name").and_then(|n| n.as_str())
+                                        {
                                             base_classes.push(name.to_string());
                                         }
                                     }
@@ -796,14 +905,21 @@ impl AnalyzeSymbolContextTool {
                             let subtypes_params = json!({
                                 "item": hierarchy_item
                             });
-                            
+
                             if let Ok(Ok(subtypes_response)) = tokio::time::timeout(
                                 std::time::Duration::from_secs(5),
-                                manager.send_lsp_request("typeHierarchy/subtypes".to_string(), Some(subtypes_params))
-                            ).await {
+                                manager.send_lsp_request(
+                                    "typeHierarchy/subtypes".to_string(),
+                                    Some(subtypes_params),
+                                ),
+                            )
+                            .await
+                            {
                                 if let Some(subtypes) = subtypes_response.as_array() {
                                     for subtype in subtypes {
-                                        if let Some(name) = subtype.get("name").and_then(|n| n.as_str()) {
+                                        if let Some(name) =
+                                            subtype.get("name").and_then(|n| n.as_str())
+                                        {
                                             derived_classes.push(name.to_string());
                                         }
                                     }
@@ -838,7 +954,11 @@ impl AnalyzeSymbolContextTool {
             if let Some(file_path_str) = uri.strip_prefix("file://") {
                 let file_path = std::path::PathBuf::from(file_path_str);
                 if let Err(e) = manager.open_file_if_needed(&file_path).await {
-                    info!("Failed to open file {} for call hierarchy analysis: {}", file_path.display(), e);
+                    info!(
+                        "Failed to open file {} for call hierarchy analysis: {}",
+                        file_path.display(),
+                        e
+                    );
                     return None;
                 }
             }
@@ -853,7 +973,10 @@ impl AnalyzeSymbolContextTool {
 
                 // First prepare call hierarchy item
                 match manager
-                    .send_lsp_request("textDocument/prepareCallHierarchy".to_string(), Some(params))
+                    .send_lsp_request(
+                        "textDocument/prepareCallHierarchy".to_string(),
+                        Some(params),
+                    )
                     .await
                 {
                     Ok(call_hierarchy_result) => {
@@ -877,7 +1000,8 @@ impl AnalyzeSymbolContextTool {
                                                 break;
                                             }
                                             if let Some(from) = call.get("from") {
-                                                incoming_calls.push(self.extract_call_info(from, call));
+                                                incoming_calls
+                                                    .push(self.extract_call_info(from, call));
                                             }
                                         }
                                     }
@@ -897,7 +1021,8 @@ impl AnalyzeSymbolContextTool {
                                                 break;
                                             }
                                             if let Some(to) = call.get("to") {
-                                                outgoing_calls.push(self.extract_call_info(to, call));
+                                                outgoing_calls
+                                                    .push(self.extract_call_info(to, call));
                                             }
                                         }
                                     }
@@ -923,14 +1048,24 @@ impl AnalyzeSymbolContextTool {
         None
     }
 
-    fn extract_call_info(&self, call_item: &serde_json::Value, call_data: &serde_json::Value) -> serde_json::Value {
-        let name = call_item.get("name").and_then(|n| n.as_str()).unwrap_or("unknown");
+    fn extract_call_info(
+        &self,
+        call_item: &serde_json::Value,
+        call_data: &serde_json::Value,
+    ) -> serde_json::Value {
+        let name = call_item
+            .get("name")
+            .and_then(|n| n.as_str())
+            .unwrap_or("unknown");
         let kind_num = call_item.get("kind").and_then(|k| k.as_u64()).unwrap_or(0);
         let kind = self.symbol_kind_to_string(kind_num);
         let detail = call_item.get("detail").and_then(|d| d.as_str());
         let uri = call_item.get("uri").and_then(|u| u.as_str()).unwrap_or("");
         let range = call_item.get("range").cloned().unwrap_or(json!({}));
-        let selection_range = call_item.get("selectionRange").cloned().unwrap_or(json!({}));
+        let selection_range = call_item
+            .get("selectionRange")
+            .cloned()
+            .unwrap_or(json!({}));
         let from_ranges = call_data.get("fromRanges").cloned().unwrap_or(json!([]));
 
         json!({
@@ -981,7 +1116,11 @@ impl AnalyzeSymbolContextTool {
         // Extract a brief context around the call location
         if let Some(file_path_str) = uri.strip_prefix("file://") {
             if let Ok(content) = std::fs::read_to_string(file_path_str) {
-                if let Some(start_line) = range.get("start").and_then(|s| s.get("line")).and_then(|l| l.as_u64()) {
+                if let Some(start_line) = range
+                    .get("start")
+                    .and_then(|s| s.get("line"))
+                    .and_then(|l| l.as_u64())
+                {
                     let lines: Vec<&str> = content.lines().collect();
                     if start_line < lines.len() as u64 {
                         return Some(lines[start_line as usize].trim().to_string());
@@ -1030,7 +1169,9 @@ impl AnalyzeSymbolContextTool {
                                 reference.get("range"),
                             ) {
                                 // Get context around the usage
-                                if let Some(context) = self.get_usage_context(manager, ref_uri, ref_range).await {
+                                if let Some(context) =
+                                    self.get_usage_context(manager, ref_uri, ref_range).await
+                                {
                                     usage_examples.push(json!({
                                         "file": ref_uri,
                                         "range": ref_range,
@@ -1063,8 +1204,14 @@ impl AnalyzeSymbolContextTool {
             if (manager.open_file_if_needed(&path).await).is_ok() {
                 // Get a range around the usage for context (5 lines before and after)
                 if let (Some(start_line), Some(_)) = (
-                    range.get("start").and_then(|s| s.get("line")).and_then(|l| l.as_u64()),
-                    range.get("end").and_then(|e| e.get("line")).and_then(|l| l.as_u64()),
+                    range
+                        .get("start")
+                        .and_then(|s| s.get("line"))
+                        .and_then(|l| l.as_u64()),
+                    range
+                        .get("end")
+                        .and_then(|e| e.get("line"))
+                        .and_then(|l| l.as_u64()),
                 ) {
                     let context_start = if start_line >= 5 { start_line - 5 } else { 0 };
                     let context_end = start_line + 5;
@@ -1099,10 +1246,7 @@ impl AnalyzeSymbolContextTool {
         }
     }
 
-    fn build_comprehensive_symbol_info(
-        &self,
-        data: SymbolAnalysisData,
-    ) -> serde_json::Value {
+    fn build_comprehensive_symbol_info(&self, data: SymbolAnalysisData) -> serde_json::Value {
         let mut info = json!({
             "name": self.symbol,
             "kind": self.extract_symbol_kind(data.symbol_location, data.hover_info),
@@ -1200,7 +1344,8 @@ impl AnalyzeSymbolContextTool {
                             if let Some(start) = line.find(&self.symbol) {
                                 let before = &line[..start];
                                 if let Some(namespace_start) = before.rfind(' ') {
-                                    let qualified = &line[namespace_start + 1..start + self.symbol.len()];
+                                    let qualified =
+                                        &line[namespace_start + 1..start + self.symbol.len()];
                                     if qualified.contains("::") {
                                         return qualified.to_string();
                                     }
@@ -1216,7 +1361,7 @@ impl AnalyzeSymbolContextTool {
 
     fn extract_enhanced_type_info(&self, contents: &serde_json::Value) -> serde_json::Value {
         let type_info = self.extract_type_info(contents);
-        
+
         // Just return the raw information from clangd - no error-prone parsing
         if let Some(type_str) = type_info.get("type").and_then(|t| t.as_str()) {
             let enhanced = json!({
@@ -1228,10 +1373,10 @@ impl AnalyzeSymbolContextTool {
                 "is_static": type_str.contains("static"),
                 "raw_hover": type_info["raw_hover"].clone()
             });
-            
+
             return enhanced;
         }
-        
+
         type_info
     }
 
@@ -1248,7 +1393,11 @@ impl AnalyzeSymbolContextTool {
             if let Some(file_path_str) = uri.strip_prefix("file://") {
                 let file_path = std::path::PathBuf::from(file_path_str);
                 if let Err(e) = manager.open_file_if_needed(&file_path).await {
-                    info!("Failed to open file {} for hover analysis: {}", file_path.display(), e);
+                    info!(
+                        "Failed to open file {} for hover analysis: {}",
+                        file_path.display(),
+                        e
+                    );
                     return Ok(None);
                 }
             }
@@ -1347,12 +1496,16 @@ impl AnalyzeSymbolContextTool {
 
         // Get the file URI from symbol location
         let uri = symbol_location.get("uri").and_then(|u| u.as_str())?;
-        
+
         // Ensure the file is opened in clangd
         if let Some(file_path_str) = uri.strip_prefix("file://") {
             let file_path = std::path::PathBuf::from(file_path_str);
             if let Err(e) = manager.open_file_if_needed(&file_path).await {
-                info!("Failed to open file {} for class member analysis: {}", file_path.display(), e);
+                info!(
+                    "Failed to open file {} for class member analysis: {}",
+                    file_path.display(),
+                    e
+                );
                 return None;
             }
         }
@@ -1371,11 +1524,12 @@ impl AnalyzeSymbolContextTool {
             Ok(symbols_result) => {
                 if let Some(symbols_array) = symbols_result.as_array() {
                     // Find the target class in the document symbols
-                    let target_class = self.find_target_class_in_symbols(symbols_array, symbol_location)?;
-                    
+                    let target_class =
+                        self.find_target_class_in_symbols(symbols_array, symbol_location)?;
+
                     // Extract members from the class
                     let members = self.extract_class_members_flat(&target_class);
-                    
+
                     if !members.is_empty() {
                         return Some(json!({
                             "members": members,
@@ -1386,7 +1540,10 @@ impl AnalyzeSymbolContextTool {
                 None
             }
             Err(e) => {
-                info!("Failed to get document symbols for class member analysis: {}", e);
+                info!(
+                    "Failed to get document symbols for class member analysis: {}",
+                    e
+                );
                 None
             }
         }
@@ -1408,11 +1565,14 @@ impl AnalyzeSymbolContextTool {
                 symbol.get("kind").and_then(|k| k.as_u64()),
             ) {
                 // Check if this is a class or struct (kind 5 or 23)
-                if (kind == 5 || kind == 23) && 
-                   (name == target_name || name.contains(target_name)) {
-                    
+                if (kind == 5 || kind == 23) && (name == target_name || name.contains(target_name))
+                {
                     // Check if the range matches approximately
-                    if let Some(start_line) = range.get("start").and_then(|s| s.get("line")).and_then(|l| l.as_u64()) {
+                    if let Some(start_line) = range
+                        .get("start")
+                        .and_then(|s| s.get("line"))
+                        .and_then(|l| l.as_u64())
+                    {
                         if start_line == target_start_line {
                             return Some(symbol.clone());
                         }
@@ -1431,7 +1591,10 @@ impl AnalyzeSymbolContextTool {
         None
     }
 
-    fn extract_class_members_flat(&self, class_symbol: &serde_json::Value) -> Vec<serde_json::Value> {
+    fn extract_class_members_flat(
+        &self,
+        class_symbol: &serde_json::Value,
+    ) -> Vec<serde_json::Value> {
         let mut members = Vec::new();
 
         if let Some(children) = class_symbol.get("children").and_then(|c| c.as_array()) {
@@ -1442,7 +1605,7 @@ impl AnalyzeSymbolContextTool {
                     child.get("range"),
                 ) {
                     let kind_str = self.symbol_kind_to_string(kind_num);
-                    
+
                     let mut member = json!({
                         "name": name,
                         "kind": kind_str,
@@ -1467,7 +1630,11 @@ impl AnalyzeSymbolContextTool {
         members
     }
 
-    async fn get_similar_symbols(&self, manager: &ClangdManager, _indexing_completion_time: Option<std::time::Instant>) -> Vec<String> {
+    async fn get_similar_symbols(
+        &self,
+        manager: &ClangdManager,
+        _indexing_completion_time: Option<std::time::Instant>,
+    ) -> Vec<String> {
         // Try to find symbols with similar names
         let query = if self.symbol.len() > 3 {
             self.symbol[..3].to_string()
@@ -1486,7 +1653,11 @@ impl AnalyzeSymbolContextTool {
             if let Some(symbol_array) = symbols.as_array() {
                 return symbol_array
                     .iter()
-                    .filter_map(|s| s.get("name").and_then(|n| n.as_str()).map(|s| s.to_string()))
+                    .filter_map(|s| {
+                        s.get("name")
+                            .and_then(|n| n.as_str())
+                            .map(|s| s.to_string())
+                    })
                     .take(5)
                     .collect();
             }
