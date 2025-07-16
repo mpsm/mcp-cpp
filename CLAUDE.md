@@ -14,121 +14,202 @@ This is a **C++ MCP (Model Context Protocol) server** implemented in Rust that b
 ## Current Implementation Status
 
 ### ✅ Completed
-- Initial MCP server foundation with rust-mcp-sdk
-- CMake project analysis tool (`cpp_project_status`)
-- CMake build directory detection and parsing
-- Structured JSON responses for tool integration
-- Error handling for missing CMakeLists.txt and corrupted cache files
+
+- Full MCP server implementation with rust-mcp-sdk
+- CMake project analysis and build directory management (`list_build_dirs`)
+- Comprehensive C++ symbol search with project boundary detection (`search_symbols`)
+- Deep symbol analysis with inheritance and call hierarchy (`analyze_symbol_context`)
+- Clangd LSP client with lifecycle management and indexing progress tracking
+- Project vs external symbol filtering using compilation database analysis
+- Structured JSON responses with comprehensive error handling
+- CI/CD pipeline with build, tests, clippy, and security audit
 
 ### 🔄 Current Architecture
+
 ```
 src/
-├── main.rs      // MCP server entry point with stdio transport
-├── handler.rs   // MCP request handler implementation
-├── tools.rs     // Tool implementations (currently: CppProjectStatusTool)
-├── cmake.rs     // CMake project analysis logic
-└── Cargo.toml   // Dependencies and project configuration
+├── main.rs          // MCP server entry point with stdio transport
+├── handler.rs       // MCP request handler implementation
+├── logging.rs       // Structured logging and MCP message tracing
+├── cmake.rs         // CMake project analysis and build directory detection
+├── lsp/             // LSP client implementation
+│   ├── mod.rs       // Module exports
+│   ├── client.rs    // Clangd LSP client with connection management
+│   ├── manager.rs   // LSP lifecycle and file management
+│   ├── types.rs     // LSP types and indexing state tracking
+│   └── error.rs     // LSP error handling
+└── tools/           // MCP tool implementations
+    ├── mod.rs       // Tool registration and routing
+    ├── cmake_tools.rs        // Build directory analysis
+    ├── search_symbols.rs     // C++ symbol search
+    ├── analyze_symbols.rs    // Deep symbol analysis
+    └── symbol_filtering.rs   // Project boundary and filtering logic
 ```
 
-### 🎯 Next Steps
-1. **LSP Integration**: Implement clangd client for semantic analysis
-2. **Navigation Tools**: textDocument/definition, references, implementation
-3. **Symbol Tools**: documentSymbol, workspace/symbol, hover
-4. **Analysis Tools**: semanticTokens, diagnostics
-5. **Hierarchy Tools**: callHierarchy, typeHierarchy
+### 🎯 Current Capabilities
+
+1. **Build Management**: Automatic CMake build directory detection and configuration analysis
+2. **Symbol Search**: Fuzzy search across C++ codebases with project/external filtering
+3. **Symbol Analysis**: Deep analysis with inheritance hierarchies, call patterns, and usage examples
+4. **Project Intelligence**: Smart filtering between project code and external dependencies
+5. **Indexing Management**: Real-time clangd indexing progress tracking and completion detection
 
 ## Key Design Principles
 
-1. **Performance First**: Handle large C++ codebases efficiently
+1. **Performance First**: Handle large C++ codebases efficiently with smart caching
 2. **Robust LSP Integration**: Connection lifecycle, retry logic, graceful degradation
 3. **MCP Protocol Compliance**: Use rust-mcp-sdk for proper MCP implementation
-4. **80% Test Coverage**: Comprehensive testing for reliability
+4. **Comprehensive Testing**: Unit tests for core logic with CI/CD pipeline
 5. **Structured Error Handling**: Use thiserror for MCP-compatible errors
 
 ## Development Commands
 
 ```bash
 # Build the project
-cargo build
+cargo build --release
 
-# Run tests
+# Run tests with CI pipeline locally
 cargo test
+cargo clippy --all-targets --all-features -- -D warnings
+cargo fmt --check
 
 # Run the MCP server
 cargo run
 
-# Check code quality
-cargo clippy
-cargo fmt --check
+# Development with watch mode
+cargo watch -x test        # Auto-run tests on file changes
+cargo watch -x run         # Auto-restart server on changes
 ```
 
 ## Repository Structure
 
-- `src/`: Rust source code
+- `src/`: Rust source code with modular LSP and tool implementations
 - `test/`: Test projects and fixtures for validation
   - `test/e2e/`: End-to-end testing framework (Node.js/TypeScript)
-  - `test/test-project/`: Base C++ project for testing
+  - `test/test-project/`: Base C++ project for testing MCP tools
+  - `test/requests/`: Sample MCP request JSON files
+- `.github/workflows/`: CI/CD pipeline with parallel job execution
 - `Cargo.toml`: Project dependencies and configuration
+
+## Current Tools
+
+### `list_build_dirs`
+
+Analyzes C++ project build environment including:
+
+- Automatic CMake build directory discovery
+- Build configuration analysis (generator, build type, compiler settings)
+- Compilation database status and file count
+- JSON-structured responses with comprehensive project metadata
+
+### `search_symbols`
+
+C++ symbol search with intelligent filtering:
+
+- Fuzzy matching across entire codebase using clangd workspace symbols
+- Project boundary detection (project vs external/system symbols)
+- Symbol kind filtering (class, function, variable, etc.)
+- File-specific search using document symbols
+- Configurable result limits and external symbol inclusion
+
+### `analyze_symbol_context`
+
+Deep symbol analysis for comprehensive understanding:
+
+- Symbol definition and type information extraction
+- Class inheritance hierarchy analysis
+- Function call hierarchy mapping (incoming/outgoing calls)
+- Usage pattern analysis with concrete code examples
+- Related symbol discovery and disambiguation support
 
 ## Implementation Guidelines
 
 ### Performance Requirements
-- Handle large C++ codebases with complex compilation databases
-- Prioritize efficient algorithms and minimize memory allocations
-- Use streaming parsers for large JSON compilation databases
-- Build incremental indexes to avoid full recomputation
+
+- Handle large C++ codebases with complex compilation databases efficiently
+- Use smart caching strategies for build artifacts and LSP responses
+- Implement indexing progress tracking to avoid blocking operations
+- Build incremental analysis to minimize recomputation overhead
 
 ### LSP Integration Strategy
-- Implement robust clangd client with connection lifecycle management
-- Include retry logic and graceful degradation for LSP server failures
-- Follow JSON-RPC 2.0 and LSP specifications strictly
-- Use async operations with tokio to avoid blocking
+
+- Robust clangd client with full connection lifecycle management
+- Real-time indexing progress monitoring with completion detection
+- Automatic retry logic and graceful degradation for LSP server failures
+- Comprehensive error handling for all LSP communication scenarios
+- Efficient file management with automatic opening/closing of documents
 
 ### MCP Server Implementation
-- Use rust-mcp-sdk for proper MCP protocol compliance
-- Implement local IO transport (stdin/stdout) for MCP communication
+
+- Use rust-mcp-sdk for complete MCP protocol compliance
+- Implement stdio transport for seamless MCP client integration
 - Leverage SDK's resource management and tool registration patterns
-- Convert LSP errors to MCP responses using SDK error handling
+- Convert LSP errors to structured MCP responses with proper error codes
+- Comprehensive logging for debugging and monitoring
 
 ### Code Quality Standards
-- Maintain 80% test coverage minimum
+
+- Maintain comprehensive unit test coverage for core logic
 - Use thiserror for structured error types compatible with MCP SDK
-- Include comprehensive error handling for all failure modes
+- Include defensive programming practices for all failure modes
 - Add structured logging with tracing crate for observability
+- Follow Rust best practices with clippy and formatting checks
 
-### Priority LSP Commands
-1. **Navigation**: textDocument/definition, references, implementation
-2. **Understanding**: documentSymbol, workspace/symbol, hover
-3. **Analysis**: semanticTokens, diagnostics
-4. **Hierarchy**: callHierarchy, typeHierarchy
+### CI/CD Pipeline
 
-## Current Tool: cpp_project_status
+- Automated build, test, clippy, and security audit on every push
+- Parallel job execution for optimal build times
+- Smart caching of Cargo registry and build artifacts
+- Security vulnerability scanning with cargo audit
+- GitHub Actions integration with status badges
 
-Analyzes C++ project status including:
-- CMake project detection
-- Build directory scanning
-- Configuration parsing (generator, build type, options)
-- JSON-structured responses with project metadata
+## Architecture Overview
 
-This serves as the foundation template for adding additional C++ development tools.
+### LSP Integration Layer
+
+- **ClangdManager**: Manages clangd process lifecycle, build directory switching, and file operations
+- **LspClient**: Handles JSON-RPC communication, request/response management, and notification processing
+- **IndexingState**: Tracks real-time indexing progress with completion detection and estimation
+- **Error Handling**: Comprehensive LSP error mapping to MCP-compatible responses
+
+### Tool Implementation Layer
+
+- **Symbol Search**: Workspace-wide and file-specific symbol discovery with intelligent filtering
+- **Symbol Analysis**: Deep context analysis including inheritance, call hierarchy, and usage patterns
+- **Project Management**: Build directory analysis, compilation database parsing, and project boundary detection
+- **Filtering Logic**: Smart distinction between project code and external dependencies
+
+### Data Flow Architecture
+
+1. **MCP Request** → Handler parses and validates tool parameters
+2. **Build Setup** → Automatic CMake detection and clangd initialization if needed
+3. **LSP Communication** → Structured requests to clangd with progress tracking
+4. **Response Processing** → Filter, transform, and enrich LSP responses
+5. **MCP Response** → Structured JSON output with comprehensive metadata
+
+This implementation provides a complete bridge between MCP clients and C++ semantic analysis, enabling AI agents to work with C++ codebases using the same tools and understanding that human developers rely on.
 
 ## Testing Framework
 
 ### End-to-End Testing
+
 The project includes a comprehensive E2E testing framework in `test/e2e/`:
 
 **Technology Stack:**
+
 - **Vitest**: Modern, fast test runner with TypeScript support
 - **ESLint**: Modern .mjs configuration for code quality
 - **Prettier**: External formatting tool (not a module dependency)
 
 **Framework Components:**
+
 - **McpClient**: JSON-RPC communication with MCP server over stdio
 - **TestProject**: Test project manipulation and CMake operations
 - **TestRunner**: Test execution with isolation and cleanup
 - **Assertions**: Rich JSON response validation
 
 **Key Features:**
+
 - Isolated test execution with fresh project copies
 - Parallel test execution for speed
 - Comprehensive fixture system for different project configurations
@@ -136,6 +217,7 @@ The project includes a comprehensive E2E testing framework in `test/e2e/`:
 - Support for testing server lifecycle and error states
 
 **Running E2E Tests:**
+
 ```bash
 # First, build the MCP server (required)
 cargo build
