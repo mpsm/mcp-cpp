@@ -18,6 +18,7 @@ pub struct OpenedFileState {
 
 pub struct ClangdManager {
     current_build_dir: Arc<Mutex<Option<PathBuf>>>,
+    project_root: Arc<Mutex<Option<PathBuf>>>,
     lsp_client: Arc<Mutex<Option<LspClient>>>,
     is_initialized: Arc<Mutex<bool>>,
     indexing_state: Arc<Mutex<IndexingState>>,
@@ -29,6 +30,7 @@ impl ClangdManager {
     pub fn new() -> Self {
         Self {
             current_build_dir: Arc::new(Mutex::new(None)),
+            project_root: Arc::new(Mutex::new(None)),
             lsp_client: Arc::new(Mutex::new(None)),
             is_initialized: Arc::new(Mutex::new(false)),
             indexing_state: Arc::new(Mutex::new(IndexingState::new())),
@@ -83,6 +85,12 @@ impl ClangdManager {
         {
             let mut current_dir = self.current_build_dir.lock().await;
             *current_dir = Some(build_directory.clone());
+        }
+
+        // Determine and cache project root
+        {
+            let mut project_root = self.project_root.lock().await;
+            *project_root = Self::determine_project_root(&build_directory);
         }
 
         {
@@ -376,6 +384,11 @@ impl ClangdManager {
         db.clone()
     }
 
+    pub async fn get_project_root(&self) -> Option<PathBuf> {
+        let project_root = self.project_root.lock().await;
+        project_root.clone()
+    }
+
     pub async fn open_file_if_needed(&self, file_path: &std::path::Path) -> Result<bool, LspError> {
         let mut opened_files = self.opened_files.lock().await;
 
@@ -606,13 +619,31 @@ impl ClangdManager {
             *db = None;
         }
 
-        // Clear compilation database
+        // Clear project root
         {
-            let mut db = self.compilation_database.lock().await;
-            *db = None;
+            let mut project_root = self.project_root.lock().await;
+            *project_root = None;
         }
 
         Ok(())
+    }
+
+    fn determine_project_root(build_directory: &PathBuf) -> Option<PathBuf> {
+        // Try to read the actual source directory from CMakeCache.txt
+        let cache_file = build_directory.join("CMakeCache.txt");
+        
+        if let Ok(content) = std::fs::read_to_string(&cache_file) {
+            // Look for CMAKE_SOURCE_DIR entry in CMakeCache.txt
+            for line in content.lines() {
+                if let Some(source_dir) = line.strip_prefix("CMAKE_SOURCE_DIR:INTERNAL=") {
+                    let source_path = PathBuf::from(source_dir);
+                    return Some(source_path);
+                }
+            }
+        }
+        
+        // Fallback: assume build directory is a subdirectory of project root
+        build_directory.parent().map(|p| p.to_path_buf())
     }
 }
 

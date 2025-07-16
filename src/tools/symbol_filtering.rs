@@ -2,10 +2,9 @@
 
 use serde_json::json;
 use std::collections::HashSet;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use tracing::debug;
 
-use crate::cmake::CmakeProjectStatus;
 use crate::lsp::ClangdManager;
 
 /// Symbol filtering utilities for project boundary detection and kind filtering
@@ -38,6 +37,7 @@ impl SymbolFilter {
     pub fn is_project_symbol(
         symbol: &serde_json::Value,
         compilation_database: &Option<HashSet<PathBuf>>,
+        project_root: &Option<PathBuf>,
     ) -> bool {
         // Extract file path from symbol location
         let file_path = if let Some(location) = symbol.get("location") {
@@ -66,15 +66,10 @@ impl SymbolFilter {
 
             // If not in compilation database, check if it's a project header
             // by seeing if it's under the project source directory
-            if let Some(db) = compilation_database {
-                if !db.is_empty() {
-                    // Get the project root by finding common ancestor of source files
-                    if let Some(project_root) = Self::find_project_root(db) {
-                        // Include any file under the project root
-                        if path.starts_with(&project_root) {
-                            return true;
-                        }
-                    }
+            if let Some(root) = project_root {
+                // Include any file under the project root
+                if path.starts_with(root) {
+                    return true;
                 }
             }
 
@@ -101,12 +96,13 @@ impl SymbolFilter {
         } else {
             // Filter out external symbols (system headers, libraries, etc.)
             let compilation_database = manager.get_compilation_database().await;
-            debug!("📁 Using compilation database for project filtering");
+            let project_root = manager.get_project_root().await;
+            debug!("📁 Using compilation database and project root for project filtering");
             
             let filtered: Vec<_> = symbols
                 .into_iter()
                 .filter(|symbol| {
-                    Self::is_project_symbol(symbol, &compilation_database)
+                    Self::is_project_symbol(symbol, &compilation_database, &project_root)
                 })
                 .collect();
             
@@ -115,48 +111,6 @@ impl SymbolFilter {
         }
     }
 
-    /// Find the project root directory from CMake configuration
-    fn find_project_root(_compilation_database: &HashSet<PathBuf>) -> Option<PathBuf> {
-        // Get project root from CMake build directory instead of inferring from source files
-        
-        match CmakeProjectStatus::analyze_current_directory() {
-            Ok(status) => {
-                if !status.build_directories.is_empty() {
-                    // Use the first available build directory to determine project root
-                    let build_dir = &status.build_directories[0];
-                    
-                    // Try to read the actual source directory from CMakeCache.txt
-                    if let Some(source_dir) = Self::read_cmake_source_dir(&build_dir.path) {
-                        return Some(source_dir);
-                    }
-                    
-                    // Fallback: assume build directory is a subdirectory of project root
-                    if let Some(parent) = build_dir.path.parent() {
-                        return Some(parent.to_path_buf());
-                    }
-                }
-                None
-            }
-            Err(_) => None,
-        }
-    }
-
-    /// Read CMake source directory from build cache
-    fn read_cmake_source_dir(build_path: &Path) -> Option<PathBuf> {
-        let cache_file = build_path.join("CMakeCache.txt");
-        
-        if let Ok(content) = std::fs::read_to_string(&cache_file) {
-            // Look for CMAKE_SOURCE_DIR entry in CMakeCache.txt
-            for line in content.lines() {
-                if let Some(source_dir) = line.strip_prefix("CMAKE_SOURCE_DIR:INTERNAL=") {
-                    let source_path = PathBuf::from(source_dir);
-                    return Some(source_path);
-                }
-            }
-        }
-        
-        None
-    }
 }
 
 /// Symbol utility functions for common operations
