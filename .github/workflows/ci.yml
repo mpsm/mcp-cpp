@@ -500,12 +500,6 @@ jobs:
             sudo apt-get install -y clang
           fi
 
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Build Rust project
-        run: cargo build --release
-
       - name: Build C++ test project with ${{ matrix.compiler }}
         working-directory: test/test-project
         env:
