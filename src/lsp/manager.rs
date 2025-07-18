@@ -52,7 +52,20 @@ impl ClangdManager {
         // Check if build directory is different from current
         let current_build_dir = self.get_current_build_directory().await;
         let session_changed = match current_build_dir {
-            Some(ref current) => current != &build_directory,
+            Some(ref current) => {
+                if current != &build_directory {
+                    warn!(
+                        "⚠️  Build directory changed from {} to {}. \
+                        Note: Changing between non-empty build directories is not fully supported yet. \
+                        This may cause inconsistent clangd state.",
+                        current.display(),
+                        build_directory.display()
+                    );
+                    true
+                } else {
+                    false
+                }
+            }
             None => true,
         };
 
@@ -77,20 +90,28 @@ impl ClangdManager {
         );
 
         // Start new clangd process
-        let client =
-            LspClient::start_clangd(&clangd_path, &build_directory, self.indexing_state.clone())
-                .await?;
+        // Determine project root before starting clangd
+        let project_root = Self::determine_project_root(&build_directory)
+            .unwrap_or_else(|| build_directory.clone());
+
+        info!(
+            "Starting clangd with project root: {}, build directory: {}",
+            project_root.display(),
+            build_directory.display()
+        );
+
+        let client = LspClient::start_clangd(
+            &clangd_path,
+            &project_root,
+            &build_directory,
+            self.indexing_state.clone(),
+        )
+        .await?;
 
         // Update state
         {
             let mut current_dir = self.current_build_dir.lock().await;
             *current_dir = Some(build_directory.clone());
-        }
-
-        // Determine and cache project root
-        {
-            let mut project_root = self.project_root.lock().await;
-            *project_root = Self::determine_project_root(&build_directory);
         }
 
         {
@@ -191,11 +212,20 @@ impl ClangdManager {
     ) -> Result<(), LspError> {
         use serde_json::json;
 
+        // Determine and cache project root before initialization
+        let project_root = Self::determine_project_root(build_directory)
+            .unwrap_or_else(|| build_directory.to_path_buf());
+
+        {
+            let mut project_root_guard = self.project_root.lock().await;
+            *project_root_guard = Some(project_root.clone());
+        }
+
         // Step 1: Send initialize request
         let init_params = json!({
             "processId": std::process::id(),
-            "rootPath": build_directory.display().to_string(),
-            "rootUri": format!("file://{}", build_directory.display()),
+            "rootPath": project_root.display().to_string(),
+            "rootUri": format!("file://{}", project_root.display()),
             "capabilities": {
                 "workspace": {
                     "workDoneProgress": true,

@@ -111,6 +111,7 @@ C++ symbol search with intelligent filtering:
 - Symbol kind filtering (class, function, variable, etc.)
 - File-specific search using document symbols
 - Configurable result limits and external symbol inclusion
+- **Build directory parameter support**: Specify custom build directory or use auto-detection
 
 ### `analyze_symbol_context`
 
@@ -118,6 +119,10 @@ Deep symbol analysis for comprehensive understanding:
 
 - Symbol definition and type information extraction
 - Class inheritance hierarchy analysis
+- Function call hierarchy mapping (incoming/outgoing calls)
+- Usage pattern analysis with concrete code examples
+- Related symbol discovery and disambiguation support
+- **Build directory parameter support**: Specify custom build directory or use auto-detection
 - Function call hierarchy mapping (incoming/outgoing calls)
 - Usage pattern analysis with concrete code examples
 - Related symbol discovery and disambiguation support
@@ -162,6 +167,38 @@ Deep symbol analysis for comprehensive understanding:
 - Smart caching of Cargo registry and build artifacts
 - Security vulnerability scanning with cargo audit
 - GitHub Actions integration with status badges
+
+## Build Directory Management
+
+### Auto-Detection vs Explicit Configuration
+
+Both `search_symbols` and `analyze_symbol_context` tools support flexible build directory configuration:
+
+**Auto-Detection (Default Behavior):**
+- Automatically discovers single build directory in current workspace
+- Analyzes CMake cache files and compilation database status
+- Fails gracefully when multiple or zero build directories found
+- Uses `list_build_dirs` tool logic for discovery
+
+**Explicit Configuration:**
+- `build_directory` parameter accepts relative or absolute paths
+- Validates compile_commands.json presence before proceeding
+- Enables working with multiple build configurations
+- Supports custom build directory locations outside standard patterns
+
+### clangd Process Management
+
+**Enhanced Startup Behavior:**
+- Sets clangd working directory to project root (from CMAKE_SOURCE_DIR)
+- Passes build directory via `--compile-commands-dir` argument
+- Logs clangd output to `<build_directory>/mcp-cpp-clangd.log`
+- Issues warning when changing between non-empty build directories
+
+**Build Directory Changes:**
+- Automatically shuts down existing clangd session on directory change
+- Warns about potential state inconsistencies during directory switching
+- Preserves project root detection from CMake cache analysis
+- Maintains indexing progress tracking across sessions
 
 ## Architecture Overview
 

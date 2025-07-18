@@ -132,6 +132,23 @@ pub struct SearchSymbolsTool {
     /// Project boundaries auto-detected via CMake compilation database analysis.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub include_external: Option<bool>,
+
+    /// Build directory path containing compile_commands.json. OPTIONAL.
+    ///
+    /// FORMATS ACCEPTED:
+    /// • Relative path: "build", "build-debug", "out/Debug"
+    /// • Absolute path: "/home/project/build", "/path/to/build-dir"
+    ///
+    /// BEHAVIOR: When specified, uses this build directory instead of auto-detection.
+    /// The build directory must contain compile_commands.json for clangd integration.
+    /// 
+    /// AUTO-DETECTION (when not specified): Attempts to find single build directory
+    /// in current workspace. Fails if multiple or zero build directories found.
+    ///
+    /// CLANGD SETUP: clangd CWD will be set to project root (from CMAKE_SOURCE_DIR),
+    /// and build directory will be passed via --compile-commands-dir argument.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub build_directory: Option<String>,
 }
 
 impl<'de> serde::Deserialize<'de> for SearchSymbolsTool {
@@ -150,6 +167,8 @@ impl<'de> serde::Deserialize<'de> for SearchSymbolsTool {
             max_results: Option<u32>,
             #[serde(default)]
             include_external: Option<bool>,
+            #[serde(default)]
+            build_directory: Option<String>,
         }
 
         let helper = SearchSymbolsToolHelper::deserialize(deserializer)?;
@@ -160,6 +179,7 @@ impl<'de> serde::Deserialize<'de> for SearchSymbolsTool {
             files: helper.files,
             max_results: helper.max_results,
             include_external: helper.include_external,
+            build_directory: helper.build_directory,
         })
     }
 }
@@ -171,40 +191,67 @@ impl SearchSymbolsTool {
         clangd_manager: &Arc<Mutex<ClangdManager>>,
     ) -> Result<CallToolResult, CallToolError> {
         info!(
-            "Searching symbols: query='{}', kinds={:?}, files={:?}, max_results={:?}, include_external={:?}",
-            self.query, self.kinds, self.files, self.max_results, self.include_external
+            "Searching symbols: query='{}', kinds={:?}, files={:?}, max_results={:?}, include_external={:?}, build_directory={:?}",
+            self.query, self.kinds, self.files, self.max_results, self.include_external, self.build_directory
         );
 
-        // Handle automatic clangd setup if needed
-        let build_path = match Self::resolve_build_directory() {
-            Ok(Some(path)) => path,
-            Ok(None) => {
-                let indexing_state = clangd_manager.lock().await.get_indexing_state().await;
-                let content = json!({
-                    "success": false,
-                    "error": "build_directory_required",
-                    "message": "No build directory found. Use list_build_dirs tool to see available options, or configure a build directory first.",
-                    "query": self.query,
-                    "indexing_status": SymbolUtilities::format_indexing_status(&indexing_state)
-                });
+        // Handle build directory parameter or automatic clangd setup
+        let build_path = match &self.build_directory {
+            Some(build_dir) => {
+                let path = std::path::PathBuf::from(build_dir);
+                if !path.exists() {
+                    let indexing_state = clangd_manager.lock().await.get_indexing_state().await;
+                    let content = json!({
+                        "success": false,
+                        "error": "build_directory_not_found",
+                        "message": format!("Specified build directory '{}' does not exist.", build_dir),
+                        "query": self.query,
+                        "indexing_status": SymbolUtilities::format_indexing_status(&indexing_state)
+                    });
 
-                return Ok(CallToolResult::text_content(vec![TextContent::from(
-                    serialize_result(&content),
-                )]));
+                    return Ok(CallToolResult::text_content(vec![TextContent::from(
+                        serialize_result(&content),
+                    )]));
+                }
+                info!("Using provided build directory: {}", path.display());
+                path
             }
-            Err(_) => {
-                let indexing_state = clangd_manager.lock().await.get_indexing_state().await;
-                let content = json!({
-                    "success": false,
-                    "error": "build_directory_analysis_failed",
-                    "message": "Failed to analyze build directories. Use list_build_dirs tool to see available options.",
-                    "query": self.query,
-                    "indexing_status": SymbolUtilities::format_indexing_status(&indexing_state)
-                });
+            None => {
+                // Use automatic build directory resolution
+                match Self::resolve_build_directory() {
+                    Ok(Some(path)) => {
+                        info!("Auto-resolved build directory: {}", path.display());
+                        path
+                    }
+                    Ok(None) => {
+                        let indexing_state = clangd_manager.lock().await.get_indexing_state().await;
+                        let content = json!({
+                            "success": false,
+                            "error": "build_directory_required",
+                            "message": "No build directory found. Use list_build_dirs tool to see available options, or specify build_directory parameter.",
+                            "query": self.query,
+                            "indexing_status": SymbolUtilities::format_indexing_status(&indexing_state)
+                        });
 
-                return Ok(CallToolResult::text_content(vec![TextContent::from(
-                    serialize_result(&content),
-                )]));
+                        return Ok(CallToolResult::text_content(vec![TextContent::from(
+                            serialize_result(&content),
+                        )]));
+                    }
+                    Err(_) => {
+                        let indexing_state = clangd_manager.lock().await.get_indexing_state().await;
+                        let content = json!({
+                            "success": false,
+                            "error": "build_directory_analysis_failed",
+                            "message": "Failed to analyze build directories. Use list_build_dirs tool to see available options, or specify build_directory parameter.",
+                            "query": self.query,
+                            "indexing_status": SymbolUtilities::format_indexing_status(&indexing_state)
+                        });
+
+                        return Ok(CallToolResult::text_content(vec![TextContent::from(
+                            serialize_result(&content),
+                        )]));
+                    }
+                }
             }
         };
 

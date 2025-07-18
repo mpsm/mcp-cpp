@@ -88,15 +88,17 @@ class ClangdIndexGenerator:
             "--background-index",  # Fixed: not --background-index=true
             "--clang-tidy",
             "--completion-style=detailed",
-            "--log=verbose"  # To see indexing messages
+            "--log=verbose",  # To see indexing messages
+            f"--compile-commands-dir={self.build_directory}"  # Pass build directory to clangd
         ]
 
         print(f"Starting clangd with args: {' '.join(args)}")
-        print(f"Working directory: {self.build_directory}")
+        print(f"Working directory: {os.getcwd()}")
+        print(f"Build directory: {self.build_directory}")
 
+        # Run clangd from current working directory, pass build dir as argument
         self.process = subprocess.Popen(
             args,
-            cwd=self.build_directory,
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
@@ -402,8 +404,6 @@ class ClangdIndexGenerator:
         # Comprehensive capabilities for AI agents that work like humans
         init_params = {
             "processId": os.getpid(),
-            "rootPath": str(self.build_directory),
-            "rootUri": f"file://{self.build_directory}",
             "capabilities": {
                 # INDEXING-CRITICAL CAPABILITIES
                 "workspace": {
@@ -552,13 +552,7 @@ class ClangdIndexGenerator:
                 "clangdFileStatus": True,  # Important for tracking file states
                 "fallbackFlags": ["-std=c++20"]
             },
-            "trace": "off",
-            "workspaceFolders": [
-                {
-                    "name": self.build_directory.name,
-                    "uri": f"file://{self.build_directory}"
-                }
-            ]
+            "trace": "off"
         }
 
         print("🔧 Initializing LSP with comprehensive AI capabilities...")
@@ -574,39 +568,25 @@ class ClangdIndexGenerator:
         The key insight: VS Code triggers indexing by opening a file!
         This is what actually starts the background indexing process.
         """
-        # Find a C++ file in the build directory or source
-        cpp_files = []
-
-        # Look for source files relative to build directory
-        source_dirs = [
-            self.build_directory.parent / "src",
-            self.build_directory.parent / "source",
-            self.build_directory / ".." / "src",
-            self.build_directory.parent
-        ]
-
-        for source_dir in source_dirs:
-            if source_dir.exists():
-                cpp_files.extend(source_dir.rglob("*.cpp"))
-                cpp_files.extend(source_dir.rglob("*.cc"))
-                cpp_files.extend(source_dir.rglob("*.cxx"))
-                if cpp_files:
-                    break
-
-        if not cpp_files:
-            print(
-                "⚠️  No C++ files found. Indexing may not start without opening a file.")
-            return
-
-        # Use the first C++ file found
-        cpp_file = cpp_files[0]
-        print(f"📂 Opening file to trigger indexing: {cpp_file}")
-
+        # Get the first file from compile_commands.json - no need for folder introspection
+        compile_commands = self.build_directory / "compile_commands.json"
+        
         try:
+            with open(compile_commands, 'r') as f:
+                commands = json.load(f)
+            
+            if not commands:
+                print("⚠️  No files in compile_commands.json. Cannot trigger indexing.")
+                return
+                
+            # Use the first file from compile_commands.json
+            cpp_file = Path(commands[0]['file'])
+            print(f"📂 Opening file to trigger indexing: {cpp_file}")
+
             with open(cpp_file, 'r', encoding='utf-8') as f:
                 content = f.read()
         except Exception as e:
-            print(f"❌ Could not read file {cpp_file}: {e}")
+            print(f"❌ Could not read file from compile_commands.json: {e}")
             return
 
         # Send textDocument/didOpen - this is the trigger!

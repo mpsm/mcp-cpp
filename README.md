@@ -102,6 +102,17 @@ Add to your Claude Desktop configuration file (`.mcp.json`):
    }
    ```
 
+   With custom build directory:
+   ```json
+   {
+     "name": "search_symbols",
+     "arguments": { 
+       "query": "MyClass", 
+       "build_directory": "build-debug" 
+     }
+   }
+   ```
+
 3. **Analyze Symbol Context**
 
    ```json
@@ -111,6 +122,18 @@ Add to your Claude Desktop configuration file (`.mcp.json`):
        "symbol": "MyClass::process",
        "include_inheritance": true,
        "include_call_hierarchy": true
+     }
+   }
+   ```
+
+   With custom build directory:
+   ```json
+   {
+     "name": "analyze_symbol_context",
+     "arguments": {
+       "symbol": "factorial",
+       "build_directory": "/path/to/build",
+       "include_usage_patterns": true
      }
    }
    ```

@@ -127,10 +127,16 @@ pub struct LspClient {
 impl LspClient {
     pub async fn start_clangd(
         clangd_path: &str,
+        project_root: &std::path::Path,
         build_directory: &std::path::Path,
         indexing_state: Arc<Mutex<IndexingState>>,
     ) -> Result<Self, LspError> {
-        info!("Starting clangd process at: {}", clangd_path);
+        info!(
+            "Starting clangd process at: {} with project root: {}, build directory: {}",
+            clangd_path,
+            project_root.display(),
+            build_directory.display()
+        );
 
         let mut command = Command::new(clangd_path);
         command
@@ -138,7 +144,8 @@ impl LspClient {
             .arg("--clang-tidy")
             .arg("--completion-style=detailed")
             .arg("--log=verbose")
-            .current_dir(build_directory)
+            .arg(format!("--compile-commands-dir={}", build_directory.display()))
+            .current_dir(project_root)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
@@ -262,34 +269,41 @@ impl LspClient {
         });
 
         // Start stderr logging task to capture clangd logs
+        let build_dir_for_log = build_directory.to_path_buf();
         let stderr_task = tokio::spawn(async move {
             let mut stderr_reader = BufReader::new(stderr);
 
-            // Create or open the clangd log file in the current directory
-            let log_file_path = "mcp-cpp-clangd.log";
+            // Create or open the clangd log file in the build directory instead of current directory
+            let log_file_path = build_dir_for_log.join("mcp-cpp-clangd.log");
             let mut log_file = match OpenOptions::new()
                 .create(true)
                 .append(true)
-                .open(log_file_path)
+                .open(&log_file_path)
                 .await
             {
                 Ok(file) => {
-                    info!("Clangd logs will be written to: {}", log_file_path);
-                    file
+                    info!("Clangd logs will be written to: {}", log_file_path.display());
+                    Some(file)
                 }
                 Err(e) => {
-                    warn!("Failed to open clangd log file {}: {}", log_file_path, e);
-                    return;
+                    warn!(
+                        "Failed to open clangd log file {}: {}. Logs will only go to stderr.",
+                        log_file_path.display(),
+                        e
+                    );
+                    None
                 }
             };
 
             // Add a timestamp header to the log file
             let timestamp = chrono::Utc::now().format("%Y-%m-%d %H:%M:%S UTC");
-            if let Err(e) = log_file
-                .write_all(format!("\n=== CLANGD SESSION STARTED: {timestamp} ===\n").as_bytes())
-                .await
-            {
-                warn!("Failed to write header to clangd log file: {}", e);
+            if let Some(ref mut file) = log_file {
+                if let Err(e) = file
+                    .write_all(format!("\n=== CLANGD SESSION STARTED: {timestamp} ===\n").as_bytes())
+                    .await
+                {
+                    warn!("Failed to write header to clangd log file: {}", e);
+                }
             }
 
             let mut line = String::new();
@@ -305,11 +319,13 @@ impl LspClient {
                         let timestamp = chrono::Utc::now().format("%Y-%m-%d %H:%M:%S.%3f");
                         let log_entry = format!("[{timestamp}] {line}");
 
-                        if let Err(e) = log_file.write_all(log_entry.as_bytes()).await {
-                            warn!("Failed to write to clangd log file: {}", e);
-                        } else {
-                            // Flush immediately for real-time logging
-                            let _ = log_file.flush().await;
+                        if let Some(ref mut file) = log_file {
+                            if let Err(e) = file.write_all(log_entry.as_bytes()).await {
+                                warn!("Failed to write to clangd log file: {}", e);
+                            } else {
+                                // Flush immediately for real-time logging
+                                let _ = file.flush().await;
+                            }
                         }
 
                         // Also log important messages to our tracing system
@@ -340,11 +356,13 @@ impl LspClient {
 
             // Add session end marker
             let timestamp = chrono::Utc::now().format("%Y-%m-%d %H:%M:%S UTC");
-            if let Err(e) = log_file
-                .write_all(format!("=== CLANGD SESSION ENDED: {timestamp} ===\n\n").as_bytes())
-                .await
-            {
-                warn!("Failed to write footer to clangd log file: {}", e);
+            if let Some(ref mut file) = log_file {
+                if let Err(e) = file
+                    .write_all(format!("=== CLANGD SESSION ENDED: {timestamp} ===\n\n").as_bytes())
+                    .await
+                {
+                    warn!("Failed to write footer to clangd log file: {}", e);
+                }
             }
 
             info!("Clangd stderr logging task terminated");
