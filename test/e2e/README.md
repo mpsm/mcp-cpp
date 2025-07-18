@@ -18,6 +18,44 @@ cd test/e2e
 npm install
 ```
 
+#### System Requirements
+
+- **clangd version 20**: Required for consistent LSP testing
+  - Ubuntu/Debian: 
+    ```bash
+    # Add LLVM APT repository
+    wget -O - https://apt.llvm.org/llvm-snapshot.gpg.key | sudo apt-key add -
+    echo "deb http://apt.llvm.org/jammy/ llvm-toolchain-jammy-20 main" | sudo tee /etc/apt/sources.list.d/llvm.list
+    sudo apt-get update
+    sudo apt-get install clangd-20
+    ```
+  - The framework is configured to use clangd-20 by default via `.env` file
+  - CI environment automatically installs and configures clangd-20
+
+#### Environment Configuration
+
+The E2E tests use a `.env` file to configure the testing environment. Create one based on the example:
+
+```bash
+# Copy the example file and customize as needed
+cp .env.example .env
+```
+
+Example `.env` configuration:
+```env
+# .env (in test/e2e directory)
+CLANGD_PATH=/usr/bin/clangd-20
+```
+
+You can override these settings by:
+1. Creating/modifying the `.env` file for permanent changes
+2. Setting environment variables before running tests:
+   ```bash
+   CLANGD_PATH=/usr/bin/clangd-19 npm test
+   ```
+
+**Note**: The `.env` file is gitignored and created automatically in CI environments.
+
 ### Running Tests
 
 ```bash

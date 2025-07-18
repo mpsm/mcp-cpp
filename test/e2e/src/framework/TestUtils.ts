@@ -1,6 +1,7 @@
 import * as fs from 'fs/promises';
 import * as path from 'path';
 import * as os from 'os';
+import * as dotenv from 'dotenv';
 
 /**
  * Utilities for configuring test environments, particularly for log management
@@ -171,6 +172,27 @@ export class TestUtils {
   }
 
   /**
+   * Load environment variables from .env file
+   */
+  static loadDotEnv(): Record<string, string> {
+    try {
+      // Load .env file from the e2e test directory
+      const envPath = path.join(__dirname, '..', '..', '.env');
+      const envConfig = dotenv.config({ path: envPath });
+      
+      if (envConfig.error) {
+        // .env file doesn't exist or couldn't be parsed, return empty object
+        return {};
+      }
+      
+      return envConfig.parsed || {};
+    } catch (error) {
+      // Silently ignore errors and return empty object
+      return {};
+    }
+  }
+
+  /**
    * Create comprehensive test environment with test-aware logging
    */
   static createTestEnvironment(
@@ -187,7 +209,12 @@ export class TestUtils {
     const serverLogPath = path.join(projectPath, `mcp-cpp-server-${sanitizedTestName}.log`);
     const clangdLogPath = path.join(projectPath, `mcp-cpp-clangd-${sanitizedTestName}.log`);
     
+    // Load environment variables from .env file
+    const envFromFile = TestUtils.loadDotEnv();
+    
     const env = {
+      // Start with environment variables from .env file
+      ...envFromFile,
       // Set log level to reduce noise during testing
       RUST_LOG: logLevel,
       // Direct logs to file instead of stderr

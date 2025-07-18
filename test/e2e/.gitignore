@@ -1,2 +1,9 @@
-node_modules
-temp
+# Environment configuration
+.env
+
+# Test artifacts
+temp/
+*.log
+
+# Node modules
+node_modules/

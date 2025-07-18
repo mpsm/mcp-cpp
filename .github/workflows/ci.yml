@@ -341,7 +341,11 @@ jobs:
       - name: Install C++ dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y build-essential cmake ninja-build
+          # Add LLVM APT repository for clangd-20
+          wget -O - https://apt.llvm.org/llvm-snapshot.gpg.key | sudo apt-key add -
+          echo "deb http://apt.llvm.org/jammy/ llvm-toolchain-jammy-20 main" | sudo tee /etc/apt/sources.list.d/llvm.list
+          sudo apt-get update
+          sudo apt-get install -y build-essential cmake ninja-build clangd-20
 
       - name: Build C++ test project
         working-directory: test/test-project
@@ -358,6 +362,11 @@ jobs:
         working-directory: test/e2e
         run: npm ci
 
+      - name: Configure E2E test environment
+        working-directory: test/e2e
+        run: |
+          echo "CLANGD_PATH=/usr/bin/clangd-20" > .env
+
       - name: Verify MCP server binary
         run: |
           echo "=== Verifying MCP Server Binary ==="
@@ -369,6 +378,7 @@ jobs:
         working-directory: test/e2e
         env:
           MCP_SERVER_PATH: ../../target/release/mcp-cpp-server
+          CLANGD_PATH: /usr/bin/clangd-20
         run: |
           echo "=== Running End-to-End Tests ==="
           npm run test:e2e
@@ -378,6 +388,7 @@ jobs:
         working-directory: test/e2e
         env:
           MCP_SERVER_PATH: ../../target/debug/mcp-cpp-server
+          CLANGD_PATH: /usr/bin/clangd-20
         run: |
           echo "=== Running End-to-End Tests (Debug) ==="
           npm run test:e2e
@@ -437,7 +448,11 @@ jobs:
       - name: Install C++ dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y build-essential cmake ninja-build
+          # Add LLVM APT repository for clangd-20
+          wget -O - https://apt.llvm.org/llvm-snapshot.gpg.key | sudo apt-key add -
+          echo "deb http://apt.llvm.org/jammy/ llvm-toolchain-jammy-20 main" | sudo tee /etc/apt/sources.list.d/llvm.list
+          sudo apt-get update
+          sudo apt-get install -y build-essential cmake ninja-build clangd-20
 
       - name: Build C++ test project
         working-directory: test/test-project
@@ -454,10 +469,16 @@ jobs:
         working-directory: test/e2e
         run: npm ci
 
+      - name: Configure E2E test environment
+        working-directory: test/e2e
+        run: |
+          echo "CLANGD_PATH=/usr/bin/clangd-20" > .env
+
       - name: Run E2E tests with Node ${{ matrix.node-version }}
         working-directory: test/e2e
         env:
           MCP_SERVER_PATH: ../../target/release/mcp-cpp-server
+          CLANGD_PATH: /usr/bin/clangd-20
         run: |
           echo "=== Running E2E Tests with Node ${{ matrix.node-version }} ==="
           npm run test:e2e
