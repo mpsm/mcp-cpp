@@ -22,6 +22,13 @@ export interface ProjectOptions {
   customCmakeOptions?: Record<string, string>;
 }
 
+export interface TestContext {
+  testName: string;
+  describe?: string;
+  timestamp?: number;
+  testId?: string;
+}
+
 export interface CmakeOptions {
   buildType?: 'Debug' | 'Release' | 'RelWithDebInfo' | 'MinSizeRel';
   generator?: string;
@@ -60,9 +67,10 @@ export class TestProject {
 
   // Factory Methods
   static async fromTemplate(
-    template: ProjectTemplate = ProjectTemplate.BASE
+    template: ProjectTemplate = ProjectTemplate.BASE,
+    testContext?: TestContext
   ): Promise<TestProject> {
-    const project = await TestProject.createTempProject();
+    const project = await TestProject.createTempProject(testContext);
 
     switch (template) {
       case ProjectTemplate.BASE:
@@ -79,20 +87,20 @@ export class TestProject {
     return project;
   }
 
-  static async fromBaseProject(options?: ProjectOptions): Promise<TestProject> {
-    const project = await TestProject.fromTemplate(ProjectTemplate.BASE);
+  static async fromBaseProject(options?: ProjectOptions, testContext?: TestContext): Promise<TestProject> {
+    const project = await TestProject.fromTemplate(ProjectTemplate.BASE, testContext);
     if (options) {
       await project.configure(options);
     }
     return project;
   }
 
-  static async empty(): Promise<TestProject> {
-    return TestProject.fromTemplate(ProjectTemplate.EMPTY);
+  static async empty(testContext?: TestContext): Promise<TestProject> {
+    return TestProject.fromTemplate(ProjectTemplate.EMPTY, testContext);
   }
 
-  static async fromExisting(sourcePath: string): Promise<TestProject> {
-    const project = await TestProject.createTempProject();
+  static async fromExisting(sourcePath: string, testContext?: TestContext): Promise<TestProject> {
+    const project = await TestProject.createTempProject(testContext);
     await fse.copy(sourcePath, project.projectPath);
     return project;
   }
@@ -331,18 +339,40 @@ export class TestProject {
   }
 
   // Private Helper Methods
-  private static async createTempProject(): Promise<TestProject> {
+  private static async createTempProject(testContext?: TestContext): Promise<TestProject> {
     // Use crypto.randomUUID() for truly unique directory names to avoid race conditions
     const { randomUUID } = await import('crypto');
+    const uuid = randomUUID();
+    
+    // Create descriptive folder name that includes test information
+    let folderName: string;
+    if (testContext) {
+      const sanitizedTestName = testContext.testName
+        .replace(/[^a-zA-Z0-9-_]/g, '-')
+        .replace(/-+/g, '-')
+        .replace(/^-|-$/g, '')
+        .toLowerCase();
+      const shortUuid = uuid.substring(0, 8);
+      folderName = `${sanitizedTestName}-${shortUuid}`;
+    } else {
+      folderName = `test-project-${uuid}`;
+    }
+    
     const tempDir = path.join(
       process.cwd(),
       'temp',
-      `test-project-${randomUUID()}`
+      folderName
     );
 
     await fse.ensureDir(tempDir);
 
     const project = new TestProject(tempDir);
+    
+    // Create test metadata file
+    if (testContext) {
+      await project.createTestMetadata(testContext, uuid);
+    }
+    
     project.cleanupCallbacks.push(async () => {
       await fse.remove(tempDir);
     });
@@ -451,6 +481,13 @@ int main() {
   }
 
   async cleanup(): Promise<void> {
+    // Update test status to completed before cleanup
+    try {
+      await this.updateTestStatus('completed');
+    } catch (error) {
+      // Ignore metadata update errors during cleanup
+    }
+
     for (const callback of this.cleanupCallbacks) {
       try {
         await callback();
@@ -460,5 +497,91 @@ int main() {
       }
     }
     this.cleanupCallbacks.length = 0;
+  }
+
+  // Test identification methods
+  private async createTestMetadata(testContext: TestContext, uuid: string): Promise<void> {
+    const metadata = {
+      testName: testContext.testName,
+      describe: testContext.describe,
+      timestamp: testContext.timestamp || Date.now(),
+      testId: testContext.testId,
+      uuid: uuid,
+      projectPath: this.projectPath,
+      createdAt: new Date().toISOString(),
+      nodeVersion: process.version,
+      platform: process.platform,
+      // Enhanced debugging metadata
+      status: 'running',
+      lastUpdated: new Date().toISOString(),
+      processId: process.pid,
+      parentProcessId: process.ppid,
+      workingDirectory: process.cwd(),
+      // Environment context
+      vitestEnvironment: {
+        pool: process.env.VITEST_POOL_ID,
+        worker: process.env.VITEST_WORKER_ID,
+        mode: process.env.VITEST_MODE,
+        environment: process.env.NODE_ENV,
+      },
+      // Test configuration
+      configuration: this.currentConfig,
+      // Folder naming context
+      folderName: this.projectPath.split('/').pop(),
+    };
+
+    await this.writeFile('.test-info.json', JSON.stringify(metadata, null, 2));
+  }
+
+  async getTestMetadata(): Promise<any> {
+    try {
+      const content = await this.readFile('.test-info.json');
+      return JSON.parse(content);
+    } catch {
+      return null;
+    }
+  }
+
+  async preserveForDebugging(reason?: string): Promise<void> {
+    const debugInfo = {
+      preservedAt: new Date().toISOString(),
+      reason: reason || 'Manual preservation',
+      projectPath: this.projectPath,
+    };
+
+    await this.writeFile('.debug-preserved.json', JSON.stringify(debugInfo, null, 2));
+    
+    // Update test status to indicate preservation
+    try {
+      await this.updateTestStatus('preserved', reason);
+    } catch (error) {
+      // Ignore metadata update errors
+    }
+    
+    // Clear cleanup callbacks to prevent folder deletion
+    this.cleanupCallbacks.length = 0;
+    
+    // eslint-disable-next-line no-console
+    console.log(`\n🔍 Test folder preserved for debugging: ${this.projectPath}`);
+    console.log(`   Reason: ${reason || 'Manual preservation'}`);
+  }
+
+  private async updateTestStatus(status: 'running' | 'completed' | 'failed' | 'preserved', reason?: string): Promise<void> {
+    try {
+      const metadata = await this.getTestMetadata();
+      if (metadata) {
+        metadata.status = status;
+        metadata.lastUpdated = new Date().toISOString();
+        if (reason) {
+          metadata.statusReason = reason;
+        }
+        if (status === 'completed') {
+          metadata.completedAt = new Date().toISOString();
+        }
+        await this.writeFile('.test-info.json', JSON.stringify(metadata, null, 2));
+      }
+    } catch (error) {
+      // Silently ignore metadata update errors
+    }
   }
 }

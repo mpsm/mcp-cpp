@@ -230,3 +230,54 @@ npm run lint       # Check code quality
 ```
 
 **Note**: E2E tests require the MCP server binary to be built first. Tests will fail fast with a clear error message if the binary is not found.
+
+**Enhanced Test Identification System:**
+
+The E2E framework now includes a comprehensive test identification system that addresses the issue of UUID-based temp folder names:
+
+- **Descriptive Folder Names**: `list-build-dirs-test-029e7d5a` instead of `test-project-uuid`
+- **Test-Aware Logging**: `mcp-cpp-server-list-build-dirs-test.log` instead of generic log names
+- **Test Metadata**: Each temp folder contains `.test-info.json` with test context
+- **Debug Preservation**: Failed tests can preserve their folders for investigation
+
+**Test Directory Inspector:**
+
+```bash
+cd test/e2e
+npm run inspect          # View all test directories and metadata
+npm run inspect:verbose  # Detailed view with full metadata
+npm run inspect:logs     # Include log file analysis
+npm run cleanup:dry      # Preview cleanup without removing
+npm run cleanup          # Remove all test directories
+```
+
+**Complete documentation**: See `test/e2e/README.md` for comprehensive usage guide.
+
+**IMPORTANT E2E Test Debugging Workflow:**
+
+When facing issues with E2E tests, follow this systematic approach:
+
+1. **First, inspect test directories** to identify the failed test run:
+   ```bash
+   cd test/e2e
+   npm run inspect:verbose
+   ```
+
+2. **Locate the corresponding logs** for the failed test (look for test-specific log files like `mcp-cpp-server-test-name.log`)
+
+3. **Examine the logs** to understand what actually failed - don't change random things
+
+4. **Use the metadata** in `.test-info.json` to get full context about the test environment
+
+5. **If needed, preserve the test folder** for deeper investigation:
+   ```typescript
+   await TestHelpers.preserveForDebugging(project, "Reason for investigation");
+   ```
+
+6. **Cross-reference clangd logs** when in doubt about MCP server behavior:
+   - Check both `mcp-cpp-server-test-name.log` and `mcp-cpp-clangd-test-name.log` from the same test run
+   - Clangd logs can validate whether the MCP server is communicating correctly with the LSP
+   - Look for LSP request/response patterns, indexing progress, and error messages in clangd logs
+   - This helps distinguish between MCP server issues vs LSP/clangd issues
+
+This systematic approach prevents random changes and focuses on actual root causes identified through logs and metadata.

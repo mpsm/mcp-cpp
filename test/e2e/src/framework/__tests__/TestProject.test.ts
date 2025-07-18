@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { TestProject, TestProjectError, ProjectTemplate, BuildConfiguration } from '../TestProject.js';
+import { TestHelpers } from '../TestHelpers.js';
 import * as path from 'path';
 
 describe('TestProject', () => {
@@ -13,10 +14,10 @@ describe('TestProject', () => {
 
   describe('factory methods', () => {
     it('should create project from BASE template by default', async () => {
-      project = await TestProject.fromTemplate();
+      project = await TestHelpers.createTestProject({ testName: 'base-template-default' });
       
       expect(project.projectPath).toBeDefined();
-      expect(project.projectPath).toContain('test-project-');
+      expect(project.projectPath).toContain('base-template-default-');
       expect(await project.fileExists('CMakeLists.txt')).toBe(true);
       expect(await project.fileExists('src/main.cpp')).toBe(true);
       expect(await project.fileExists('include/Math.hpp')).toBe(true);
@@ -24,7 +25,7 @@ describe('TestProject', () => {
     });
 
     it('should create project from BASE template explicitly', async () => {
-      project = await TestProject.fromTemplate(ProjectTemplate.BASE);
+      project = await TestHelpers.createTestProject({ template: 'base', testName: 'base-template-explicit' });
       
       expect(await project.fileExists('CMakeLists.txt')).toBe(true);
       expect(await project.fileExists('src/main.cpp')).toBe(true);
@@ -33,7 +34,7 @@ describe('TestProject', () => {
     });
 
     it('should create empty project', async () => {
-      project = await TestProject.empty();
+      project = await TestHelpers.createTestProject({ template: 'empty', testName: 'empty-project' });
       
       expect(project.projectPath).toBeDefined();
       expect(await project.fileExists('CMakeLists.txt')).toBe(false);
@@ -41,7 +42,7 @@ describe('TestProject', () => {
     });
 
     it('should create minimal CMake project', async () => {
-      project = await TestProject.fromTemplate(ProjectTemplate.MINIMAL_CMAKE);
+      project = await TestHelpers.createTestProject({ template: 'minimal-cmake', testName: 'minimal-cmake-project' });
       
       expect(await project.fileExists('CMakeLists.txt')).toBe(true);
       expect(await project.fileExists('main.cpp')).toBe(true);
@@ -52,10 +53,13 @@ describe('TestProject', () => {
     });
 
     it('should create project from base with options', async () => {
-      project = await TestProject.fromBaseProject({
-        enableDebugLogging: true,
-        enableMemoryStorage: true,
-        buildType: BuildConfiguration.DEBUG
+      project = await TestHelpers.createTestProject({ 
+        testName: 'base-project-with-options',
+        projectOptions: {
+          enableDebugLogging: true,
+          enableMemoryStorage: true,
+          buildType: BuildConfiguration.DEBUG
+        }
       });
       
       expect(await project.fileExists('CMakeLists.txt')).toBe(true);
@@ -67,8 +71,8 @@ describe('TestProject', () => {
     });
 
     it('should create projects with different paths', async () => {
-      const project1 = await TestProject.fromTemplate();
-      const project2 = await TestProject.fromTemplate();
+      const project1 = await TestHelpers.createTestProject({ testName: 'different-paths-1' });
+      const project2 = await TestHelpers.createTestProject({ testName: 'different-paths-2' });
       
       expect(project1.projectPath).not.toBe(project2.projectPath);
       
@@ -79,7 +83,7 @@ describe('TestProject', () => {
 
   describe('configuration methods', () => {
     beforeEach(async () => {
-      project = await TestProject.fromBaseProject();
+      project = await TestHelpers.createTestProject({ testName: 'configuration-methods' });
     });
 
     it('should configure project options', async () => {
@@ -126,7 +130,7 @@ describe('TestProject', () => {
 
   describe('enhanced file operations', () => {
     beforeEach(async () => {
-      project = await TestProject.empty();
+      project = await TestHelpers.createTestProject({ template: 'empty', testName: 'file-operations' });
     });
 
     it('should write and read files', async () => {
@@ -214,7 +218,7 @@ describe('TestProject', () => {
 
   describe('cmake operations', () => {
     beforeEach(async () => {
-      project = await TestProject.fromTemplate(ProjectTemplate.MINIMAL_CMAKE);
+      project = await TestHelpers.createTestProject({ template: 'minimal-cmake', testName: 'cmake-operations' });
     });
 
     it('should run cmake configuration', async () => {
@@ -331,7 +335,7 @@ describe('TestProject', () => {
 
   describe('cleanup', () => {
     it('should clean up temporary directories', async () => {
-      project = await TestProject.fromTemplate();
+      project = await TestHelpers.createTestProject({ testName: 'cleanup-test' });
       const projectPath = project.projectPath;
       
       await project.writeFile('test.txt', 'content');
@@ -345,7 +349,7 @@ describe('TestProject', () => {
     });
 
     it('should handle cleanup of non-existent directories gracefully', async () => {
-      project = await TestProject.fromTemplate();
+      project = await TestHelpers.createTestProject({ testName: 'cleanup-graceful' });
       await project.cleanup();
       
       // Second cleanup should not throw

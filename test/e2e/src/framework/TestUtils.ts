@@ -18,6 +18,22 @@ export class TestUtils {
   }
 
   /**
+   * Create test-aware log files within the project folder
+   */
+  static async createTestLogFiles(projectPath: string, testName: string): Promise<{serverLogPath: string, clangdLogPath: string}> {
+    const sanitizedTestName = testName
+      .replace(/[^a-zA-Z0-9-_]/g, '-')
+      .replace(/-+/g, '-')
+      .replace(/^-|-$/g, '')
+      .toLowerCase();
+    
+    const serverLogPath = path.join(projectPath, `mcp-cpp-server-${sanitizedTestName}.log`);
+    const clangdLogPath = path.join(projectPath, `mcp-cpp-clangd-${sanitizedTestName}.log`);
+    
+    return { serverLogPath, clangdLogPath };
+  }
+
+  /**
    * Clean up temporary log files after test completion
    */
   static async cleanupTempLogFile(logFilePath: string): Promise<void> {
@@ -102,6 +118,40 @@ export class TestUtils {
   }
 
   /**
+   * Get test context from current running test (requires integration with test runner)
+   */
+  static getTestContext(): { testName: string, describe?: string } {
+    // In a real implementation, this would integrate with the test runner
+    // For now, we'll extract from the stack trace or use environment variables
+    const testName = process.env.VITEST_TEST_NAME || 'unknown-test';
+    const describe = process.env.VITEST_DESCRIBE || undefined;
+    
+    return { testName, describe };
+  }
+
+  /**
+   * Create a test context object with current test information
+   */
+  static createTestContext(testName?: string, describe?: string): {
+    testName: string;
+    describe?: string;
+    timestamp: number;
+    testId: string;
+  } {
+    const actualTestName = testName || TestUtils.getTestContext().testName;
+    const actualDescribe = describe || TestUtils.getTestContext().describe;
+    const timestamp = Date.now();
+    const testId = `${actualTestName}-${timestamp}`;
+    
+    return {
+      testName: actualTestName,
+      describe: actualDescribe,
+      timestamp,
+      testId,
+    };
+  }
+
+  /**
    * Create environment variables for test logging configuration
    */
   static createTestLogEnv(
@@ -118,6 +168,40 @@ export class TestUtils {
       // Use structured format for easier parsing
       MCP_LOG_JSON: 'false', // Keep human-readable for easier debugging
     };
+  }
+
+  /**
+   * Create comprehensive test environment with test-aware logging
+   */
+  static createTestEnvironment(
+    projectPath: string,
+    testName: string,
+    logLevel: string = 'warn'
+  ): { env: Record<string, string>, serverLogPath: string, clangdLogPath: string } {
+    const sanitizedTestName = testName
+      .replace(/[^a-zA-Z0-9-_]/g, '-')
+      .replace(/-+/g, '-')
+      .replace(/^-|-$/g, '')
+      .toLowerCase();
+    
+    const serverLogPath = path.join(projectPath, `mcp-cpp-server-${sanitizedTestName}.log`);
+    const clangdLogPath = path.join(projectPath, `mcp-cpp-clangd-${sanitizedTestName}.log`);
+    
+    const env = {
+      // Set log level to reduce noise during testing
+      RUST_LOG: logLevel,
+      // Direct logs to file instead of stderr
+      MCP_LOG_FILE: serverLogPath,
+      // Add unique identifier to prevent conflicts
+      MCP_LOG_UNIQUE: 'true',
+      // Use structured format for easier parsing
+      MCP_LOG_JSON: 'false', // Keep human-readable for easier debugging
+      // Add test context to logs
+      MCP_TEST_NAME: testName,
+      MCP_TEST_ID: `${sanitizedTestName}-${Date.now()}`,
+    };
+    
+    return { env, serverLogPath, clangdLogPath };
   }
 
   /**
