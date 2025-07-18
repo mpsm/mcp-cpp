@@ -17,10 +17,13 @@ from typing import Dict, Any
 
 
 class ClangdIndexGenerator:
-    def __init__(self, build_directory: str, clangd_path: str = "clangd", refresh_index: bool = False):
+    def __init__(self, build_directory: str, clangd_path: str = "clangd",
+                 refresh_index: bool = False, log_file: str = None):
         self.build_directory = Path(build_directory).resolve()
         self.clangd_path = clangd_path
         self.refresh_index = refresh_index
+        self.log_file = log_file
+        self.log_file_handle = None
         self.process = None
         self.reader = None
         self.writer = None
@@ -36,6 +39,56 @@ class ClangdIndexGenerator:
         self.diagnostic_errors = 0  # Total count of diagnostic errors
         self.diagnostic_warnings = 0  # Total count of diagnostic warnings
         self.lsp_errors = 0  # Count of LSP protocol errors
+
+        # Open log file if specified
+        if self.log_file:
+            try:
+                self.log_file_handle = open(self.log_file, 'w',
+                                            encoding='utf-8')
+                print(f"📝 Logging clangd output to: {self.log_file}")
+            except Exception as e:
+                print(f"⚠️  Warning: Could not open log file "
+                      f"{self.log_file}: {e}")
+                self.log_file = None
+
+    def _log_message(self, message: str, source: str = "STDOUT"):
+        """Log a message to both console and file if log file is specified"""
+        timestamped_msg = f"[{time.strftime('%H:%M:%S')}] [{source}] {message}"
+
+        # Always print to console
+        print(timestamped_msg)
+
+        # Also write to log file if specified
+        if self.log_file_handle:
+            try:
+                self.log_file_handle.write(timestamped_msg + "\n")
+                self.log_file_handle.flush()
+            except Exception as e:
+                print(f"⚠️  Warning: Could not write to log file: {e}")
+
+    def _log_clangd_stderr(self, line: str):
+        """Log clangd stderr output with special handling"""
+        if self.log_file_handle:
+            try:
+                timestamp = time.strftime('%H:%M:%S')
+                self.log_file_handle.write(
+                    f"[{timestamp}] [CLANGD_STDERR] {line}\n")
+                self.log_file_handle.flush()
+            except Exception as e:
+                print(f"⚠️  Warning: Could not write stderr to log file: {e}")
+
+    def _log_lsp_message(self, message: Dict[str, Any], direction: str):
+        """Log LSP messages (JSON-RPC) to file if logging is enabled"""
+        if self.log_file_handle:
+            try:
+                timestamp = time.strftime('%H:%M:%S')
+                json_str = json.dumps(message, indent=2)
+                self.log_file_handle.write(
+                    f"[{timestamp}] [LSP_{direction}] {json_str}\n"
+                )
+                self.log_file_handle.flush()
+            except Exception as e:
+                print(f"⚠️  Warning: Could not write LSP message to log: {e}")
 
     def clean_cache(self):
         """Clean clangd cache directories to ensure fresh indexing (only if refresh_index is True)"""
@@ -89,7 +142,8 @@ class ClangdIndexGenerator:
             "--clang-tidy",
             "--completion-style=detailed",
             "--log=verbose",  # To see indexing messages
-            f"--compile-commands-dir={self.build_directory}"  # Pass build directory to clangd
+            # Pass build directory to clangd
+            f"--compile-commands-dir={self.build_directory}"
         ]
 
         print(f"Starting clangd with args: {' '.join(args)}")
@@ -128,6 +182,9 @@ class ClangdIndexGenerator:
                     break
                 line = line.strip()
                 if line:
+                    # Log all stderr to file if logging is enabled
+                    self._log_clangd_stderr(line)
+
                     # Look for indexing-related messages and errors
                     if any(keyword in line for keyword in [
                         "Enqueueing", "commands for indexing", "Indexed",
@@ -257,6 +314,9 @@ class ClangdIndexGenerator:
 
     def _handle_message(self, message: Dict[str, Any]):
         """Handle incoming messages from clangd"""
+        # Log incoming message if logging is enabled
+        self._log_lsp_message(message, "INCOMING")
+
         method = message.get("method", "")
 
         # Debug: print all methods we receive
@@ -357,6 +417,9 @@ class ClangdIndexGenerator:
 
     def _send_json_rpc(self, message: Dict[str, Any]):
         """Send a JSON-RPC message to clangd using LSP format"""
+        # Log outgoing message if logging is enabled
+        self._log_lsp_message(message, "OUTGOING")
+
         json_text = json.dumps(message)
         content = f"Content-Length: {len(json_text)}\r\n\r\n{json_text}"
 
@@ -570,15 +633,15 @@ class ClangdIndexGenerator:
         """
         # Get the first file from compile_commands.json - no need for folder introspection
         compile_commands = self.build_directory / "compile_commands.json"
-        
+
         try:
             with open(compile_commands, 'r') as f:
                 commands = json.load(f)
-            
+
             if not commands:
                 print("⚠️  No files in compile_commands.json. Cannot trigger indexing.")
                 return
-                
+
             # Use the first file from compile_commands.json
             cpp_file = Path(commands[0]['file'])
             print(f"📂 Opening file to trigger indexing: {cpp_file}")
@@ -734,6 +797,14 @@ class ClangdIndexGenerator:
             except subprocess.TimeoutExpired:
                 self.process.kill()
 
+        # Close log file if it was opened
+        if self.log_file_handle:
+            try:
+                self.log_file_handle.close()
+                print(f"📝 Clangd log saved to: {self.log_file}")
+            except Exception as e:
+                print(f"⚠️  Warning: Error closing log file: {e}")
+
     def load_compile_commands_info(self):
         """Load files from compile_commands.json for information and reporting"""
         compile_commands = self.build_directory / "compile_commands.json"
@@ -767,7 +838,11 @@ def main():
     parser.add_argument("--refresh-index", action="store_true",
                         help="Clean cache before indexing")
     parser.add_argument("--clangd-path", default="clangd",
-                        help="Path to clangd executable (default: CLANGD_PATH env var, then /usr/bin/clangd)")
+                        help="Path to clangd executable (default: "
+                        "CLANGD_PATH env var, then /usr/bin/clangd)")
+    parser.add_argument("--log-file",
+                        help="Save all clangd logs to specified file for "
+                        "investigation (optional)")
 
     args = parser.parse_args()
 
@@ -777,28 +852,28 @@ def main():
 
     # Determine clangd path with priority order
     clangd_path = None
-    
+
     # 1. Command-line argument (highest priority)
     if args.clangd_path != "clangd":  # Only if user explicitly provided a path
         clangd_path = args.clangd_path
         print(f"Using clangd from command line: {clangd_path}")
-    
+
     # 2. Environment variable
     elif "CLANGD_PATH" in os.environ:
         clangd_path = os.environ["CLANGD_PATH"]
         print(f"Using clangd from CLANGD_PATH env var: {clangd_path}")
-    
+
     # 3. Fallback to /usr/bin/clangd
     elif Path("/usr/bin/clangd").exists():
         clangd_path = "/usr/bin/clangd"
         print(f"Using fallback clangd: {clangd_path}")
-    
+
     # 4. Error if none found
     else:
         print("Error: clangd not found.")
         print("Please either:")
         print("  1. Use --clangd-path to specify the path")
-        print("  2. Set CLANGD_PATH environment variable") 
+        print("  2. Set CLANGD_PATH environment variable")
         print("  3. Install clangd at /usr/bin/clangd")
         sys.exit(1)
 
@@ -811,7 +886,7 @@ def main():
         sys.exit(1)
 
     generator = ClangdIndexGenerator(
-        args.build_directory, clangd_path, args.refresh_index)
+        args.build_directory, clangd_path, args.refresh_index, args.log_file)
 
     try:
         print("=" * 60)
