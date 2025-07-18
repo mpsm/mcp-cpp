@@ -155,7 +155,7 @@ pub struct AnalyzeSymbolContextTool {
     ///
     /// BEHAVIOR: When specified, uses this build directory instead of auto-detection.
     /// The build directory must contain compile_commands.json for clangd integration.
-    /// 
+    ///
     /// AUTO-DETECTION (when not specified): Attempts to find single build directory
     /// in current workspace. Fails if multiple or zero build directories found.
     ///

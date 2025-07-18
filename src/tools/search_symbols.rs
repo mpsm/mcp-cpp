@@ -141,7 +141,7 @@ pub struct SearchSymbolsTool {
     ///
     /// BEHAVIOR: When specified, uses this build directory instead of auto-detection.
     /// The build directory must contain compile_commands.json for clangd integration.
-    /// 
+    ///
     /// AUTO-DETECTION (when not specified): Attempts to find single build directory
     /// in current workspace. Fails if multiple or zero build directories found.
     ///
@@ -192,7 +192,12 @@ impl SearchSymbolsTool {
     ) -> Result<CallToolResult, CallToolError> {
         info!(
             "Searching symbols: query='{}', kinds={:?}, files={:?}, max_results={:?}, include_external={:?}, build_directory={:?}",
-            self.query, self.kinds, self.files, self.max_results, self.include_external, self.build_directory
+            self.query,
+            self.kinds,
+            self.files,
+            self.max_results,
+            self.include_external,
+            self.build_directory
         );
 
         // Handle build directory parameter or automatic clangd setup

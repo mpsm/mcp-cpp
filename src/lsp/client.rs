@@ -144,7 +144,10 @@ impl LspClient {
             .arg("--clang-tidy")
             .arg("--completion-style=detailed")
             .arg("--log=verbose")
-            .arg(format!("--compile-commands-dir={}", build_directory.display()))
+            .arg(format!(
+                "--compile-commands-dir={}",
+                build_directory.display()
+            ))
             .current_dir(project_root)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
@@ -282,7 +285,10 @@ impl LspClient {
                 .await
             {
                 Ok(file) => {
-                    info!("Clangd logs will be written to: {}", log_file_path.display());
+                    info!(
+                        "Clangd logs will be written to: {}",
+                        log_file_path.display()
+                    );
                     Some(file)
                 }
                 Err(e) => {
@@ -299,7 +305,9 @@ impl LspClient {
             let timestamp = chrono::Utc::now().format("%Y-%m-%d %H:%M:%S UTC");
             if let Some(ref mut file) = log_file {
                 if let Err(e) = file
-                    .write_all(format!("\n=== CLANGD SESSION STARTED: {timestamp} ===\n").as_bytes())
+                    .write_all(
+                        format!("\n=== CLANGD SESSION STARTED: {timestamp} ===\n").as_bytes(),
+                    )
                     .await
                 {
                     warn!("Failed to write header to clangd log file: {}", e);

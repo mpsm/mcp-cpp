@@ -175,12 +175,14 @@ Deep symbol analysis for comprehensive understanding:
 Both `search_symbols` and `analyze_symbol_context` tools support flexible build directory configuration:
 
 **Auto-Detection (Default Behavior):**
+
 - Automatically discovers single build directory in current workspace
 - Analyzes CMake cache files and compilation database status
 - Fails gracefully when multiple or zero build directories found
 - Uses `list_build_dirs` tool logic for discovery
 
 **Explicit Configuration:**
+
 - `build_directory` parameter accepts relative or absolute paths
 - Validates compile_commands.json presence before proceeding
 - Enables working with multiple build configurations
@@ -189,12 +191,14 @@ Both `search_symbols` and `analyze_symbol_context` tools support flexible build 
 ### clangd Process Management
 
 **Enhanced Startup Behavior:**
+
 - Sets clangd working directory to project root (from CMAKE_SOURCE_DIR)
 - Passes build directory via `--compile-commands-dir` argument
 - Logs clangd output to `<build_directory>/mcp-cpp-clangd.log`
 - Issues warning when changing between non-empty build directories
 
 **Build Directory Changes:**
+
 - Automatically shuts down existing clangd session on directory change
 - Warns about potential state inconsistencies during directory switching
 - Preserves project root detection from CMake cache analysis
@@ -295,6 +299,7 @@ npm run cleanup          # Remove all test directories
 When facing issues with E2E tests, follow this systematic approach:
 
 1. **First, inspect test directories** to identify the failed test run:
+
    ```bash
    cd test/e2e
    npm run inspect:verbose
@@ -307,6 +312,7 @@ When facing issues with E2E tests, follow this systematic approach:
 4. **Use the metadata** in `.test-info.json` to get full context about the test environment
 
 5. **If needed, preserve the test folder** for deeper investigation:
+
    ```typescript
    await TestHelpers.preserveForDebugging(project, "Reason for investigation");
    ```

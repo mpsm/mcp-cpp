@@ -103,12 +103,13 @@ Add to your Claude Desktop configuration file (`.mcp.json`):
    ```
 
    With custom build directory:
+
    ```json
    {
      "name": "search_symbols",
-     "arguments": { 
-       "query": "MyClass", 
-       "build_directory": "build-debug" 
+     "arguments": {
+       "query": "MyClass",
+       "build_directory": "build-debug"
      }
    }
    ```
@@ -127,6 +128,7 @@ Add to your Claude Desktop configuration file (`.mcp.json`):
    ```
 
    With custom build directory:
+
    ```json
    {
      "name": "analyze_symbol_context",
