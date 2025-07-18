@@ -654,12 +654,6 @@ class ClangdIndexGenerator:
                 time.sleep(2)
                 break
 
-            # Secondary completion: All compile_commands.json files indexed
-            if (self.compile_commands_files and
-                    len(self.indexed_files & self.compile_commands_files) >= len(self.compile_commands_files)):
-                print("🎯 Secondary signal: All compile_commands.json files indexed")
-                break
-
             # Fallback 1: No indexing activity for extended period
             if (self.indexed_files and
                     current_time - self.last_indexing_activity > 45):
@@ -792,6 +786,8 @@ def main():
                         help="Build directory with compile_commands.json")
     parser.add_argument("--refresh-index", action="store_true",
                         help="Clean cache before indexing")
+    parser.add_argument("--clangd-path", default="clangd",
+                        help="Path to clangd executable (default: CLANGD_PATH env var, then /usr/bin/clangd)")
 
     args = parser.parse_args()
 
@@ -799,14 +795,39 @@ def main():
         print(f"Error: Build directory {args.build_directory} does not exist")
         sys.exit(1)
 
-    # Check for clangd
-    clangd_path = "clangd"
+    # Determine clangd path with priority order
+    clangd_path = None
+    
+    # 1. Command-line argument (highest priority)
+    if args.clangd_path != "clangd":  # Only if user explicitly provided a path
+        clangd_path = args.clangd_path
+        print(f"Using clangd from command line: {clangd_path}")
+    
+    # 2. Environment variable
+    elif "CLANGD_PATH" in os.environ:
+        clangd_path = os.environ["CLANGD_PATH"]
+        print(f"Using clangd from CLANGD_PATH env var: {clangd_path}")
+    
+    # 3. Fallback to /usr/bin/clangd
+    elif Path("/usr/bin/clangd").exists():
+        clangd_path = "/usr/bin/clangd"
+        print(f"Using fallback clangd: {clangd_path}")
+    
+    # 4. Error if none found
+    else:
+        print("Error: clangd not found.")
+        print("Please either:")
+        print("  1. Use --clangd-path to specify the path")
+        print("  2. Set CLANGD_PATH environment variable") 
+        print("  3. Install clangd at /usr/bin/clangd")
+        sys.exit(1)
+
+    # Verify the clangd path works
     try:
         subprocess.run([clangd_path, "--version"],
                        capture_output=True, check=True)
     except (subprocess.CalledProcessError, FileNotFoundError):
-        print("Error: clangd not found. "
-              "Please install clangd or set CLANGD_PATH")
+        print(f"Error: clangd not found or not executable at '{clangd_path}'")
         sys.exit(1)
 
     generator = ClangdIndexGenerator(
