@@ -341,9 +341,14 @@ jobs:
       - name: Install C++ dependencies
         run: |
           sudo apt-get update
-          # Add LLVM APT repository for clangd-20
-          wget -O - https://apt.llvm.org/llvm-snapshot.gpg.key | sudo apt-key add -
-          echo "deb http://apt.llvm.org/jammy/ llvm-toolchain-jammy-20 main" | sudo tee /etc/apt/sources.list.d/llvm.list
+          # Install dependencies for repository setup
+          sudo apt-get install -y wget gnupg software-properties-common lsb-release
+          # Get Ubuntu codename dynamically
+          UBUNTU_CODENAME=$(lsb_release -sc)
+          echo "Ubuntu codename: $UBUNTU_CODENAME"
+          # Add LLVM APT repository for clangd-20 using correct Ubuntu version
+          wget -qO- https://apt.llvm.org/llvm-snapshot.gpg.key | sudo tee /etc/apt/trusted.gpg.d/apt.llvm.org.asc
+          echo "deb http://apt.llvm.org/$UBUNTU_CODENAME/ llvm-toolchain-$UBUNTU_CODENAME-20 main" | sudo tee /etc/apt/sources.list.d/llvm.list
           sudo apt-get update
           sudo apt-get install -y build-essential cmake ninja-build clangd-20
 
@@ -448,9 +453,14 @@ jobs:
       - name: Install C++ dependencies
         run: |
           sudo apt-get update
-          # Add LLVM APT repository for clangd-20
-          wget -O - https://apt.llvm.org/llvm-snapshot.gpg.key | sudo apt-key add -
-          echo "deb http://apt.llvm.org/jammy/ llvm-toolchain-jammy-20 main" | sudo tee /etc/apt/sources.list.d/llvm.list
+          # Install dependencies for repository setup
+          sudo apt-get install -y wget gnupg software-properties-common lsb-release
+          # Get Ubuntu codename dynamically
+          UBUNTU_CODENAME=$(lsb_release -sc)
+          echo "Ubuntu codename: $UBUNTU_CODENAME"
+          # Add LLVM APT repository for clangd-20 using correct Ubuntu version
+          wget -qO- https://apt.llvm.org/llvm-snapshot.gpg.key | sudo tee /etc/apt/trusted.gpg.d/apt.llvm.org.asc
+          echo "deb http://apt.llvm.org/$UBUNTU_CODENAME/ llvm-toolchain-$UBUNTU_CODENAME-20 main" | sudo tee /etc/apt/sources.list.d/llvm.list
           sudo apt-get update
           sudo apt-get install -y build-essential cmake ninja-build clangd-20
 
