@@ -2,7 +2,6 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { McpClient } from '../framework/McpClient.js';
 import { TestProject, BuildConfiguration } from '../framework/TestProject.js';
 import { findMcpServer, TestUtils } from '../framework/TestUtils.js';
-import { TestHelpers } from '../framework/TestHelpers.js';
 
 describe('List Build Dirs Tool', () => {
   let client: McpClient;
@@ -10,7 +9,10 @@ describe('List Build Dirs Tool', () => {
 
   beforeEach(async () => {
     // Enhanced setup with test context tracking
-    const testContext = TestUtils.createTestContext('list-build-dirs-test', 'List Build Dirs Tool');
+    const testContext = TestUtils.createTestContext(
+      'list-build-dirs-test',
+      'List Build Dirs Tool'
+    );
     project = await TestProject.fromBaseProject(undefined, testContext);
 
     const serverPath = await findMcpServer();

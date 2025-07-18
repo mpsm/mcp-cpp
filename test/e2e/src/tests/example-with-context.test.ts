@@ -13,9 +13,9 @@ describe('Example Test with Context Tracking', () => {
       template: 'base',
       testName: 'example-context-test',
       describe: 'Example Test with Context Tracking',
-      logLevel: 'info'
+      logLevel: 'info',
     });
-    
+
     project = setup.project;
     client = setup.client;
   });
@@ -27,22 +27,19 @@ describe('Example Test with Context Tracking', () => {
   it('should create identifiable temp folders and logs', async () => {
     // The temp folder will now have a descriptive name like:
     // "example-context-test-a1b2c3d4" instead of "test-project-uuid"
-    
-    const projectPath = project.getProjectPath();
-    console.log('Project path:', projectPath);
-    
+
     // Check that metadata was created
     const metadata = await project.getTestMetadata();
     expect(metadata).toBeDefined();
     expect(metadata.testName).toBe('example-context-test');
     expect(metadata.describe).toBe('Example Test with Context Tracking');
-    
+
     // Run a test operation
     await project.runCmake();
     const result = await client.callTool('list_build_dirs');
-    
+
     expect(result.content).toBeDefined();
-    
+
     // Logs will be named like:
     // - mcp-cpp-server-example-context-test.log
     // - mcp-cpp-clangd-example-context-test.log
@@ -50,16 +47,14 @@ describe('Example Test with Context Tracking', () => {
   });
 
   it('should handle test failure preservation', async () => {
-    const projectPath = project.getProjectPath();
-    
     // Simulate a test that might fail and need debugging
     try {
       await project.runCmake();
       const result = await client.callTool('list_build_dirs');
-      
+
       // If this test were to fail, we could preserve the folder:
       // await TestHelpers.preserveForDebugging(project, 'Test failed - investigating build dirs');
-      
+
       expect(result.content).toBeDefined();
     } catch (error) {
       // In a real failing test, uncomment this to preserve the folder
@@ -75,23 +70,20 @@ describe('Manual Context Example', () => {
     const project = await TestHelpers.createTestProject({
       template: 'base',
       testName: 'manual-context-test',
-      describe: 'Manual Context Example'
+      describe: 'Manual Context Example',
     });
-    
+
     const client = await TestHelpers.createMcpClient(project, {
       testName: 'manual-context-test',
-      logLevel: 'debug'
+      logLevel: 'debug',
     });
-    
+
     await client.start();
-    
+
     try {
-      const projectPath = project.getProjectPath();
-      console.log('Manual project path:', projectPath);
-      
       const metadata = await project.getTestMetadata();
       expect(metadata.testName).toBe('manual-context-test');
-      
+
       await project.runCmake();
       const result = await client.callTool('list_build_dirs');
       expect(result.content).toBeDefined();

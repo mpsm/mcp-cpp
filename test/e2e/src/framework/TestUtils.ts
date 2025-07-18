@@ -21,16 +21,25 @@ export class TestUtils {
   /**
    * Create test-aware log files within the project folder
    */
-  static async createTestLogFiles(projectPath: string, testName: string): Promise<{serverLogPath: string, clangdLogPath: string}> {
+  static async createTestLogFiles(
+    projectPath: string,
+    testName: string
+  ): Promise<{ serverLogPath: string; clangdLogPath: string }> {
     const sanitizedTestName = testName
       .replace(/[^a-zA-Z0-9-_]/g, '-')
       .replace(/-+/g, '-')
       .replace(/^-|-$/g, '')
       .toLowerCase();
-    
-    const serverLogPath = path.join(projectPath, `mcp-cpp-server-${sanitizedTestName}.log`);
-    const clangdLogPath = path.join(projectPath, `mcp-cpp-clangd-${sanitizedTestName}.log`);
-    
+
+    const serverLogPath = path.join(
+      projectPath,
+      `mcp-cpp-server-${sanitizedTestName}.log`
+    );
+    const clangdLogPath = path.join(
+      projectPath,
+      `mcp-cpp-clangd-${sanitizedTestName}.log`
+    );
+
     return { serverLogPath, clangdLogPath };
   }
 
@@ -121,29 +130,32 @@ export class TestUtils {
   /**
    * Get test context from current running test (requires integration with test runner)
    */
-  static getTestContext(): { testName: string, describe?: string } {
+  static getTestContext(): { testName: string; describe?: string } {
     // In a real implementation, this would integrate with the test runner
     // For now, we'll extract from the stack trace or use environment variables
-    const testName = process.env.VITEST_TEST_NAME || 'unknown-test';
-    const describe = process.env.VITEST_DESCRIBE || undefined;
-    
+    const testName = process.env.VITEST_TEST_NAME ?? 'unknown-test';
+    const describe = process.env.VITEST_DESCRIBE ?? undefined;
+
     return { testName, describe };
   }
 
   /**
    * Create a test context object with current test information
    */
-  static createTestContext(testName?: string, describe?: string): {
+  static createTestContext(
+    testName?: string,
+    describe?: string
+  ): {
     testName: string;
     describe?: string;
     timestamp: number;
     testId: string;
   } {
-    const actualTestName = testName || TestUtils.getTestContext().testName;
-    const actualDescribe = describe || TestUtils.getTestContext().describe;
+    const actualTestName = testName ?? TestUtils.getTestContext().testName;
+    const actualDescribe = describe ?? TestUtils.getTestContext().describe;
     const timestamp = Date.now();
     const testId = `${actualTestName}-${timestamp}`;
-    
+
     return {
       testName: actualTestName,
       describe: actualDescribe,
@@ -179,14 +191,14 @@ export class TestUtils {
       // Load .env file from the e2e test directory
       const envPath = path.join(__dirname, '..', '..', '.env');
       const envConfig = dotenv.config({ path: envPath });
-      
+
       if (envConfig.error) {
         // .env file doesn't exist or couldn't be parsed, return empty object
         return {};
       }
-      
-      return envConfig.parsed || {};
-    } catch (error) {
+
+      return envConfig.parsed ?? {};
+    } catch {
       // Silently ignore errors and return empty object
       return {};
     }
@@ -199,19 +211,29 @@ export class TestUtils {
     projectPath: string,
     testName: string,
     logLevel: string = 'warn'
-  ): { env: Record<string, string>, serverLogPath: string, clangdLogPath: string } {
+  ): {
+    env: Record<string, string>;
+    serverLogPath: string;
+    clangdLogPath: string;
+  } {
     const sanitizedTestName = testName
       .replace(/[^a-zA-Z0-9-_]/g, '-')
       .replace(/-+/g, '-')
       .replace(/^-|-$/g, '')
       .toLowerCase();
-    
-    const serverLogPath = path.join(projectPath, `mcp-cpp-server-${sanitizedTestName}.log`);
-    const clangdLogPath = path.join(projectPath, `mcp-cpp-clangd-${sanitizedTestName}.log`);
-    
+
+    const serverLogPath = path.join(
+      projectPath,
+      `mcp-cpp-server-${sanitizedTestName}.log`
+    );
+    const clangdLogPath = path.join(
+      projectPath,
+      `mcp-cpp-clangd-${sanitizedTestName}.log`
+    );
+
     // Load environment variables from .env file
     const envFromFile = TestUtils.loadDotEnv();
-    
+
     const env = {
       // Start with environment variables from .env file
       ...envFromFile,
@@ -227,7 +249,7 @@ export class TestUtils {
       MCP_TEST_NAME: testName,
       MCP_TEST_ID: `${sanitizedTestName}-${Date.now()}`,
     };
-    
+
     return { env, serverLogPath, clangdLogPath };
   }
 

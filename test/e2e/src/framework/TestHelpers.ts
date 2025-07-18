@@ -11,41 +11,50 @@ export class TestHelpers {
    */
   static async createTestProject(options?: {
     template?: 'base' | 'empty' | 'minimal-cmake';
-    projectOptions?: any;
+    projectOptions?: Record<string, unknown>;
     testName?: string;
     describe?: string;
   }): Promise<TestProject> {
-    const testContext = TestUtils.createTestContext(options?.testName, options?.describe);
-    
+    const testContext = TestUtils.createTestContext(
+      options?.testName,
+      options?.describe
+    );
+
     switch (options?.template) {
       case 'empty':
         return TestProject.empty(testContext);
       case 'minimal-cmake':
         return TestProject.fromTemplate('minimal-cmake', testContext);
       default:
-        return TestProject.fromBaseProject(options?.projectOptions, testContext);
+        return TestProject.fromBaseProject(
+          options?.projectOptions,
+          testContext
+        );
     }
   }
 
   /**
    * Create an MCP client with test-aware logging
    */
-  static async createMcpClient(project: TestProject, options?: {
-    timeout?: number;
-    logLevel?: string;
-    testName?: string;
-  }): Promise<McpClient> {
+  static async createMcpClient(
+    project: TestProject,
+    options?: {
+      timeout?: number;
+      logLevel?: string;
+      testName?: string;
+    }
+  ): Promise<McpClient> {
     const serverPath = await TestUtils.findMcpServer();
     const testContext = TestUtils.createTestContext(options?.testName);
     const logEnv = TestUtils.createTestEnvironment(
       project.getProjectPath(),
       testContext.testName,
-      options?.logLevel || 'warn'
+      options?.logLevel ?? 'warn'
     );
 
     return new McpClient(serverPath, {
       workingDirectory: project.getProjectPath(),
-      timeout: options?.timeout || 15000,
+      timeout: options?.timeout ?? 15000,
       env: logEnv.env,
     });
   }
@@ -55,7 +64,7 @@ export class TestHelpers {
    */
   static async setupTest(options?: {
     template?: 'base' | 'empty' | 'minimal-cmake';
-    projectOptions?: any;
+    projectOptions?: Record<string, unknown>;
     timeout?: number;
     logLevel?: string;
     testName?: string;
@@ -63,9 +72,9 @@ export class TestHelpers {
   }): Promise<{ project: TestProject; client: McpClient }> {
     const project = await TestHelpers.createTestProject(options);
     const client = await TestHelpers.createMcpClient(project, options);
-    
+
     await client.start();
-    
+
     return { project, client };
   }
 
@@ -80,7 +89,10 @@ export class TestHelpers {
   /**
    * Preserve test artifacts for debugging (useful for failed tests)
    */
-  static async preserveForDebugging(project: TestProject, reason?: string): Promise<void> {
+  static async preserveForDebugging(
+    project: TestProject,
+    reason?: string
+  ): Promise<void> {
     await project.preserveForDebugging(reason);
   }
 
@@ -106,19 +118,29 @@ export class TestHelpers {
       const lines = stack.split('\n');
       for (const line of lines) {
         // Look for test files in the stack
-        const testMatch = line.match(/at\s+(?:.*\s+\()?([^\s\(]+\.(test|spec)\.[jt]s)/);
+        const testMatch = line.match(
+          /at\s+(?:.*\s+\()?([^\s\(]+\.(test|spec)\.[jt]s)/
+        );
         if (testMatch) {
           const testFile = testMatch[1];
-          const basename = testFile.split('/').pop()?.replace(/\.(test|spec)\.[jt]s$/, '') || 'unknown';
+          const basename =
+            testFile
+              .split('/')
+              .pop()
+              ?.replace(/\.(test|spec)\.[jt]s$/, '') ?? 'unknown';
           return basename;
         }
-        
+
         // Look for test function names
         const functionMatch = line.match(/at\s+(test|it|describe)\s/);
         if (functionMatch) {
           const contextMatch = line.match(/\(([^)]+)\)/);
           if (contextMatch) {
-            const file = contextMatch[1].split('/').pop()?.replace(/\.[jt]s$/, '') || 'unknown';
+            const file =
+              contextMatch[1]
+                .split('/')
+                .pop()
+                ?.replace(/\.[jt]s$/, '') ?? 'unknown';
             return file;
           }
         }
@@ -134,7 +156,7 @@ export class TestHelpers {
    */
   static getCurrentDescribeName(): string | undefined {
     // Check various vitest environment variables
-    const describe = process.env.VITEST_DESCRIBE || process.env.VITEST_SUITE;
+    const describe = process.env.VITEST_DESCRIBE ?? process.env.VITEST_SUITE;
     if (describe) {
       return describe;
     }

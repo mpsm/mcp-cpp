@@ -87,8 +87,14 @@ export class TestProject {
     return project;
   }
 
-  static async fromBaseProject(options?: ProjectOptions, testContext?: TestContext): Promise<TestProject> {
-    const project = await TestProject.fromTemplate(ProjectTemplate.BASE, testContext);
+  static async fromBaseProject(
+    options?: ProjectOptions,
+    testContext?: TestContext
+  ): Promise<TestProject> {
+    const project = await TestProject.fromTemplate(
+      ProjectTemplate.BASE,
+      testContext
+    );
     if (options) {
       await project.configure(options);
     }
@@ -99,7 +105,10 @@ export class TestProject {
     return TestProject.fromTemplate(ProjectTemplate.EMPTY, testContext);
   }
 
-  static async fromExisting(sourcePath: string, testContext?: TestContext): Promise<TestProject> {
+  static async fromExisting(
+    sourcePath: string,
+    testContext?: TestContext
+  ): Promise<TestProject> {
     const project = await TestProject.createTempProject(testContext);
     await fse.copy(sourcePath, project.projectPath);
     return project;
@@ -339,11 +348,13 @@ export class TestProject {
   }
 
   // Private Helper Methods
-  private static async createTempProject(testContext?: TestContext): Promise<TestProject> {
+  private static async createTempProject(
+    testContext?: TestContext
+  ): Promise<TestProject> {
     // Use crypto.randomUUID() for truly unique directory names to avoid race conditions
     const { randomUUID } = await import('crypto');
     const uuid = randomUUID();
-    
+
     // Create descriptive folder name that includes test information
     let folderName: string;
     if (testContext) {
@@ -357,22 +368,18 @@ export class TestProject {
     } else {
       folderName = `test-project-${uuid}`;
     }
-    
-    const tempDir = path.join(
-      process.cwd(),
-      'temp',
-      folderName
-    );
+
+    const tempDir = path.join(process.cwd(), 'temp', folderName);
 
     await fse.ensureDir(tempDir);
 
     const project = new TestProject(tempDir);
-    
+
     // Create test metadata file
     if (testContext) {
       await project.createTestMetadata(testContext, uuid);
     }
-    
+
     project.cleanupCallbacks.push(async () => {
       await fse.remove(tempDir);
     });
@@ -484,7 +491,7 @@ int main() {
     // Update test status to completed before cleanup
     try {
       await this.updateTestStatus('completed');
-    } catch (error) {
+    } catch {
       // Ignore metadata update errors during cleanup
     }
 
@@ -500,11 +507,14 @@ int main() {
   }
 
   // Test identification methods
-  private async createTestMetadata(testContext: TestContext, uuid: string): Promise<void> {
+  private async createTestMetadata(
+    testContext: TestContext,
+    uuid: string
+  ): Promise<void> {
     const metadata = {
       testName: testContext.testName,
       describe: testContext.describe,
-      timestamp: testContext.timestamp || Date.now(),
+      timestamp: testContext.timestamp ?? Date.now(),
       testId: testContext.testId,
       uuid: uuid,
       projectPath: this.projectPath,
@@ -533,10 +543,10 @@ int main() {
     await this.writeFile('.test-info.json', JSON.stringify(metadata, null, 2));
   }
 
-  async getTestMetadata(): Promise<any> {
+  async getTestMetadata(): Promise<Record<string, unknown> | null> {
     try {
       const content = await this.readFile('.test-info.json');
-      return JSON.parse(content);
+      return JSON.parse(content) as Record<string, unknown>;
     } catch {
       return null;
     }
@@ -545,28 +555,37 @@ int main() {
   async preserveForDebugging(reason?: string): Promise<void> {
     const debugInfo = {
       preservedAt: new Date().toISOString(),
-      reason: reason || 'Manual preservation',
+      reason: reason ?? 'Manual preservation',
       projectPath: this.projectPath,
     };
 
-    await this.writeFile('.debug-preserved.json', JSON.stringify(debugInfo, null, 2));
-    
+    await this.writeFile(
+      '.debug-preserved.json',
+      JSON.stringify(debugInfo, null, 2)
+    );
+
     // Update test status to indicate preservation
     try {
       await this.updateTestStatus('preserved', reason);
-    } catch (error) {
+    } catch {
       // Ignore metadata update errors
     }
-    
+
     // Clear cleanup callbacks to prevent folder deletion
     this.cleanupCallbacks.length = 0;
-    
+
     // eslint-disable-next-line no-console
-    console.log(`\n🔍 Test folder preserved for debugging: ${this.projectPath}`);
-    console.log(`   Reason: ${reason || 'Manual preservation'}`);
+    console.log(
+      `\n🔍 Test folder preserved for debugging: ${this.projectPath}`
+    );
+    // eslint-disable-next-line no-console
+    console.log(`   Reason: ${reason ?? 'Manual preservation'}`);
   }
 
-  private async updateTestStatus(status: 'running' | 'completed' | 'failed' | 'preserved', reason?: string): Promise<void> {
+  private async updateTestStatus(
+    status: 'running' | 'completed' | 'failed' | 'preserved',
+    reason?: string
+  ): Promise<void> {
     try {
       const metadata = await this.getTestMetadata();
       if (metadata) {
@@ -578,9 +597,12 @@ int main() {
         if (status === 'completed') {
           metadata.completedAt = new Date().toISOString();
         }
-        await this.writeFile('.test-info.json', JSON.stringify(metadata, null, 2));
+        await this.writeFile(
+          '.test-info.json',
+          JSON.stringify(metadata, null, 2)
+        );
       }
-    } catch (error) {
+    } catch {
       // Silently ignore metadata update errors
     }
   }
