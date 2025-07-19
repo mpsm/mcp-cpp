@@ -200,7 +200,7 @@ impl CmakeProjectStatus {
         // If CMAKE_SOURCE_DIR not found, try to find {PROJECT_NAME}_SOURCE_DIR
         if source_dir.is_none() && project_name.is_some() {
             let project_source_dir_key = format!("{}_SOURCE_DIR", project_name.as_ref().unwrap());
-            
+
             // Second pass: look for project-specific SOURCE_DIR
             for line in content.lines() {
                 if line.starts_with('#') || line.trim().is_empty() {
@@ -233,7 +233,7 @@ impl CmakeProjectStatus {
     }
 
     /// Extract the project source directory from a build directory's CMakeCache.txt
-    /// 
+    ///
     /// This function first looks for CMAKE_SOURCE_DIR, and if not found, attempts to
     /// construct and find {PROJECT_NAME}_SOURCE_DIR using the CMAKE_PROJECT_NAME.
     /// This handles both standard and out-of-tree CMake builds.

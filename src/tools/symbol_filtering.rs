@@ -294,7 +294,7 @@ impl SymbolUtilities {
 
             // If no direct name match, try qualified name matching
             if let Some(container) = symbol.get("containerName").and_then(|c| c.as_str()) {
-                let qualified_name = format!("{}::{}", container, name);
+                let qualified_name = format!("{container}::{name}");
                 let qualified_lower = qualified_name.to_lowercase();
 
                 // Check if query matches the full qualified name
