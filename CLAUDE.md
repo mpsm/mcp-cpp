@@ -23,6 +23,7 @@ This is a **C++ MCP (Model Context Protocol) server** implemented in Rust that b
 - Project vs external symbol filtering using compilation database analysis
 - Structured JSON responses with comprehensive error handling
 - CI/CD pipeline with build, tests, clippy, and security audit
+- **Python CLI Tool (`mcp-cli.py`)** - Standalone command-line interface for easy MCP server interaction
 
 ### 🔄 Current Architecture
 
@@ -44,6 +45,11 @@ src/
     ├── search_symbols.rs     // C++ symbol search
     ├── analyze_symbols.rs    // Deep symbol analysis
     └── symbol_filtering.rs   // Project boundary and filtering logic
+
+tools/
+├── mcp-cli.py       // Standalone Python CLI for MCP server interaction
+├── requirements.txt // Python dependencies (rich>=13.0.0)
+└── generate-index.py // Symbol indexing tool
 ```
 
 ### 🎯 Current Capabilities
@@ -53,6 +59,104 @@ src/
 3. **Symbol Analysis**: Deep analysis with inheritance hierarchies, call patterns, and usage examples
 4. **Project Intelligence**: Smart filtering between project code and external dependencies
 5. **Indexing Management**: Real-time clangd indexing progress tracking and completion detection
+6. **Command-Line Interface**: Complete Python CLI tool for easy terminal-based interaction
+
+## Python CLI Tool (`mcp-cli.py`)
+
+### **Why This Tool is Valuable**
+
+The Python CLI tool provides a **convenient command-line interface** to the MCP server, making it accessible for:
+
+- **Quick code exploration** without setting up full MCP clients
+- **Scripting and automation** of code analysis tasks
+- **Testing and debugging** MCP server functionality
+- **Integration** with existing development workflows and shell scripts
+- **Educational purposes** to understand C++ codebase structure
+
+### **How I Can Use This Tool**
+
+**Basic Usage Pattern:**
+```bash
+# Navigate to any C++ project with CMake
+cd /path/to/cpp/project
+
+# Set clangd path if needed (for version compatibility)
+export CLANGD_PATH=/usr/bin/clangd-20
+
+# Use the CLI tool
+python3 /path/to/mcp-cpp/tools/mcp-cli.py [COMMAND] [OPTIONS]
+```
+
+**Available Commands:**
+
+1. **Project Analysis:**
+   ```bash
+   # Analyze build environment and CMake configuration
+   python3 tools/mcp-cli.py list-build-dirs
+   ```
+
+2. **Symbol Search:**
+   ```bash
+   # Find symbols quickly
+   python3 tools/mcp-cli.py search-symbols "Math"
+   python3 tools/mcp-cli.py search-symbols "vector" --max-results 20
+   python3 tools/mcp-cli.py search-symbols "std::" --include-external
+   ```
+
+3. **Deep Symbol Analysis:**
+   ```bash
+   # Comprehensive symbol analysis
+   python3 tools/mcp-cli.py analyze-symbol "Math::factorial" --include-usage-patterns
+   python3 tools/mcp-cli.py analyze-symbol "MyClass" --include-inheritance --include-call-hierarchy
+   ```
+
+4. **Tool Discovery:**
+   ```bash
+   # See all available MCP tools
+   python3 tools/mcp-cli.py list-tools
+   ```
+
+**Output Modes:**
+- **Pretty Mode (default)**: Rich formatted tables, colors, structured display
+- **Raw Mode**: Clean JSON for scripting: `--raw-output`
+
+**Key Options:**
+- `--server-path`: Specify custom MCP server binary location
+- `--raw-output`: Get JSON output instead of pretty formatting
+- All tool-specific parameters supported (build directories, filtering, analysis depth, etc.)
+
+### **When I Should Use This Tool**
+
+**Immediate Use Cases:**
+- **Code exploration**: Quickly understand unfamiliar C++ codebases
+- **Symbol lookup**: Find function definitions, class hierarchies, usage patterns
+- **Build troubleshooting**: Analyze CMake configuration and compilation database status
+- **Architecture analysis**: Understand class relationships and call patterns
+- **Development workflow**: Integrate into shell scripts for automated code analysis
+
+**Advantages Over Direct MCP Server:**
+- **No JSON-RPC knowledge required** - simple command-line interface
+- **Built-in formatting** - human-readable output without parsing JSON
+- **Comprehensive help** - detailed documentation for each command
+- **Error handling** - user-friendly error messages
+- **Shell integration** - works seamlessly in terminal workflows
+
+**Example Workflow:**
+```bash
+# 1. Analyze project structure
+python3 tools/mcp-cli.py list-build-dirs
+
+# 2. Find symbols of interest
+python3 tools/mcp-cli.py search-symbols "Calculator" --kinds class function
+
+# 3. Deep dive into specific symbols
+python3 tools/mcp-cli.py analyze-symbol "Calculator::compute" --include-usage-patterns
+
+# 4. Export results for further processing
+python3 tools/mcp-cli.py search-symbols "Math::" --raw-output > math_symbols.json
+```
+
+This tool essentially **democratizes access** to the powerful MCP server capabilities, making semantic C++ code analysis available through simple command-line operations.
 
 ## Key Design Principles
 
@@ -61,6 +165,7 @@ src/
 3. **MCP Protocol Compliance**: Use rust-mcp-sdk for proper MCP implementation
 4. **Comprehensive Testing**: Unit tests for core logic with CI/CD pipeline
 5. **Structured Error Handling**: Use thiserror for MCP-compatible errors
+6. **Accessible Interface**: Python CLI tool for easy command-line interaction
 
 ## Development Commands
 
@@ -79,11 +184,20 @@ cargo run
 # Development with watch mode
 cargo watch -x test        # Auto-run tests on file changes
 cargo watch -x run         # Auto-restart server on changes
+
+# Use the Python CLI tool
+cd tools && pip3 install -r requirements.txt  # Install dependencies
+python3 mcp-cli.py --help   # Get help
+python3 mcp-cli.py list-tools
 ```
 
 ## Repository Structure
 
 - `src/`: Rust source code with modular LSP and tool implementations
+- `tools/`: Utility tools and CLI interfaces
+  - `mcp-cli.py`: **Standalone Python CLI tool for easy MCP server interaction**
+  - `requirements.txt`: Python dependencies for the CLI tool
+  - `generate-index.py`: Symbol indexing tool
 - `test/`: Test projects and fixtures for validation
   - `test/e2e/`: End-to-end testing framework (Node.js/TypeScript)
   - `test/test-project/`: Base C++ project for testing MCP tools
@@ -324,3 +438,9 @@ When facing issues with E2E tests, follow this systematic approach:
    - This helps distinguish between MCP server issues vs LSP/clangd issues
 
 This systematic approach prevents random changes and focuses on actual root causes identified through logs and metadata.
+
+# important-instruction-reminders
+Do what has been asked; nothing more, nothing less.
+NEVER create files unless they're absolutely necessary for achieving your goal.
+ALWAYS prefer editing an existing file to creating a new one.
+NEVER proactively create documentation files (*.md) or README files. Only create documentation files if explicitly requested by the User.
