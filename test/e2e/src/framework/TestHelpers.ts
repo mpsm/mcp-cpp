@@ -2,6 +2,19 @@ import { TestProject, TestContext } from './TestProject.js';
 import { TestUtils } from './TestUtils.js';
 import { McpClient } from './McpClient.js';
 
+interface VitestContext {
+  task?: {
+    name?: string;
+    file?: { name?: string };
+    suite?: { name?: string };
+    result?: {
+      state?: 'fail' | 'pass' | 'skip';
+      errors?: Array<{ message: string }>;
+      duration?: number;
+    };
+  };
+}
+
 /**
  * Helper functions to simplify test setup with proper context tracking
  */
@@ -79,11 +92,19 @@ export class TestHelpers {
   }
 
   /**
-   * Enhanced cleanup that handles both client and project cleanup
+   * Enhanced cleanup that handles both client and project cleanup with failure awareness
    */
-  static async cleanup(client: McpClient, project: TestProject): Promise<void> {
+  static async cleanup(
+    client: McpClient,
+    project: TestProject,
+    options: { cleanupOnFailure?: boolean; vitestContext?: VitestContext } = {}
+  ): Promise<void> {
     await client.stop();
-    await project.cleanup();
+    // Use enhanced cleanup that preserves folders on test failure by default
+    await project.cleanup({
+      cleanupOnFailure: options.cleanupOnFailure ?? false,
+      vitestContext: options.vitestContext,
+    });
   }
 
   /**
@@ -91,9 +112,10 @@ export class TestHelpers {
    */
   static async preserveForDebugging(
     project: TestProject,
-    reason?: string
+    reason?: string,
+    testCaseInfo?: unknown
   ): Promise<void> {
-    await project.preserveForDebugging(reason);
+    await project.preserveForDebugging(reason, testCaseInfo);
   }
 
   /**

@@ -20,8 +20,12 @@ describe('Example Test with Context Tracking', () => {
     client = setup.client;
   });
 
-  afterEach(async () => {
-    await TestHelpers.cleanup(client, project);
+  afterEach(async (context) => {
+    // Enhanced cleanup preserves folders on test failure
+    await TestHelpers.cleanup(client, project, {
+      cleanupOnFailure: false,
+      vitestContext: context,
+    });
   });
 
   it('should create identifiable temp folders and logs', async () => {
@@ -88,7 +92,7 @@ describe('Manual Context Example', () => {
       const result = await client.callTool('list_build_dirs');
       expect(result.content).toBeDefined();
     } finally {
-      await TestHelpers.cleanup(client, project);
+      await TestHelpers.cleanup(client, project, { cleanupOnFailure: false });
     }
   });
 });

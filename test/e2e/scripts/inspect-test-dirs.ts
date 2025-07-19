@@ -28,6 +28,13 @@ interface DebugInfo {
   preservedAt: string;
   reason: string;
   projectPath: string;
+  testCase?: {
+    testCase: string;
+    testFile: string;
+    fullName: string;
+    errors: string[];
+    duration: number;
+  };
 }
 
 interface LogFileInfo {
@@ -264,6 +271,20 @@ function printDirectoryInfo(info: DirectoryInfo, options: InspectionOptions): vo
     console.log(colorize(`   🔍 PRESERVED FOR DEBUGGING`, 'yellow'));
     console.log(colorize(`   Reason: ${info.debugInfo.reason}`, 'yellow'));
     console.log(colorize(`   Preserved: ${formatDate(info.debugInfo.preservedAt)}`, 'yellow'));
+    
+    // Show specific test case information if available
+    if (info.debugInfo.testCase) {
+      const tc = info.debugInfo.testCase;
+      console.log(colorize(`   🎯 Failed Test Case: ${tc.testCase}`, 'red'));
+      console.log(colorize(`   📄 Test File: ${tc.testFile}`, 'dim'));
+      console.log(colorize(`   📍 Full Path: ${tc.fullName}`, 'dim'));
+      if (tc.errors.length > 0) {
+        console.log(colorize(`   ❌ Error: ${tc.errors[0]}`, 'red'));
+      }
+      if (tc.duration > 0) {
+        console.log(colorize(`   ⏱️  Duration: ${tc.duration}ms`, 'dim'));
+      }
+    }
   }
   
   // Log files

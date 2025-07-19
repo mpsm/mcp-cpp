@@ -408,36 +408,159 @@ npm run cleanup          # Remove all test directories
 
 **Complete documentation**: See `test/e2e/README.md` for comprehensive usage guide.
 
-**IMPORTANT E2E Test Debugging Workflow:**
+## **🔍 ADVANCED E2E TEST DEBUGGING SYSTEM**
 
-When facing issues with E2E tests, follow this systematic approach:
+### **Automatic Failure Preservation**
 
-1. **First, inspect test directories** to identify the failed test run:
+The E2E framework automatically preserves failed test environments for debugging:
 
-   ```bash
-   cd test/e2e
-   npm run inspect:verbose
-   ```
+#### **✅ Automatic Behavior (No Manual Intervention Required):**
+- **Failed tests are automatically detected** via Vitest context
+- **Test folders are preserved** with complete environment and logs
+- **Specific test case information** is captured in metadata
+- **Rich debugging information** is included for analysis
 
-2. **Locate the corresponding logs** for the failed test (look for test-specific log files like `mcp-cpp-server-test-name.log`)
+#### **🎯 Enhanced Test Case Identification:**
+When tests fail, you get detailed information about the specific failing test:
 
-3. **Examine the logs** to understand what actually failed - don't change random things
+```bash
+npm run inspect:verbose
+```
 
-4. **Use the metadata** in `.test-info.json` to get full context about the test environment
+**Sample Output:**
+```
+🔍 search-symbols-test-83fd7fb3
+   🔍 PRESERVED FOR DEBUGGING
+   🎯 Failed Test Case: should handle non-existent file gracefully
+   📄 Test File: src/tests/search-symbols.test.ts
+   📍 Full Path: File-specific search > should handle non-existent file gracefully
+   ❌ Error: expected 1 to be +0 // Object.is equality
+   ⏱️  Duration: 2130ms
+```
 
-5. **If needed, preserve the test folder** for deeper investigation:
+### **🛠️ Debugging Workflow**
 
-   ```typescript
-   await TestHelpers.preserveForDebugging(project, "Reason for investigation");
-   ```
+#### **1. Automatic Detection & Preservation**
+- Tests failing? **No manual action needed** - folders are preserved automatically
+- Multiple test failures? **Each gets its own preserved folder** with specific test case details
+- **Rich metadata** includes error messages, test hierarchy, and execution context
 
-6. **Cross-reference clangd logs** when in doubt about MCP server behavior:
-   - Check both `mcp-cpp-server-test-name.log` and `mcp-cpp-clangd-test-name.log` from the same test run
-   - Clangd logs can validate whether the MCP server is communicating correctly with the LSP
-   - Look for LSP request/response patterns, indexing progress, and error messages in clangd logs
-   - This helps distinguish between MCP server issues vs LSP/clangd issues
+#### **2. Identify Failed Tests**
+```bash
+cd test/e2e
+npm run inspect:verbose  # Shows all preserved test failures with specific details
+```
 
-This systematic approach prevents random changes and focuses on actual root causes identified through logs and metadata.
+#### **3. Investigate Specific Failures**
+Each preserved folder contains:
+- **`.test-info.json`** - Complete test environment metadata
+- **`.debug-preserved.json`** - Specific failure information with test case details
+- **`mcp-cpp-server-*.log`** - MCP server logs for this specific test
+- **`build-debug/mcp-cpp-clangd.log`** - clangd LSP logs in the build directory
+- **Complete project files** - Exact state when test failed
+- **Build artifacts** - Including `compile_commands.json` and CMake cache
+
+#### **4. Analyze Failure Context**
+```typescript
+// Example debug metadata structure:
+{
+  "testCase": {
+    "testCase": "should handle non-existent file gracefully",
+    "testFile": "src/tests/search-symbols.test.ts",
+    "fullName": "File-specific search > should handle non-existent file gracefully", 
+    "errors": ["expected 1 to be +0 // Object.is equality"],
+    "duration": 2130
+  },
+  "preservedAt": "2025-07-19T19:30:12.721Z",
+  "reason": "Test case \"should handle non-existent file gracefully\" failed - folder preserved automatically"
+}
+```
+
+#### **5. Advanced Log Analysis**
+
+**MCP Server Logs:**
+```bash
+# View test-specific server logs
+cat temp/search-symbols-test-*/mcp-cpp-server-search-symbols-test.*.log
+```
+
+**clangd LSP Logs (Located in Build Directory):**
+```bash
+# clangd logs are in the build directory of the preserved test folder
+cat temp/search-symbols-test-*/build-debug/mcp-cpp-clangd.log
+
+# Or use find to locate clangd logs
+find temp/search-symbols-test-* -name "mcp-cpp-clangd.log" -exec cat {} \;
+```
+
+**Key Log Analysis Points:**
+- **MCP server logs** show request/response handling, tool execution, errors
+- **clangd logs** show LSP communication, indexing progress, compilation issues
+- **Build directory state** shows compilation database and CMake configuration
+- **Cross-reference timestamps** between server and clangd logs for correlation
+
+#### **6. Build Environment Investigation**
+```bash
+# Check compilation database in preserved test
+cat temp/search-symbols-test-*/build-debug/compile_commands.json
+
+# Check CMake configuration
+cat temp/search-symbols-test-*/build-debug/CMakeCache.txt
+
+# Verify build directory structure
+ls -la temp/search-symbols-test-*/build-debug/
+```
+
+### **🎯 Test Categories & Preservation Strategy**
+
+#### **E2E Tests (Automatic Preservation):**
+- `search-symbols.test.ts` - MCP server symbol search functionality
+- `list-build-dirs.test.ts` - MCP server build directory analysis  
+- `example-with-context.test.ts` - Example E2E test patterns
+
+**✅ These automatically preserve on failure** - no manual intervention needed
+
+#### **Framework Unit Tests (Standard Cleanup):**
+- `TestProject.test.ts` - Framework unit tests
+
+**❌ These use standard cleanup** - no preservation needed for framework testing
+
+### **🧹 Cleanup Management**
+
+```bash
+# View all preserved test failures
+npm run inspect
+
+# Clean up after investigation
+npm run cleanup
+
+# Preview what would be cleaned
+npm run cleanup:dry
+```
+
+### **📋 Manual Preservation (Advanced)**
+
+For custom debugging scenarios:
+
+```typescript
+// In test code - preserve folder manually
+await project.preserveForDebugging("Custom investigation reason");
+
+// Or via TestHelpers
+await TestHelpers.preserveForDebugging(project, "Debugging specific scenario");
+```
+
+### **🚀 Best Practices**
+
+1. **Let the system work automatically** - most failures are preserved without intervention
+2. **Use `npm run inspect:verbose`** to identify specific failing test cases
+3. **Check error messages first** - often the clearest indicator of root cause  
+4. **Check clangd logs in build directory** - `build-debug/mcp-cpp-clangd.log` for LSP issues
+5. **Correlate server and clangd logs** to distinguish MCP vs LSP issues
+6. **Examine build artifacts** - compilation database and CMake state in build directories
+7. **Don't change random things** - use preserved state to understand actual problems
+
+This comprehensive debugging system ensures **no test failure goes uninvestigated** and provides **complete context** for understanding and fixing issues.
 
 # important-instruction-reminders
 Do what has been asked; nothing more, nothing less.

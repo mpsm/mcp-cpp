@@ -30,9 +30,10 @@ describe('List Build Dirs Tool', () => {
     await client.start();
   });
 
-  afterEach(async () => {
+  afterEach(async (context) => {
     await client.stop();
-    await project.cleanup();
+    // Use enhanced cleanup that preserves folders on test failure
+    await project.cleanup({ cleanupOnFailure: false, vitestContext: context });
   });
 
   describe('Basic functionality', () => {

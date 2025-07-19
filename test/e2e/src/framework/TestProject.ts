@@ -3,6 +3,19 @@ import * as path from 'path';
 import * as fse from 'fs-extra';
 import { spawn } from 'child_process';
 
+interface VitestContext {
+  task?: {
+    name?: string;
+    file?: { name?: string };
+    suite?: { name?: string };
+    result?: {
+      state?: 'fail' | 'pass' | 'skip';
+      errors?: Array<{ message: string }>;
+      duration?: number;
+    };
+  };
+}
+
 export enum ProjectTemplate {
   BASE = 'base',
   EMPTY = 'empty',
@@ -487,10 +500,52 @@ int main() {
     });
   }
 
-  async cleanup(): Promise<void> {
+  async cleanup(
+    options: { cleanupOnFailure?: boolean; vitestContext?: VitestContext } = {}
+  ): Promise<void> {
+    const { cleanupOnFailure = false, vitestContext } = options;
+
+    // Check test failure status - prefer vitest context over global state
+    let testFailed = false;
+    if (vitestContext?.task?.result?.state === 'fail') {
+      testFailed = true;
+    } else {
+      // Fallback to global state (may not be reliable due to timing)
+      const currentTestName = globalThis.__currentTestName;
+      const testStatus = currentTestName
+        ? globalThis.__testStates?.get(currentTestName)
+        : 'unknown';
+      testFailed = testStatus === 'failed';
+    }
+
+    // If test failed and cleanupOnFailure is false, preserve the folder
+    if (testFailed && !cleanupOnFailure) {
+      // Extract specific test case information from Vitest context
+      let reason = 'Test failed - folder preserved automatically';
+      let testCaseInfo = {};
+
+      if (vitestContext?.task) {
+        const task = vitestContext.task;
+        testCaseInfo = {
+          testCase: task.name ?? 'unknown',
+          testFile: task.file?.name ?? 'unknown',
+          fullName: task.suite?.name
+            ? `${task.suite.name} > ${task.name}`
+            : task.name,
+          errors: task.result?.errors?.map((e) => e.message) ?? [],
+          duration: task.result?.duration ?? 0,
+        };
+
+        reason = `Test case "${task.name}" failed - folder preserved automatically`;
+      }
+
+      await this.preserveForDebugging(reason, testCaseInfo);
+      return;
+    }
+
     // Update test status to completed before cleanup
     try {
-      await this.updateTestStatus('completed');
+      await this.updateTestStatus(testFailed ? 'failed' : 'completed');
     } catch {
       // Ignore metadata update errors during cleanup
     }
@@ -552,11 +607,15 @@ int main() {
     }
   }
 
-  async preserveForDebugging(reason?: string): Promise<void> {
+  async preserveForDebugging(
+    reason?: string,
+    testCaseInfo?: unknown
+  ): Promise<void> {
     const debugInfo = {
       preservedAt: new Date().toISOString(),
       reason: reason ?? 'Manual preservation',
       projectPath: this.projectPath,
+      ...(testCaseInfo && { testCase: testCaseInfo }),
     };
 
     await this.writeFile(
