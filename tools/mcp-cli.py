@@ -110,25 +110,12 @@ class McpClient:
 
 
 def find_server_binary() -> str:
-    """Find the MCP server binary, trying common locations"""
-    current_dir = Path.cwd()
-    
-    # Try release build first
-    release_path = current_dir / "target" / "release" / "mcp-cpp-server"
-    if release_path.exists():
-        return str(release_path)
-    
-    # Try debug build
-    debug_path = current_dir / "target" / "debug" / "mcp-cpp-server"
-    if debug_path.exists():
-        return str(debug_path)
-    
-    # Try in PATH
+    """Find the MCP server binary in PATH"""
     import shutil
     if shutil.which("mcp-cpp-server"):
         return "mcp-cpp-server"
     
-    raise McpCliError("Could not find mcp-cpp-server binary. Please build the project or specify --server-path")
+    raise McpCliError("Could not find mcp-cpp-server binary. Please install it in PATH or specify --server-path")
 
 
 def create_parser() -> argparse.ArgumentParser:
@@ -508,8 +495,117 @@ def _format_symbol_analysis(console, data: Dict) -> None:
         console.print(f"[red]Analysis failed: {data.get('error', 'Unknown error')}[/red]")
         return
         
-    symbol_name = data.get("symbol", "Unknown")
-    analysis = data.get("analysis", {})
+    # Handle the actual response structure from the MCP server
+    symbol_data = data.get("symbol", {})
+    symbol_name = symbol_data.get("name", "Unknown Symbol")
+    
+    # Check if this is a namespace with class members
+    if "class_members" in symbol_data and "members" in symbol_data["class_members"]:
+        members = symbol_data["class_members"]["members"]
+        console.print(Panel(f"[bold cyan]Namespace Members ({len(members)} items)[/bold cyan]", 
+                           title=f"Analysis: {symbol_name}", border_style="blue"))
+        
+        # Group members by kind
+        by_kind = {}
+        for member in members:
+            kind = member.get("kind", "unknown")
+            if kind not in by_kind:
+                by_kind[kind] = []
+            by_kind[kind].append(member)
+        
+        # Display each kind group
+        for kind, items in by_kind.items():
+            console.print(f"\n[bold green]{kind.upper()}S ({len(items)}):[/bold green]")
+            
+            table = Table(show_header=True, header_style="bold magenta", box=None, padding=(0, 1))
+            table.add_column("Name", style="cyan", width=20)
+            table.add_column("Signature", style="white")
+            table.add_column("Location", style="green", width=15)
+            
+            for item in items[:10]:  # Limit to first 10 items per kind
+                name = item.get("name", "Unknown")
+                detail = item.get("detail", "")
+                
+                # Extract location
+                location = ""
+                if "range" in item and "start" in item["range"]:
+                    line = item["range"]["start"].get("line", 0) + 1
+                    location = f"Line {line}"
+                
+                table.add_row(name, detail, location)
+            
+            if len(items) > 10:
+                table.add_row("...", f"({len(items) - 10} more)", "")
+            
+            console.print(table)
+        
+        return
+    
+    # Handle individual symbol analysis
+    if "definition" in symbol_data or "declaration" in symbol_data or "type_info" in symbol_data:
+        console.print(Panel(f"[bold cyan]Symbol Analysis: {symbol_name}[/bold cyan]", 
+                           title="Symbol Information", border_style="blue"))
+        
+        # Basic symbol info
+        kind = symbol_data.get("kind", "Unknown")
+        console.print(f"[bold]Kind:[/bold] {kind}")
+        
+        # Type information
+        if "type_info" in symbol_data:
+            type_info = symbol_data["type_info"]
+            console.print(f"[bold]Type:[/bold] {type_info.get('type', 'Unknown')}")
+            console.print(f"[bold]Fully Qualified Name:[/bold] {symbol_data.get('fully_qualified_name', 'Unknown')}")
+            
+            # Additional type properties
+            properties = []
+            if type_info.get("is_static"):
+                properties.append("static")
+            if type_info.get("is_const"):
+                properties.append("const")
+            if type_info.get("is_template"):
+                properties.append("template")
+            if properties:
+                console.print(f"[bold]Properties:[/bold] {', '.join(properties)}")
+        
+        console.print()
+        
+        # Location information
+        if "definition" in symbol_data:
+            definition = symbol_data["definition"]
+            file_uri = definition.get("uri", "")
+            if file_uri.startswith("file://"):
+                file_path = file_uri[7:]
+            else:
+                file_path = file_uri
+            
+            if "range" in definition and "start" in definition["range"]:
+                line = definition["range"]["start"].get("line", 0) + 1
+                console.print(f"[bold]Definition:[/bold] {file_path}:{line}")
+        
+        if "declaration" in symbol_data:
+            declaration = symbol_data["declaration"]
+            file_uri = declaration.get("uri", "")
+            if file_uri.startswith("file://"):
+                file_path = file_uri[7:]
+            else:
+                file_path = file_uri
+                
+            if "range" in declaration and "start" in declaration["range"]:
+                line = declaration["range"]["start"].get("line", 0) + 1
+                console.print(f"[bold]Declaration:[/bold] {file_path}:{line}")
+        
+        # Documentation
+        if "documentation" in symbol_data:
+            doc = symbol_data["documentation"]
+            console.print(f"\n[bold]Documentation:[/bold]")
+            # Display as code syntax for better formatting
+            syntax = Syntax(doc, "markdown", theme="monokai", line_numbers=False)
+            console.print(Panel(syntax, border_style="dim"))
+        
+        return
+    
+    # Fall back to the original analysis format if it's something else
+    analysis = symbol_data
     
     console.print(Panel(f"[bold cyan]Symbol Analysis: {symbol_name}[/bold cyan]", 
                        title="Symbol Information", border_style="blue"))
