@@ -5,7 +5,12 @@ use thiserror::Error;
 use tracing::{debug, warn};
 use walkdir::WalkDir;
 
-type CacheParseResult = (Option<String>, Option<String>, Vec<(String, String)>);
+type CacheParseResult = (
+    Option<String>,
+    Option<String>,
+    Vec<(String, String)>,
+    Option<PathBuf>,
+);
 
 #[derive(Debug, Error)]
 pub enum CmakeError {
@@ -135,7 +140,7 @@ impl CmakeProjectStatus {
 
         if cache_exists {
             match Self::parse_cmake_cache(&cache_file) {
-                Ok((generator, build_type, options)) => {
+                Ok((generator, build_type, options, _source_dir)) => {
                     build_dir.cache_readable = true;
                     build_dir.generator = generator;
                     build_dir.build_type = build_type;
@@ -156,7 +161,10 @@ impl CmakeProjectStatus {
         let mut generator = None;
         let mut build_type = None;
         let mut options = Vec::new();
+        let mut source_dir = None;
+        let mut project_name = None;
 
+        // First pass: collect all data including project name
         for line in content.lines() {
             if line.starts_with('#') || line.trim().is_empty() {
                 continue;
@@ -176,6 +184,8 @@ impl CmakeProjectStatus {
                 match key {
                     "CMAKE_GENERATOR" => generator = Some(value.to_string()),
                     "CMAKE_BUILD_TYPE" => build_type = Some(value.to_string()),
+                    "CMAKE_SOURCE_DIR" => source_dir = Some(PathBuf::from(value)),
+                    "CMAKE_PROJECT_NAME" => project_name = Some(value.to_string()),
                     _ if key.starts_with("CMAKE_") => {
                         // Skip internal CMake variables for cleaner output
                     }
@@ -187,9 +197,54 @@ impl CmakeProjectStatus {
             }
         }
 
+        // If CMAKE_SOURCE_DIR not found, try to find {PROJECT_NAME}_SOURCE_DIR
+        if source_dir.is_none() && project_name.is_some() {
+            let project_source_dir_key = format!("{}_SOURCE_DIR", project_name.as_ref().unwrap());
+            
+            // Second pass: look for project-specific SOURCE_DIR
+            for line in content.lines() {
+                if line.starts_with('#') || line.trim().is_empty() {
+                    continue;
+                }
+
+                if let Some(eq_pos) = line.find('=') {
+                    let (key_part, value) = line.split_at(eq_pos);
+                    let value = &value[1..]; // Skip the '=' character
+
+                    // Parse key:type format
+                    let key = if let Some(colon_pos) = key_part.find(':') {
+                        &key_part[..colon_pos]
+                    } else {
+                        key_part
+                    };
+
+                    if key == project_source_dir_key {
+                        source_dir = Some(PathBuf::from(value));
+                        break;
+                    }
+                }
+            }
+        }
+
         // Sort options for consistent output
         options.sort_by(|a, b| a.0.cmp(&b.0));
 
-        Ok((generator, build_type, options))
+        Ok((generator, build_type, options, source_dir))
+    }
+
+    /// Extract the project source directory from a build directory's CMakeCache.txt
+    /// 
+    /// This function first looks for CMAKE_SOURCE_DIR, and if not found, attempts to
+    /// construct and find {PROJECT_NAME}_SOURCE_DIR using the CMAKE_PROJECT_NAME.
+    /// This handles both standard and out-of-tree CMake builds.
+    #[allow(dead_code)]
+    pub fn get_source_dir_from_build_dir(build_directory: &Path) -> Option<PathBuf> {
+        let cache_file = build_directory.join("CMakeCache.txt");
+
+        if let Ok((_, _, _, source_dir)) = Self::parse_cmake_cache(&cache_file) {
+            source_dir
+        } else {
+            None
+        }
     }
 }

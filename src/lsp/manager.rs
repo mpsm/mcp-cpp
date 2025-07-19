@@ -256,7 +256,10 @@ impl ClangdManager {
             },
             "initializationOptions": {
                 "clangdFileStatus": true,
-                "fallbackFlags": ["-std=c++20"]
+                "fallbackFlags": ["-std=c++20"],
+                "workspaceSymbols": {
+                    "limit": 10000
+                }
             }
         });
 
@@ -667,21 +670,25 @@ impl ClangdManager {
     }
 
     fn determine_project_root(build_directory: &Path) -> Option<PathBuf> {
-        // Try to read the actual source directory from CMakeCache.txt
-        let cache_file = build_directory.join("CMakeCache.txt");
-
-        if let Ok(content) = std::fs::read_to_string(&cache_file) {
-            // Look for CMAKE_SOURCE_DIR entry in CMakeCache.txt
-            for line in content.lines() {
-                if let Some(source_dir) = line.strip_prefix("CMAKE_SOURCE_DIR:INTERNAL=") {
-                    let source_path = PathBuf::from(source_dir);
-                    return Some(source_path);
-                }
-            }
+        // Use the CMake class to get the actual source directory from CMakeCache.txt
+        // This handles both CMAKE_SOURCE_DIR and {PROJECT_NAME}_SOURCE_DIR cases
+        if let Some(source_dir) =
+            crate::cmake::CmakeProjectStatus::get_source_dir_from_build_dir(build_directory)
+        {
+            info!(
+                "Project root determined from CMake cache: {}",
+                source_dir.display()
+            );
+            return Some(source_dir);
         }
 
-        // Fallback: assume build directory is a subdirectory of project root
-        build_directory.parent().map(|p| p.to_path_buf())
+        // If CMake cache doesn't contain source directory information, we cannot reliably
+        // determine the project root, especially for out-of-tree builds
+        warn!(
+            "Could not determine project root from CMake cache in build directory: {}",
+            build_directory.display()
+        );
+        None
     }
 }
 

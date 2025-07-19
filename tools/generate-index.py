@@ -1,7 +1,17 @@
 #!/usr/bin/env python3
 """
 Script to generate clangd index by mimicking VS Code's initialization sequence.
-Automatically exits when clangd finishes indexing.
+Automatically exits when clang        # Use same arguments as VS Code (from the log analysis)
+        args = [
+            self.clangd_path,
+            "--background-index",  # Fixed: not --background-index=true
+            "--clang-tidy",
+            "--completion-style=detailed",
+            "--log=verbose",  # To see indexing messages
+            "--query-driver=**",  # Allow querying all drivers
+            # Pass build directory to clangd
+            f"--compile-commands-dir={self.build_directory}"
+        ]indexing.
 """
 
 import json
@@ -142,6 +152,7 @@ class ClangdIndexGenerator:
             "--clang-tidy",
             "--completion-style=detailed",
             "--log=verbose",  # To see indexing messages
+            "--query-driver=**",  # Allow querying all drivers for cross-compilation
             # Pass build directory to clangd
             f"--compile-commands-dir={self.build_directory}"
         ]

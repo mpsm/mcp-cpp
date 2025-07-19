@@ -144,6 +144,7 @@ impl LspClient {
             .arg("--clang-tidy")
             .arg("--completion-style=detailed")
             .arg("--log=verbose")
+            .arg("--query-driver=**")
             .arg(format!(
                 "--compile-commands-dir={}",
                 build_directory.display()

@@ -479,9 +479,19 @@ impl SearchSymbolsTool {
         }
 
         // Send workspace symbol request with user's query
-        let params = json!({
+        // Note: We're trying to request more symbols than clangd's default limit (usually 100)
+        let mut params = json!({
             "query": self.query
         });
+
+        // Try to add clangd-specific parameters to increase symbol limit
+        // This may or may not be supported by clangd, but worth trying
+        if let Some(max_results) = self.max_results {
+            if max_results > 100 {
+                params["limit"] = json!(max_results);
+                params["maxResults"] = json!(max_results);
+            }
+        }
 
         info!(
             "📡 SearchSymbolsTool::search_workspace() - Sending workspace/symbol LSP request with query: '{}'",
@@ -519,8 +529,21 @@ impl SearchSymbolsTool {
                     filtered_symbols.len()
                 );
 
+                // IMPORTANT: Apply qualified name filtering to workspace symbols too
+                // This handles cases where clangd doesn't properly match qualified names like "Math::Complex::add"
+                let query_filtered_symbols: Vec<_> = filtered_symbols
+                    .into_iter()
+                    .filter(|symbol| {
+                        SymbolUtilities::matches_query_and_filters(symbol, &self.query, &self.kinds)
+                    })
+                    .collect();
+                info!(
+                    "📊 SearchSymbolsTool::search_workspace() - Query-filtered symbols count: {}",
+                    query_filtered_symbols.len()
+                );
+
                 let limited_symbols =
-                    SymbolUtilities::limit_results(filtered_symbols, self.max_results);
+                    SymbolUtilities::limit_results(query_filtered_symbols, self.max_results);
                 info!(
                     "📊 SearchSymbolsTool::search_workspace() - Limited symbols count: {}",
                     limited_symbols.len()
