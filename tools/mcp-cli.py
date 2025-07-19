@@ -128,15 +128,21 @@ Examples:
   %(prog)s list-tools
   %(prog)s search-symbols Math --max-results 20
   %(prog)s analyze-symbol "Math::sqrt" --include-usage-patterns
-  %(prog)s list-build-dirs
+  %(prog)s list-build-dirs --pretty-json
         """
     )
     
     # Global options
-    parser.add_argument(
+    output_group = parser.add_mutually_exclusive_group()
+    output_group.add_argument(
         "--raw-output",
         action="store_true",
         help="Output raw JSON instead of pretty-formatted text"
+    )
+    output_group.add_argument(
+        "--pretty-json",
+        action="store_true",
+        help="Pretty print the 'text' field of JSON-RPC response as formatted JSON"
     )
     parser.add_argument(
         "--server-path",
@@ -326,6 +332,8 @@ def main():
         # Output the response
         if args.raw_output:
             print(json.dumps(response, indent=2))
+        elif args.pretty_json:
+            format_pretty_json_output(response)
         else:
             format_output(args.command, response)
             
@@ -346,6 +354,30 @@ def format_output(command: str, response: Dict) -> None:
         _format_simple_output(response)
     else:
         _format_rich_output(command, response)
+
+
+def format_pretty_json_output(response: Dict) -> None:
+    """Pretty print the 'text' field of JSON-RPC response as formatted JSON"""
+    if "result" in response and "content" in response["result"]:
+        content = response["result"]["content"]
+        if content and len(content) > 0 and "text" in content[0]:
+            try:
+                # Parse the JSON in the text field
+                data = json.loads(content[0]["text"])
+                # Pretty print it with syntax highlighting if rich is available
+                if RICH_AVAILABLE:
+                    console = Console()
+                    syntax = Syntax(json.dumps(data, indent=2), "json", theme="monokai")
+                    console.print(syntax)
+                else:
+                    print(json.dumps(data, indent=2))
+            except json.JSONDecodeError:
+                # If text field is not valid JSON, just print it as-is
+                print(content[0]["text"])
+        else:
+            print("No text content found in response")
+    else:
+        print("Invalid response format: missing result or content")
 
 
 def _format_simple_output(response: Dict) -> None:
