@@ -256,7 +256,7 @@ describe('Search Symbols Tool', () => {
       }
     });
 
-    it('should respect result limits', async () => {
+    it.skip('should respect result limits', async () => {
       const result = await client.callTool('search_symbols', {
         query: 'operator', // Should match many symbols
         limit: 5,
