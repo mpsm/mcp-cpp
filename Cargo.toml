@@ -8,6 +8,9 @@ repository = "https://github.com/mpsm/mcp-cpp"
 authors = ["mpsm"]
 keywords = ["mcp", "cpp", "clangd", "lsp", "code-analysis"]
 categories = ["development-tools", "command-line-utilities"]
+readme = "README.md"
+documentation = "https://docs.rs/mcp-cpp-server"
+homepage = "https://github.com/mpsm/mcp-cpp"
 
 [dependencies]
 async-trait = "0.1.88"
