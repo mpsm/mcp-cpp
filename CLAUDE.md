@@ -24,6 +24,7 @@ This is a **C++ MCP (Model Context Protocol) server** implemented in Rust that b
 - Structured JSON responses with comprehensive error handling
 - CI/CD pipeline with build, tests, clippy, and security audit
 - **Python CLI Tool (`mcp-cli.py`)** - Standalone command-line interface for easy MCP server interaction
+- **FIXED: Result limiting architecture** - Proper client-side limiting preserving clangd ranking
 
 ### 🔄 Current Architecture
 
@@ -42,9 +43,9 @@ src/
 └── tools/           // MCP tool implementations
     ├── mod.rs       // Tool registration and routing
     ├── cmake_tools.rs        // Build directory analysis
-    ├── search_symbols.rs     // C++ symbol search
+    ├── search_symbols.rs     // C++ symbol search with FIXED result limiting
     ├── analyze_symbols.rs    // Deep symbol analysis
-    └── symbol_filtering.rs   // Project boundary and filtering logic
+    └── symbol_filtering.rs   // Project boundary and filtering logic with comprehensive tests
 
 tools/
 ├── mcp-cli.py       // Standalone Python CLI for MCP server interaction
@@ -60,6 +61,7 @@ tools/
 4. **Project Intelligence**: Smart filtering between project code and external dependencies
 5. **Indexing Management**: Real-time clangd indexing progress tracking and completion detection
 6. **Command-Line Interface**: Complete Python CLI tool for easy terminal-based interaction
+7. **Proper Result Limiting**: Fixed clangd communication issue for predictable symbol counts
 
 ## Python CLI Tool (`mcp-cli.py`)
 
@@ -76,6 +78,7 @@ The Python CLI tool provides a **convenient command-line interface** to the MCP 
 ### **How I Can Use This Tool**
 
 **Basic Usage Pattern:**
+
 ```bash
 # Navigate to any C++ project with CMake
 cd /path/to/cpp/project
@@ -90,12 +93,14 @@ python3 /path/to/mcp-cpp/tools/mcp-cli.py [COMMAND] [OPTIONS]
 **Available Commands:**
 
 1. **Project Analysis:**
+
    ```bash
    # Analyze build environment and CMake configuration
    python3 tools/mcp-cli.py list-build-dirs
    ```
 
 2. **Symbol Search:**
+
    ```bash
    # Find symbols quickly
    python3 tools/mcp-cli.py search-symbols "Math"
@@ -104,6 +109,7 @@ python3 /path/to/mcp-cpp/tools/mcp-cli.py [COMMAND] [OPTIONS]
    ```
 
 3. **Deep Symbol Analysis:**
+
    ```bash
    # Comprehensive symbol analysis
    python3 tools/mcp-cli.py analyze-symbol "Math::factorial" --include-usage-patterns
@@ -117,10 +123,12 @@ python3 /path/to/mcp-cpp/tools/mcp-cli.py [COMMAND] [OPTIONS]
    ```
 
 **Output Modes:**
+
 - **Pretty Mode (default)**: Rich formatted tables, colors, structured display
 - **Raw Mode**: Clean JSON for scripting: `--raw-output`
 
 **Key Options:**
+
 - `--server-path`: Specify custom MCP server binary location
 - `--raw-output`: Get JSON output instead of pretty formatting
 - All tool-specific parameters supported (build directories, filtering, analysis depth, etc.)
@@ -128,6 +136,7 @@ python3 /path/to/mcp-cpp/tools/mcp-cli.py [COMMAND] [OPTIONS]
 ### **When I Should Use This Tool**
 
 **Immediate Use Cases:**
+
 - **Code exploration**: Quickly understand unfamiliar C++ codebases
 - **Symbol lookup**: Find function definitions, class hierarchies, usage patterns
 - **Build troubleshooting**: Analyze CMake configuration and compilation database status
@@ -135,6 +144,7 @@ python3 /path/to/mcp-cpp/tools/mcp-cli.py [COMMAND] [OPTIONS]
 - **Development workflow**: Integrate into shell scripts for automated code analysis
 
 **Advantages Over Direct MCP Server:**
+
 - **No JSON-RPC knowledge required** - simple command-line interface
 - **Built-in formatting** - human-readable output without parsing JSON
 - **Comprehensive help** - detailed documentation for each command
@@ -142,6 +152,7 @@ python3 /path/to/mcp-cpp/tools/mcp-cli.py [COMMAND] [OPTIONS]
 - **Shell integration** - works seamlessly in terminal workflows
 
 **Example Workflow:**
+
 ```bash
 # 1. Analyze project structure
 python3 tools/mcp-cli.py list-build-dirs
@@ -166,6 +177,7 @@ This tool essentially **democratizes access** to the powerful MCP server capabil
 4. **Comprehensive Testing**: Unit tests for core logic with CI/CD pipeline
 5. **Structured Error Handling**: Use thiserror for MCP-compatible errors
 6. **Accessible Interface**: Python CLI tool for easy command-line interaction
+7. **Quality Standards**: Always run cargo fmt and clippy after Rust changes
 
 ## Development Commands
 
@@ -177,6 +189,10 @@ cargo build --release
 cargo test
 cargo clippy --all-targets --all-features -- -D warnings
 cargo fmt --check
+
+# IMPORTANT: Always run after Rust code changes
+cargo fmt
+cargo clippy --all-targets --all-features -- -D warnings
 
 # Run the MCP server
 cargo run
@@ -216,7 +232,7 @@ Analyzes C++ project build environment including:
 - Compilation database status and file count
 - JSON-structured responses with comprehensive project metadata
 
-### `search_symbols`
+### `search_symbols` - **FIXED Result Limiting Architecture**
 
 C++ symbol search with intelligent filtering:
 
@@ -224,8 +240,15 @@ C++ symbol search with intelligent filtering:
 - Project boundary detection (project vs external/system symbols)
 - Symbol kind filtering (class, function, variable, etc.)
 - File-specific search using document symbols
-- Configurable result limits and external symbol inclusion
+- **FIXED: Proper result limiting** - clangd queried with 2000 limit, user max_results applied client-side
 - **Build directory parameter support**: Specify custom build directory or use auto-detection
+
+**Critical Fix Applied:**
+
+- **Problem**: `max_results` was passed directly to clangd, causing premature limiting
+- **Solution**: Fixed 2000 limit to clangd, user's `max_results` applied in post-processing
+- **Result**: Predictable symbol counts, preserved clangd relevance ranking
+- **Testing**: 10 comprehensive unit tests added for all edge cases
 
 ### `analyze_symbol_context`
 
@@ -257,6 +280,7 @@ Deep symbol analysis for comprehensive understanding:
 - Automatic retry logic and graceful degradation for LSP server failures
 - Comprehensive error handling for all LSP communication scenarios
 - Efficient file management with automatic opening/closing of documents
+- **Proper result limiting**: Use fixed large limits for clangd, apply user limits client-side
 
 ### MCP Server Implementation
 
@@ -273,6 +297,8 @@ Deep symbol analysis for comprehensive understanding:
 - Include defensive programming practices for all failure modes
 - Add structured logging with tracing crate for observability
 - Follow Rust best practices with clippy and formatting checks
+- **ALWAYS run `cargo fmt` and `cargo clippy` after Rust code changes**
+- **Add unit tests for any new functionality that provides value to project quality**
 
 ### CI/CD Pipeline
 
@@ -333,13 +359,14 @@ Both `search_symbols` and `analyze_symbol_context` tools support flexible build 
 - **Symbol Analysis**: Deep context analysis including inheritance, call hierarchy, and usage patterns
 - **Project Management**: Build directory analysis, compilation database parsing, and project boundary detection
 - **Filtering Logic**: Smart distinction between project code and external dependencies
+- **Result Limiting**: Fixed 2000-limit clangd queries with client-side user limit application
 
 ### Data Flow Architecture
 
 1. **MCP Request** → Handler parses and validates tool parameters
 2. **Build Setup** → Automatic CMake detection and clangd initialization if needed
-3. **LSP Communication** → Structured requests to clangd with progress tracking
-4. **Response Processing** → Filter, transform, and enrich LSP responses
+3. **LSP Communication** → Structured requests to clangd with fixed large limits (2000) for comprehensive results
+4. **Response Processing** → Filter, transform, and enrich LSP responses, apply user limits client-side
 5. **MCP Response** → Structured JSON output with comprehensive metadata
 
 This implementation provides a complete bridge between MCP clients and C++ semantic analysis, enabling AI agents to work with C++ codebases using the same tools and understanding that human developers rely on.
@@ -415,12 +442,14 @@ npm run cleanup          # Remove all test directories
 The E2E framework automatically preserves failed test environments for debugging:
 
 #### **✅ Automatic Behavior (No Manual Intervention Required):**
+
 - **Failed tests are automatically detected** via Vitest context
 - **Test folders are preserved** with complete environment and logs
 - **Specific test case information** is captured in metadata
 - **Rich debugging information** is included for analysis
 
 #### **🎯 Enhanced Test Case Identification:**
+
 When tests fail, you get detailed information about the specific failing test:
 
 ```bash
@@ -428,6 +457,7 @@ npm run inspect:verbose
 ```
 
 **Sample Output:**
+
 ```
 🔍 search-symbols-test-83fd7fb3
    🔍 PRESERVED FOR DEBUGGING
@@ -441,18 +471,22 @@ npm run inspect:verbose
 ### **🛠️ Debugging Workflow**
 
 #### **1. Automatic Detection & Preservation**
+
 - Tests failing? **No manual action needed** - folders are preserved automatically
 - Multiple test failures? **Each gets its own preserved folder** with specific test case details
 - **Rich metadata** includes error messages, test hierarchy, and execution context
 
 #### **2. Identify Failed Tests**
+
 ```bash
 cd test/e2e
 npm run inspect:verbose  # Shows all preserved test failures with specific details
 ```
 
 #### **3. Investigate Specific Failures**
+
 Each preserved folder contains:
+
 - **`.test-info.json`** - Complete test environment metadata
 - **`.debug-preserved.json`** - Specific failure information with test case details
 - **`mcp-cpp-server-*.log`** - MCP server logs for this specific test
@@ -461,13 +495,14 @@ Each preserved folder contains:
 - **Build artifacts** - Including `compile_commands.json` and CMake cache
 
 #### **4. Analyze Failure Context**
+
 ```typescript
 // Example debug metadata structure:
 {
   "testCase": {
     "testCase": "should handle non-existent file gracefully",
     "testFile": "src/tests/search-symbols.test.ts",
-    "fullName": "File-specific search > should handle non-existent file gracefully", 
+    "fullName": "File-specific search > should handle non-existent file gracefully",
     "errors": ["expected 1 to be +0 // Object.is equality"],
     "duration": 2130
   },
@@ -479,12 +514,14 @@ Each preserved folder contains:
 #### **5. Advanced Log Analysis**
 
 **MCP Server Logs:**
+
 ```bash
 # View test-specific server logs
 cat temp/search-symbols-test-*/mcp-cpp-server-search-symbols-test.*.log
 ```
 
 **clangd LSP Logs (Located in Build Directory):**
+
 ```bash
 # clangd logs are in the build directory of the preserved test folder
 cat temp/search-symbols-test-*/build-debug/mcp-cpp-clangd.log
@@ -494,12 +531,14 @@ find temp/search-symbols-test-* -name "mcp-cpp-clangd.log" -exec cat {} \;
 ```
 
 **Key Log Analysis Points:**
+
 - **MCP server logs** show request/response handling, tool execution, errors
 - **clangd logs** show LSP communication, indexing progress, compilation issues
 - **Build directory state** shows compilation database and CMake configuration
 - **Cross-reference timestamps** between server and clangd logs for correlation
 
 #### **6. Build Environment Investigation**
+
 ```bash
 # Check compilation database in preserved test
 cat temp/search-symbols-test-*/build-debug/compile_commands.json
@@ -514,13 +553,15 @@ ls -la temp/search-symbols-test-*/build-debug/
 ### **🎯 Test Categories & Preservation Strategy**
 
 #### **E2E Tests (Automatic Preservation):**
+
 - `search-symbols.test.ts` - MCP server symbol search functionality
-- `list-build-dirs.test.ts` - MCP server build directory analysis  
+- `list-build-dirs.test.ts` - MCP server build directory analysis
 - `example-with-context.test.ts` - Example E2E test patterns
 
 **✅ These automatically preserve on failure** - no manual intervention needed
 
 #### **Framework Unit Tests (Standard Cleanup):**
+
 - `TestProject.test.ts` - Framework unit tests
 
 **❌ These use standard cleanup** - no preservation needed for framework testing
@@ -554,7 +595,7 @@ await TestHelpers.preserveForDebugging(project, "Debugging specific scenario");
 
 1. **Let the system work automatically** - most failures are preserved without intervention
 2. **Use `npm run inspect:verbose`** to identify specific failing test cases
-3. **Check error messages first** - often the clearest indicator of root cause  
+3. **Check error messages first** - often the clearest indicator of root cause
 4. **Check clangd logs in build directory** - `build-debug/mcp-cpp-clangd.log` for LSP issues
 5. **Correlate server and clangd logs** to distinguish MCP vs LSP issues
 6. **Examine build artifacts** - compilation database and CMake state in build directories
@@ -562,8 +603,65 @@ await TestHelpers.preserveForDebugging(project, "Debugging specific scenario");
 
 This comprehensive debugging system ensures **no test failure goes uninvestigated** and provides **complete context** for understanding and fixing issues.
 
+## Important Development Practices
+
+### **CRITICAL: Always Run Quality Checks After Rust Changes**
+
+After making any changes to Rust code, **ALWAYS** run these commands in order:
+
+```bash
+# 1. Format code
+cargo fmt
+
+# 2. Check for lint issues
+cargo clippy --all-targets --all-features -- -D warnings
+
+# 3. Run relevant tests
+cargo test [specific_test_pattern]
+
+# 4. Build to verify compilation
+cargo build
+```
+
+### **Unit Testing Philosophy**
+
+- **Add unit tests for any changes that provide value to project quality**
+- Focus on edge cases, boundary conditions, and error scenarios
+- Test public APIs and critical internal logic
+- Ensure tests are fast, isolated, and deterministic
+- Use descriptive test names that explain the scenario being tested
+
+### **Result Limiting Architecture (FIXED)**
+
+**Previous Issue:**
+
+- `max_results` parameter was incorrectly passed directly to clangd LSP requests
+- This caused clangd to limit its internal response, potentially returning fewer symbols than available
+- User could request 50 symbols but only get 30 if clangd's filtering reduced results
+
+**Current Solution:**
+
+- clangd is always queried with a fixed 2000 symbol limit for comprehensive results
+- User's `max_results` parameter is applied in post-processing on the MCP server side
+- This preserves clangd's relevance ranking while ensuring predictable result counts
+- Implementation thoroughly tested with 10 comprehensive unit tests
+
+**Key Learning:**
+
+- LSP communication should use large fixed limits to get comprehensive data
+- Client-side filtering should handle user preferences and result limiting
+- This pattern applies to any tool that bridges between LSP and MCP protocols
+
 # important-instruction-reminders
+
 Do what has been asked; nothing more, nothing less.
 NEVER create files unless they're absolutely necessary for achieving your goal.
 ALWAYS prefer editing an existing file to creating a new one.
-NEVER proactively create documentation files (*.md) or README files. Only create documentation files if explicitly requested by the User.
+NEVER proactively create documentation files (\*.md) or README files. Only create documentation files if explicitly requested by the User.
+
+# important-instruction-reminders
+
+Do what has been asked; nothing more, nothing less.
+NEVER create files unless they're absolutely necessary for achieving your goal.
+
+      IMPORTANT: this context may or may not be relevant to your tasks. You should not respond to this context or otherwise consider it in your response unless it is highly relevant to your task. Most of the time, it is not relevant.

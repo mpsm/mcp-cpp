@@ -588,4 +588,83 @@ mod tests {
             &class_kinds
         ));
     }
+
+    #[test]
+    fn test_limit_results_basic() {
+        let symbols = vec![
+            json!({"name": "Symbol1", "kind": 5}),
+            json!({"name": "Symbol2", "kind": 12}),
+            json!({"name": "Symbol3", "kind": 13}),
+        ];
+
+        let limited = SymbolUtilities::limit_results(symbols, Some(2));
+        assert_eq!(limited.len(), 2);
+        assert_eq!(limited[0]["name"], "Symbol1");
+        assert_eq!(limited[1]["name"], "Symbol2");
+    }
+
+    #[test]
+    fn test_limit_results_default() {
+        let symbols: Vec<serde_json::Value> = (0..150)
+            .map(|i| json!({"name": format!("Symbol{}", i), "kind": 5}))
+            .collect();
+
+        let limited = SymbolUtilities::limit_results(symbols, None);
+        assert_eq!(limited.len(), 100); // Default limit
+    }
+
+    #[test]
+    fn test_limit_results_under_limit() {
+        let symbols = vec![
+            json!({"name": "Symbol1", "kind": 5}),
+            json!({"name": "Symbol2", "kind": 12}),
+        ];
+
+        let limited = SymbolUtilities::limit_results(symbols, Some(10));
+        assert_eq!(limited.len(), 2); // Should return all available symbols
+    }
+
+    #[test]
+    fn test_limit_results_empty() {
+        let symbols = vec![];
+        let limited = SymbolUtilities::limit_results(symbols, Some(5));
+        assert_eq!(limited.len(), 0);
+    }
+
+    #[test]
+    fn test_limit_results_large_limit() {
+        let symbols = vec![
+            json!({"name": "Symbol1", "kind": 5}),
+            json!({"name": "Symbol2", "kind": 12}),
+        ];
+
+        let limited = SymbolUtilities::limit_results(symbols, Some(1000));
+        assert_eq!(limited.len(), 2); // Should not exceed available symbols
+    }
+
+    #[test]
+    fn test_limit_results_preserves_order() {
+        let symbols = vec![
+            json!({"name": "Alpha", "kind": 5}),
+            json!({"name": "Beta", "kind": 12}),
+            json!({"name": "Gamma", "kind": 13}),
+            json!({"name": "Delta", "kind": 5}),
+        ];
+
+        let limited = SymbolUtilities::limit_results(symbols, Some(2));
+        assert_eq!(limited.len(), 2);
+        assert_eq!(limited[0]["name"], "Alpha");
+        assert_eq!(limited[1]["name"], "Beta");
+    }
+
+    #[test]
+    fn test_limit_results_zero_limit() {
+        let symbols = vec![
+            json!({"name": "Symbol1", "kind": 5}),
+            json!({"name": "Symbol2", "kind": 12}),
+        ];
+
+        let limited = SymbolUtilities::limit_results(symbols, Some(0));
+        assert_eq!(limited.len(), 0); // Zero limit should return empty vector
+    }
 }

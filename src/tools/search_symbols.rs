@@ -118,8 +118,10 @@ pub struct SearchSymbolsTool {
 
     /// Maximum number of results to return. DEFAULT: 100. RANGE: 1-1000.
     ///
-    /// Use lower values (10-50) for quick exploration, higher values (200-1000)
-    /// for comprehensive analysis. Results are ranked by clangd relevance scoring.
+    /// Clangd is queried with a large internal limit (2000 symbols) to ensure
+    /// comprehensive symbol discovery, then results are limited client-side
+    /// preserving clangd's relevance ranking. Use lower values (10-50) for
+    /// quick exploration, higher values (200-1000) for comprehensive analysis.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_results: Option<u32>,
 
@@ -484,14 +486,10 @@ impl SearchSymbolsTool {
             "query": self.query
         });
 
-        // Try to add clangd-specific parameters to increase symbol limit
-        // This may or may not be supported by clangd, but worth trying
-        if let Some(max_results) = self.max_results {
-            if max_results > 100 {
-                params["limit"] = json!(max_results);
-                params["maxResults"] = json!(max_results);
-            }
-        }
+        // Always request large limit from clangd to get comprehensive results
+        // User's max_results will be applied in post-processing to preserve clangd's relevance ranking
+        params["limit"] = json!(2000);
+        params["maxResults"] = json!(2000);
 
         info!(
             "📡 SearchSymbolsTool::search_workspace() - Sending workspace/symbol LSP request with query: '{}'",
@@ -659,5 +657,59 @@ mod tests {
         assert_eq!(tool.max_results, None);
         assert_eq!(tool.include_external, None);
         assert_eq!(tool.files, None);
+    }
+
+    #[test]
+    fn test_search_symbols_max_results_parameter() {
+        let json_data = json!({
+            "query": "test",
+            "max_results": 50
+        });
+        let tool: SearchSymbolsTool = serde_json::from_value(json_data).unwrap();
+        assert_eq!(tool.max_results, Some(50));
+    }
+
+    #[test]
+    fn test_search_symbols_max_results_boundary_values() {
+        // Test minimum value
+        let json_data = json!({
+            "query": "test",
+            "max_results": 1
+        });
+        let tool: SearchSymbolsTool = serde_json::from_value(json_data).unwrap();
+        assert_eq!(tool.max_results, Some(1));
+
+        // Test maximum value
+        let json_data = json!({
+            "query": "test",
+            "max_results": 1000
+        });
+        let tool: SearchSymbolsTool = serde_json::from_value(json_data).unwrap();
+        assert_eq!(tool.max_results, Some(1000));
+
+        // Test default (None)
+        let json_data = json!({
+            "query": "test"
+        });
+        let tool: SearchSymbolsTool = serde_json::from_value(json_data).unwrap();
+        assert_eq!(tool.max_results, None); // Should default to 100 in processing
+    }
+
+    #[test]
+    fn test_search_symbols_max_results_with_other_params() {
+        let json_data = json!({
+            "query": "test",
+            "max_results": 25,
+            "kinds": ["class", "function"],
+            "include_external": true
+        });
+        let tool: SearchSymbolsTool = serde_json::from_value(json_data).unwrap();
+        assert_eq!(tool.query, "test");
+        assert_eq!(tool.max_results, Some(25));
+        assert_eq!(
+            tool.kinds,
+            Some(vec!["class".to_string(), "function".to_string()])
+        );
+        assert_eq!(tool.include_external, Some(true));
     }
 }
