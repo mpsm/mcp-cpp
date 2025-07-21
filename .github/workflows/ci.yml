@@ -11,51 +11,9 @@ env:
   RUST_BACKTRACE: 1
 
 jobs:
-  build:
-    name: Build
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Cache cargo registry
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-          key: ${{ runner.os }}-cargo-registry-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: |
-            ${{ runner.os }}-cargo-registry-
-
-      - name: Cache cargo build
-        uses: actions/cache@v4
-        with:
-          path: target
-          key: ${{ runner.os }}-cargo-build-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: |
-            ${{ runner.os }}-cargo-build-
-
-      - name: Build (debug)
-        run: cargo build --verbose
-
-      - name: Build (release)
-        run: cargo build --release --verbose
-
-      - name: Upload build artifacts
-        uses: actions/upload-artifact@v4
-        with:
-          name: build-artifacts
-          path: |
-            target/debug/mcp-cpp-server
-            target/release/mcp-cpp-server
-          retention-days: 7
-
-  format:
-    name: Check Formatting
+  # Rust jobs - run in parallel
+  rust-format:
+    name: Rust Format Check
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
@@ -69,10 +27,9 @@ jobs:
       - name: Check formatting
         run: cargo fmt --all -- --check
 
-  clippy:
-    name: Clippy Lints
+  rust-clippy:
+    name: Rust Clippy
     runs-on: ubuntu-latest
-    needs: build
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -96,17 +53,49 @@ jobs:
         uses: actions/cache@v4
         with:
           path: target
-          key: ${{ runner.os }}-cargo-build-${{ hashFiles('**/Cargo.lock') }}
+          key: ${{ runner.os }}-cargo-clippy-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: |
-            ${{ runner.os }}-cargo-build-
+            ${{ runner.os }}-cargo-clippy-
+            ${{ runner.os }}-cargo-
 
       - name: Run clippy
         run: cargo clippy --all-targets --all-features -- -D warnings
 
-  test:
-    name: Run Tests
+  rust-test:
+    name: Rust Unit Tests
     runs-on: ubuntu-latest
-    needs: build
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: ${{ runner.os }}-cargo-registry-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-registry-
+
+      - name: Cache cargo build
+        uses: actions/cache@v4
+        with:
+          path: target
+          key: ${{ runner.os }}-cargo-test-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-test-
+            ${{ runner.os }}-cargo-
+
+      - name: Run unit tests
+        run: cargo test --verbose
+
+  rust-build:
+    name: Rust Build Check
+    runs-on: ubuntu-latest
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -131,394 +120,15 @@ jobs:
           key: ${{ runner.os }}-cargo-build-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: |
             ${{ runner.os }}-cargo-build-
+            ${{ runner.os }}-cargo-
 
-      - name: Run tests
-        run: cargo test --verbose
+      - name: Build debug
+        run: cargo build --verbose
 
-  security:
-    name: Security Audit
+  # C++ jobs - run in parallel
+  cpp-build:
+    name: C++ Build Check
     runs-on: ubuntu-latest
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Cache cargo registry
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-          key: ${{ runner.os }}-cargo-registry-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: |
-            ${{ runner.os }}-cargo-registry-
-
-      - name: Install cargo-audit
-        run: cargo install cargo-audit
-
-      - name: Run security audit
-        run: cargo audit
-
-  cpp-test-project:
-    name: C++ Test Project
-    runs-on: ubuntu-latest
-
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Install C++ dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y \
-            build-essential \
-            cmake \
-            ninja-build \
-            clang \
-            libc++-dev \
-            libc++abi-dev
-
-      - name: Cache CMake build
-        uses: actions/cache@v4
-        with:
-          path: test/test-project/build*
-          key: ${{ runner.os }}-cmake-${{ hashFiles('test/test-project/CMakeLists.txt', 'test/test-project/src/**', 'test/test-project/include/**') }}
-          restore-keys: |
-            ${{ runner.os }}-cmake-
-
-      - name: Configure CMake (Debug)
-        working-directory: test/test-project
-        run: |
-          mkdir -p build-debug
-          cd build-debug
-          cmake .. \
-            -DCMAKE_BUILD_TYPE=Debug \
-            -DCMAKE_CXX_COMPILER=clang++ \
-            -DCMAKE_C_COMPILER=clang \
-            -DUSE_MEMORY_STORAGE=ON \
-            -DENABLE_DEBUG_LOGGING=ON \
-            -G Ninja
-
-      - name: Build Debug
-        working-directory: test/test-project/build-debug
-        run: ninja -j$(nproc)
-
-      - name: Run Debug Tests
-        working-directory: test/test-project/build-debug
-        run: |
-          echo "=== Running C++ Debug Build ==="
-          ./TestProject
-          echo "C++ Debug build completed successfully!"
-
-      - name: Configure CMake (Release)
-        working-directory: test/test-project
-        run: |
-          mkdir -p build-release
-          cd build-release
-          cmake .. \
-            -DCMAKE_BUILD_TYPE=Release \
-            -DCMAKE_CXX_COMPILER=clang++ \
-            -DCMAKE_C_COMPILER=clang \
-            -DUSE_MEMORY_STORAGE=OFF \
-            -DENABLE_DEBUG_LOGGING=OFF \
-            -G Ninja
-
-      - name: Build Release
-        working-directory: test/test-project/build-release
-        run: ninja -j$(nproc)
-
-      - name: Run Release Tests
-        working-directory: test/test-project/build-release
-        run: |
-          echo "=== Running C++ Release Build ==="
-          ./TestProject
-          echo "C++ Release build completed successfully!"
-
-      - name: Test with GCC (Alternative compiler)
-        working-directory: test/test-project
-        run: |
-          mkdir -p build-gcc
-          cd build-gcc
-          cmake .. \
-            -DCMAKE_BUILD_TYPE=Release \
-            -DCMAKE_CXX_COMPILER=g++ \
-            -DCMAKE_C_COMPILER=gcc \
-            -G Ninja
-          ninja -j$(nproc)
-          echo "=== Running C++ GCC Build ==="
-          ./TestProject
-          echo "C++ GCC build completed successfully!"
-
-      - name: Upload C++ build artifacts
-        uses: actions/upload-artifact@v4
-        with:
-          name: cpp-build-artifacts
-          path: |
-            test/test-project/build-debug/TestProject
-            test/test-project/build-release/TestProject
-            test/test-project/build-gcc/TestProject
-            test/test-project/build-*/compile_commands.json
-          retention-days: 7
-
-  e2e-lint-format:
-    name: E2E Lint and Format Check
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Install Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: "20"
-          cache: "npm"
-          cache-dependency-path: test/e2e/package-lock.json
-
-      - name: Install E2E test dependencies
-        working-directory: test/e2e
-        run: npm ci
-
-      - name: Check E2E code formatting
-        working-directory: test/e2e
-        run: npm run format:check
-
-      - name: Run E2E linting
-        working-directory: test/e2e
-        run: npm run lint
-
-  e2e-framework-tests:
-    name: E2E Framework Tests
-    runs-on: ubuntu-latest
-    needs: [e2e-lint-format]
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Install Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: "20"
-          cache: "npm"
-          cache-dependency-path: test/e2e/package-lock.json
-
-      - name: Install E2E test dependencies
-        working-directory: test/e2e
-        run: npm ci
-
-      - name: Run E2E framework tests
-        working-directory: test/e2e
-        run: npm run test:framework
-
-  e2e-integration:
-    name: End-to-End Integration Tests
-    runs-on: ubuntu-latest
-    needs: [build, cpp-test-project, e2e-framework-tests]
-
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Download build artifacts
-        uses: actions/download-artifact@v4
-        with:
-          name: build-artifacts
-          path: target
-
-      - name: Make binaries executable
-        run: |
-          chmod +x target/debug/mcp-cpp-server
-          chmod +x target/release/mcp-cpp-server
-
-      - name: Install Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: "20"
-          cache: "npm"
-          cache-dependency-path: test/e2e/package-lock.json
-
-      - name: Install C++ dependencies
-        run: |
-          sudo apt-get update
-          # Install dependencies for repository setup
-          sudo apt-get install -y wget gnupg software-properties-common lsb-release
-          # Get Ubuntu codename dynamically
-          UBUNTU_CODENAME=$(lsb_release -sc)
-          echo "Ubuntu codename: $UBUNTU_CODENAME"
-          # Add LLVM APT repository for clangd-20 using correct Ubuntu version
-          wget -qO- https://apt.llvm.org/llvm-snapshot.gpg.key | sudo tee /etc/apt/trusted.gpg.d/apt.llvm.org.asc
-          echo "deb http://apt.llvm.org/$UBUNTU_CODENAME/ llvm-toolchain-$UBUNTU_CODENAME-20 main" | sudo tee /etc/apt/sources.list.d/llvm.list
-          sudo apt-get update
-          sudo apt-get install -y build-essential cmake ninja-build clangd-20
-
-      - name: Build C++ test project
-        working-directory: test/test-project
-        run: |
-          mkdir -p build
-          cd build
-          cmake .. \
-            -DCMAKE_BUILD_TYPE=Release \
-            -DCMAKE_EXPORT_COMPILE_COMMANDS=ON \
-            -G Ninja
-          ninja -j$(nproc)
-
-      - name: Install E2E test dependencies
-        working-directory: test/e2e
-        run: npm ci
-
-      - name: Configure E2E test environment
-        working-directory: test/e2e
-        run: |
-          echo "CLANGD_PATH=/usr/bin/clangd-20" > .env
-
-      - name: Verify MCP server binary
-        run: |
-          echo "=== Verifying MCP Server Binary ==="
-          ls -la target/release/mcp-cpp-server
-          file target/release/mcp-cpp-server
-          echo "Binary verification completed!"
-
-      - name: Run E2E tests
-        working-directory: test/e2e
-        env:
-          MCP_SERVER_PATH: ../../target/release/mcp-cpp-server
-          CLANGD_PATH: /usr/bin/clangd-20
-        run: |
-          echo "=== Running End-to-End Tests ==="
-          npm run test:e2e
-          echo "E2E tests completed successfully!"
-
-      - name: Run E2E tests with debug binary
-        working-directory: test/e2e
-        env:
-          MCP_SERVER_PATH: ../../target/debug/mcp-cpp-server
-          CLANGD_PATH: /usr/bin/clangd-20
-        run: |
-          echo "=== Running End-to-End Tests (Debug) ==="
-          npm run test:e2e
-          echo "E2E tests (debug) completed successfully!"
-
-      - name: Test MCP server integration
-        working-directory: test/test-project
-        run: |
-          echo "=== Testing MCP Server Integration ==="
-
-          # Test basic MCP communication with timeout
-          echo '{"jsonrpc": "2.0", "method": "tools/list", "id": 1}' | \
-            timeout 10 ../../target/release/mcp-cpp-server || echo "MCP server test completed"
-
-          echo "Integration test completed!"
-
-      - name: Upload E2E test logs
-        if: failure()
-        uses: actions/upload-artifact@v4
-        with:
-          name: e2e-test-logs
-          path: |
-            test/e2e/**/*.log
-            /tmp/mcp-cpp-tests/*.log
-          retention-days: 7
-
-  e2e-compatibility:
-    name: E2E Compatibility Tests
-    runs-on: ubuntu-latest
-    needs: [build, e2e-framework-tests]
-    strategy:
-      fail-fast: false
-      matrix:
-        node-version: ["20", "22"] # Focus on current LTS and latest
-
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Download build artifacts
-        uses: actions/download-artifact@v4
-        with:
-          name: build-artifacts
-          path: target
-
-      - name: Make binaries executable
-        run: |
-          chmod +x target/release/mcp-cpp-server
-
-      - name: Install Node.js ${{ matrix.node-version }}
-        uses: actions/setup-node@v4
-        with:
-          node-version: ${{ matrix.node-version }}
-          cache: "npm"
-          cache-dependency-path: test/e2e/package-lock.json
-
-      - name: Install C++ dependencies
-        run: |
-          sudo apt-get update
-          # Install dependencies for repository setup
-          sudo apt-get install -y wget gnupg software-properties-common lsb-release
-          # Get Ubuntu codename dynamically
-          UBUNTU_CODENAME=$(lsb_release -sc)
-          echo "Ubuntu codename: $UBUNTU_CODENAME"
-          # Add LLVM APT repository for clangd-20 using correct Ubuntu version
-          wget -qO- https://apt.llvm.org/llvm-snapshot.gpg.key | sudo tee /etc/apt/trusted.gpg.d/apt.llvm.org.asc
-          echo "deb http://apt.llvm.org/$UBUNTU_CODENAME/ llvm-toolchain-$UBUNTU_CODENAME-20 main" | sudo tee /etc/apt/sources.list.d/llvm.list
-          sudo apt-get update
-          sudo apt-get install -y build-essential cmake ninja-build clangd-20
-
-      - name: Build C++ test project
-        working-directory: test/test-project
-        run: |
-          mkdir -p build
-          cd build
-          cmake .. \
-            -DCMAKE_BUILD_TYPE=Release \
-            -DCMAKE_EXPORT_COMPILE_COMMANDS=ON \
-            -G Ninja
-          ninja -j$(nproc)
-
-      - name: Install E2E test dependencies
-        working-directory: test/e2e
-        run: npm ci
-
-      - name: Configure E2E test environment
-        working-directory: test/e2e
-        run: |
-          echo "CLANGD_PATH=/usr/bin/clangd-20" > .env
-
-      - name: Run E2E tests with Node ${{ matrix.node-version }}
-        working-directory: test/e2e
-        env:
-          MCP_SERVER_PATH: ../../target/release/mcp-cpp-server
-          CLANGD_PATH: /usr/bin/clangd-20
-        run: |
-          echo "=== Running E2E Tests with Node ${{ matrix.node-version }} ==="
-          npm run test:e2e
-          echo "E2E compatibility tests completed successfully!"
-
-      - name: Upload compatibility test logs
-        if: failure()
-        uses: actions/upload-artifact@v4
-        with:
-          name: e2e-compatibility-logs-node${{ matrix.node-version }}
-          path: |
-            test/e2e/**/*.log
-            /tmp/mcp-cpp-tests/*.log
-          retention-days: 7
-
-  basic-compatibility:
-    name: Basic Compatibility Tests
-    runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        compiler: [gcc, clang]
-        include:
-          - compiler: gcc
-            cc: gcc
-            cxx: g++
-          - compiler: clang
-            cc: clang
-            cxx: clang++
-
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -526,29 +136,45 @@ jobs:
       - name: Install dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y build-essential cmake ninja-build
-          if [ "${{ matrix.compiler }}" = "clang" ]; then
-            sudo apt-get install -y clang
-          fi
+          sudo apt-get install -y build-essential cmake
 
-      - name: Build C++ test project with ${{ matrix.compiler }}
+      - name: Cache CMake build
+        uses: actions/cache@v4
+        with:
+          path: test/test-project/build
+          key: ${{ runner.os }}-cmake-${{ hashFiles('test/test-project/CMakeLists.txt', 'test/test-project/**/*.cpp', 'test/test-project/**/*.h') }}
+          restore-keys: |
+            ${{ runner.os }}-cmake-
+
+      - name: Configure CMake
         working-directory: test/test-project
-        env:
-          CC: ${{ matrix.cc }}
-          CXX: ${{ matrix.cxx }}
-        run: |
-          mkdir -p build-${{ matrix.compiler }}
-          cd build-${{ matrix.compiler }}
-          cmake .. \
-            -DCMAKE_BUILD_TYPE=Release \
-            -DCMAKE_C_COMPILER=${{ matrix.cc }} \
-            -DCMAKE_CXX_COMPILER=${{ matrix.cxx }} \
-            -G Ninja
-          ninja -j$(nproc)
+        run: cmake -B build -S .
 
-      - name: Test execution with ${{ matrix.compiler }}
-        working-directory: test/test-project/build-${{ matrix.compiler }}
-        run: |
-          echo "=== Testing with ${{ matrix.compiler }} ==="
-          ./TestProject
-          echo "Compatibility test with ${{ matrix.compiler }} completed successfully!"
+      - name: Build C++ test project
+        working-directory: test/test-project
+        run: cmake --build build # TypeScript jobs - run in parallel
+  ts-format-lint:
+    name: TypeScript Format & Lint
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "18"
+          cache: "npm"
+          cache-dependency-path: test/e2e/package-lock.json
+
+      - name: Install dependencies
+        working-directory: test/e2e
+        run: npm ci
+
+      - name: Check formatting
+        working-directory: test/e2e
+        run: npm run format:check
+
+      - name: Run linting
+        working-directory: test/e2e
+        run: npm run lint

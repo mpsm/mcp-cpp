@@ -1,0 +1,424 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*" # Trigger on version tags like v0.1.0, v1.0.0, etc.
+
+permissions:
+  contents: write # Required for creating releases
+  packages: write # Required for publishing packages
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+
+jobs:
+  # Comprehensive checks for release - run in parallel where possible
+  rust-checks:
+    name: Rust Comprehensive Checks
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: ${{ runner.os }}-release-cargo-registry-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-release-cargo-registry-
+            ${{ runner.os }}-cargo-registry-
+
+      - name: Cache cargo build
+        uses: actions/cache@v4
+        with:
+          path: target
+          key: ${{ runner.os }}-release-cargo-build-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-release-cargo-build-
+            ${{ runner.os }}-cargo-build-
+
+      - name: Check formatting
+        run: cargo fmt --all -- --check
+
+      - name: Run clippy
+        run: cargo clippy --all-targets --all-features -- -D warnings
+
+      - name: Run unit tests
+        run: cargo test --verbose
+
+      - name: Build debug
+        run: cargo build --verbose
+
+      - name: Build release
+        run: cargo build --release --verbose
+
+      - name: Verify package can be built
+        run: cargo package --no-verify
+
+      - name: Run security audit
+        run: |
+          cargo install cargo-audit || true
+          cargo audit
+
+      - name: Extract version
+        id: version
+        run: |
+          CARGO_VERSION=$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[0].version')
+          echo "version=$CARGO_VERSION" >> $GITHUB_OUTPUT
+          echo "Extracted version: $CARGO_VERSION"
+
+      - name: Cache release binary
+        uses: actions/cache@v4
+        with:
+          path: target/release/mcp-cpp-server
+          key: ${{ runner.os }}-release-binary-${{ hashFiles('**/Cargo.lock') }}-${{ github.sha }}
+
+  # Cross-platform binary builds
+  build-binaries:
+    name: Build Cross-Platform Binaries
+    strategy:
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-gnu
+            os: ubuntu-latest
+            binary: mcp-cpp-server
+            name: mcp-cpp-server-linux-x86_64
+          - target: aarch64-unknown-linux-gnu
+            os: ubuntu-latest
+            binary: mcp-cpp-server
+            name: mcp-cpp-server-linux-aarch64
+          - target: x86_64-pc-windows-msvc
+            os: windows-latest
+            binary: mcp-cpp-server.exe
+            name: mcp-cpp-server-windows-x86_64.exe
+          - target: x86_64-apple-darwin
+            os: macos-latest
+            binary: mcp-cpp-server
+            name: mcp-cpp-server-macos-x86_64
+          - target: aarch64-apple-darwin
+            os: macos-latest
+            binary: mcp-cpp-server
+            name: mcp-cpp-server-macos-aarch64
+    runs-on: ${{ matrix.os }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Install cross-compilation tools (Linux ARM64)
+        if: matrix.target == 'aarch64-unknown-linux-gnu'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc-aarch64-linux-gnu
+
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: ${{ runner.os }}-${{ matrix.target }}-cargo-registry-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-${{ matrix.target }}-cargo-registry-
+            ${{ runner.os }}-cargo-registry-
+
+      - name: Cache cargo build
+        uses: actions/cache@v4
+        with:
+          path: target
+          key: ${{ runner.os }}-${{ matrix.target }}-cargo-build-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-${{ matrix.target }}-cargo-build-
+            ${{ runner.os }}-cargo-build-
+
+      - name: Build binary
+        run: cargo build --release --target ${{ matrix.target }}
+        env:
+          CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: aarch64-linux-gnu-gcc
+
+      - name: Rename binary
+        shell: bash
+        run: |
+          mkdir -p dist
+          cp target/${{ matrix.target }}/release/${{ matrix.binary }} dist/${{ matrix.name }}
+
+      - name: Upload binary artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.name }}
+          path: dist/${{ matrix.name }}
+          retention-days: 1
+
+  cpp-checks:
+    name: C++ Build Check
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential cmake
+
+      - name: Cache CMake build
+        uses: actions/cache@v4
+        with:
+          path: test/test-project/build
+          key: ${{ runner.os }}-release-cmake-${{ hashFiles('test/test-project/CMakeLists.txt', 'test/test-project/**/*.cpp', 'test/test-project/**/*.h') }}
+          restore-keys: |
+            ${{ runner.os }}-release-cmake-
+            ${{ runner.os }}-cmake-
+
+      - name: Configure CMake
+        working-directory: test/test-project
+        run: cmake -B build -S .
+
+      - name: Build C++ test project
+        working-directory: test/test-project
+        run: cmake --build build
+
+  ts-checks:
+    name: TypeScript Comprehensive Checks
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "18"
+          cache: "npm"
+          cache-dependency-path: test/e2e/package-lock.json
+
+      - name: Install dependencies
+        working-directory: test/e2e
+        run: npm ci
+
+      - name: Check formatting
+        working-directory: test/e2e
+        run: npm run format:check
+
+      - name: Run linting
+        working-directory: test/e2e
+        run: npm run lint
+
+      - name: Run TypeScript framework tests
+        working-directory: test/e2e
+        run: npm run test:framework
+
+  # E2E Integration Tests - depends on all other checks
+  e2e-integration:
+    name: E2E Integration Tests
+    runs-on: ubuntu-latest
+    needs: [rust-checks, cpp-checks, ts-checks]
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "18"
+          cache: "npm"
+          cache-dependency-path: test/e2e/package-lock.json
+
+      - name: Install C++ dependencies
+        run: |
+          sudo apt-get update
+          # Get Ubuntu codename dynamically
+          UBUNTU_CODENAME=$(lsb_release -cs)
+          echo "Detected Ubuntu codename: $UBUNTU_CODENAME"
+          # Add LLVM repository
+          wget -O - https://apt.llvm.org/llvm-snapshot.gpg.key | sudo apt-key add -
+          echo "deb http://apt.llvm.org/${UBUNTU_CODENAME}/ llvm-toolchain-${UBUNTU_CODENAME}-20 main" | sudo tee /etc/apt/sources.list.d/llvm.list
+          sudo apt-get update
+          sudo apt-get install -y build-essential cmake clangd-20
+
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: ${{ runner.os }}-release-cargo-registry-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-release-cargo-registry-
+            ${{ runner.os }}-cargo-registry-
+
+      - name: Restore release binary
+        uses: actions/cache@v4
+        with:
+          path: target/release/mcp-cpp-server
+          key: ${{ runner.os }}-release-binary-${{ hashFiles('**/Cargo.lock') }}-${{ github.sha }}
+
+      - name: Build if binary not cached
+        run: |
+          if [ ! -f target/release/mcp-cpp-server ]; then
+            echo "Binary not found in cache, building..."
+            cargo build --release
+          else
+            echo "Using cached binary"
+          fi
+
+      - name: Build C++ test project
+        working-directory: test/test-project
+        run: |
+          cmake -B build -S .
+          cmake --build build
+        env:
+          CLANGD_PATH: /usr/bin/clangd-20
+
+      - name: Install E2E test dependencies
+        working-directory: test/e2e
+        run: npm ci
+
+      - name: Run E2E integration tests
+        working-directory: test/e2e
+        run: npm run test:e2e
+        env:
+          MCP_SERVER_PATH: ../../target/release/mcp-cpp-server
+          TEST_PROJECT_PATH: ../test-project
+          CLANGD_PATH: /usr/bin/clangd-20
+
+  # Version verification
+  version-check:
+    name: Version Verification
+    runs-on: ubuntu-latest
+    needs: rust-checks
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Verify tag matches Cargo.toml version
+        run: |
+          CARGO_VERSION="${{ needs.rust-checks.outputs.version }}"
+          TAG_VERSION=${GITHUB_REF#refs/tags/v}
+          echo "Cargo.toml version: $CARGO_VERSION"
+          echo "Git tag version: $TAG_VERSION"
+          if [ "$CARGO_VERSION" != "$TAG_VERSION" ]; then
+            echo "Error: Version mismatch between Cargo.toml ($CARGO_VERSION) and git tag ($TAG_VERSION)"
+            exit 1
+          fi
+          echo "Version verification passed: $CARGO_VERSION"
+
+  # Publish to crates.io
+  publish-crates:
+    name: Publish to crates.io
+    runs-on: ubuntu-latest
+    needs: [rust-checks, cpp-checks, ts-checks, e2e-integration, version-check]
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: ${{ runner.os }}-release-cargo-registry-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-release-cargo-registry-
+            ${{ runner.os }}-cargo-registry-
+
+      - name: Publish to crates.io
+        run: cargo publish
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+
+  # Create GitHub release - can run in parallel with crates.io publish
+  create-github-release:
+    name: Create GitHub Release
+    runs-on: ubuntu-latest
+    needs:
+      [
+        rust-checks,
+        cpp-checks,
+        ts-checks,
+        e2e-integration,
+        version-check,
+        build-binaries,
+      ]
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Download all binary artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+          pattern: mcp-cpp-server-*
+
+      - name: List downloaded artifacts
+        run: |
+          echo "Downloaded artifacts:"
+          find dist -type f -name "mcp-cpp-server-*" -exec ls -la {} \;
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/*/mcp-cpp-server-*
+          body: |
+            ## MCP C++ Server ${{ github.ref_name }}
+
+            This release includes compiled binaries for multiple platforms.
+
+            ### 🔍 What's Tested
+            - ✅ All unit tests passed
+            - ✅ Code formatting and linting checks
+            - ✅ Comprehensive E2E integration tests
+            - ✅ C++ test project compatibility
+            - ✅ TypeScript tooling compatibility
+            - ✅ Security audit passed
+
+            ### 📦 Installation Options
+
+            #### From crates.io
+            ```bash
+            cargo install mcp-cpp-server
+            ```
+
+            #### Download Binary
+            Choose the appropriate binary for your platform:
+            - **Linux x86_64**: `mcp-cpp-server-linux-x86_64`
+            - **Linux ARM64**: `mcp-cpp-server-linux-aarch64`
+            - **Windows x86_64**: `mcp-cpp-server-windows-x86_64.exe`
+            - **macOS x86_64**: `mcp-cpp-server-macos-x86_64`
+            - **macOS ARM64**: `mcp-cpp-server-macos-aarch64`
+
+            ### 🚀 Usage
+            See the [README](https://github.com/mpsm/mcp-cpp#readme) for detailed usage instructions.
+
+            ### 🛠️ CLI Tool
+            Use the Python CLI tool for easy interaction:
+            ```bash
+            python3 tools/mcp-cli.py --help
+            ```
+          draft: false
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
