@@ -2,6 +2,7 @@ mod cmake;
 mod handler;
 mod logging;
 mod lsp;
+mod project;
 mod tools;
 
 use clap::Parser;
