@@ -704,34 +704,6 @@ mod tests {
     use crate::lsp::types::IndexingStatus;
 
     #[test]
-    fn test_manager_new() {
-        let manager = ClangdManager::new();
-        // Basic construction test - can't easily test internal state without getters
-        assert!(matches!(manager, ClangdManager { .. }));
-    }
-
-    #[tokio::test]
-    async fn test_get_indexing_state_default() {
-        let manager = ClangdManager::new();
-        let state = manager.get_indexing_state().await;
-
-        assert_eq!(state.status, IndexingStatus::NotStarted);
-        assert_eq!(state.files_processed, 0);
-        assert_eq!(state.total_files, None);
-        assert_eq!(state.percentage, None);
-        assert_eq!(state.message, None);
-        assert_eq!(state.estimated_completion_seconds, None);
-        assert!(!state.is_indexing());
-    }
-
-    #[tokio::test]
-    async fn test_get_current_build_directory_default() {
-        let manager = ClangdManager::new();
-        let build_dir = manager.get_current_build_directory().await;
-        assert_eq!(build_dir, None);
-    }
-
-    #[test]
     fn test_parse_clangd_version_valid() {
         let manager = ClangdManager::new();
 

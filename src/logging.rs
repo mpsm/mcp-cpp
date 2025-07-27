@@ -177,27 +177,3 @@ macro_rules! log_timing {
         );
     };
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_log_config_default() {
-        let config = LogConfig::default();
-        assert_eq!(config.level, "info");
-        assert_eq!(config.file_path, None);
-        assert!(!config.json_format);
-    }
-
-    #[test]
-    fn test_log_config_with_overrides() {
-        let config = LogConfig::default().with_overrides(
-            Some("warn".to_string()),
-            Some(PathBuf::from("/custom/path.log")),
-        );
-
-        assert_eq!(config.level, "warn");
-        assert_eq!(config.file_path, Some(PathBuf::from("/custom/path.log")));
-    }
-}

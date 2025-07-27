@@ -80,3 +80,67 @@ impl Default for ProjectProviderRegistry {
         Self::new()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    struct MockProvider {
+        name: String,
+    }
+
+    impl ProjectComponentProvider for MockProvider {
+        fn name(&self) -> &str {
+            &self.name
+        }
+
+        fn scan_path(&self, _path: &Path) -> Result<Option<ProjectComponent>, ProjectError> {
+            Ok(None)
+        }
+    }
+
+    impl MockProvider {
+        fn new(name: &str) -> Self {
+            Self {
+                name: name.to_string(),
+            }
+        }
+    }
+
+    #[test]
+    fn test_provider_registry_management() {
+        let mut registry = ProjectProviderRegistry::new();
+        assert_eq!(registry.provider_count(), 0);
+        assert!(registry.provider_names().is_empty());
+
+        registry.add_provider(Box::new(MockProvider::new("cmake")));
+        registry.add_provider(Box::new(MockProvider::new("meson")));
+
+        assert_eq!(registry.provider_count(), 2);
+        let names = registry.provider_names();
+        assert_eq!(names.len(), 2);
+        assert!(names.contains(&"cmake"));
+        assert!(names.contains(&"meson"));
+    }
+
+    #[test]
+    fn test_provider_registry_builder_pattern() {
+        let registry = ProjectProviderRegistry::new()
+            .with_provider(Box::new(MockProvider::new("cmake")))
+            .with_provider(Box::new(MockProvider::new("meson")))
+            .with_provider(Box::new(MockProvider::new("bazel")));
+
+        assert_eq!(registry.provider_count(), 3);
+        let names = registry.provider_names();
+        assert!(names.contains(&"cmake"));
+        assert!(names.contains(&"meson"));
+        assert!(names.contains(&"bazel"));
+    }
+
+    #[test]
+    fn test_provider_registry_empty() {
+        let registry = ProjectProviderRegistry::new();
+        assert_eq!(registry.provider_count(), 0);
+        assert!(registry.provider_names().is_empty());
+    }
+}

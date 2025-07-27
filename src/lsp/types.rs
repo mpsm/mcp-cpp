@@ -255,19 +255,6 @@ mod tests {
     use std::time::Duration;
 
     #[test]
-    fn test_indexing_state_default() {
-        let state = IndexingState::default();
-        assert_eq!(state.status, IndexingStatus::NotStarted);
-        assert_eq!(state.files_processed, 0);
-        assert_eq!(state.total_files, None);
-        assert_eq!(state.percentage, None);
-        assert_eq!(state.message, None);
-        assert_eq!(state.start_time, None);
-        assert_eq!(state.estimated_completion_seconds, None);
-        assert!(!state.is_indexing());
-    }
-
-    #[test]
     fn test_indexing_state_start_indexing() {
         let mut state = IndexingState::new();
         let title = Some("Building index".to_string());
@@ -355,44 +342,5 @@ mod tests {
         assert_eq!(state.message, None);
         assert_eq!(state.percentage, None);
         assert!(!state.is_indexing());
-    }
-
-    #[test]
-    fn test_indexing_status_serialization() {
-        let state = IndexingState {
-            status: IndexingStatus::InProgress,
-            files_processed: 5,
-            total_files: Some(10),
-            percentage: Some(50),
-            message: Some("Processing files".to_string()),
-            start_time: Some(std::time::Instant::now()),
-            estimated_completion_seconds: Some(30),
-        };
-
-        // Test serialization (start_time should be skipped)
-        let serialized = serde_json::to_value(&state).unwrap();
-        assert!(serialized.get("start_time").is_none());
-        assert_eq!(serialized.get("status").unwrap(), "InProgress");
-        assert_eq!(serialized.get("files_processed").unwrap(), 5);
-        assert_eq!(serialized.get("total_files").unwrap(), 10);
-        assert_eq!(serialized.get("percentage").unwrap(), 50);
-        assert_eq!(serialized.get("message").unwrap(), "Processing files");
-        assert_eq!(serialized.get("estimated_completion_seconds").unwrap(), 30);
-    }
-
-    #[test]
-    fn test_call_relationships_serialization() {
-        let relationships = CallRelationships {
-            incoming_calls: vec![],
-            outgoing_calls: vec![],
-            call_depth: 2,
-            total_callers: 5,
-            total_callees: 3,
-        };
-
-        let serialized = serde_json::to_value(&relationships).unwrap();
-        assert_eq!(serialized.get("call_depth").unwrap(), 2);
-        assert_eq!(serialized.get("total_callers").unwrap(), 5);
-        assert_eq!(serialized.get("total_callees").unwrap(), 3);
     }
 }

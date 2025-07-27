@@ -642,6 +642,9 @@ cargo build
 - Test public APIs and critical internal logic
 - Ensure tests are fast, isolated, and deterministic
 - Use descriptive test names that explain the scenario being tested
+- **Don't test obvious things** - Skip trivial getters, simple constructors, and basic collection operations
+- **Design tests that are not fragile** - Test behavioral contracts, not implementation details; should withstand future changes
+- **Focus on non-obvious business logic** - Deduplication algorithms, grouping logic, error handling paths, and complex interactions
 
 ### **Result Limiting Architecture (FIXED)**
 
