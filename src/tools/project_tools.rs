@@ -157,9 +157,11 @@ impl ListProjectComponentsTool {
 
         // Perform the scan
         scanner.scan_project(scan_root, depth, None).map_err(|e| {
-            CallToolError::new(std::io::Error::other(
-                format!("Failed to scan project at {}: {}", scan_root.display(), e),
-            ))
+            CallToolError::new(std::io::Error::other(format!(
+                "Failed to scan project at {}: {}",
+                scan_root.display(),
+                e
+            )))
         })
     }
 }
