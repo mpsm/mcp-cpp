@@ -6,6 +6,8 @@ use std::path::PathBuf;
 ///
 /// This struct contains all essential information about a project's build configuration,
 /// including paths to key directories and files, as well as build-specific options.
+/// Providers should populate the structured fields (generator, build_type) from their
+/// specific configuration formats.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ProjectComponent {
     /// Path to the build directory
@@ -17,11 +19,17 @@ pub struct ProjectComponent {
     /// Path to the compilation database (compile_commands.json)
     pub compilation_database_path: PathBuf,
 
-    /// Key-value store for build options and configuration
-    pub build_options: HashMap<String, String>,
-
     /// Build system provider type (e.g., "cmake", "meson")
     pub provider_type: String,
+
+    /// Generator used by the build system (e.g., "Ninja", "Unix Makefiles", "Visual Studio 16 2019")
+    pub generator: String,
+
+    /// Build configuration type (e.g., "Debug", "Release", "RelWithDebInfo", "MinSizeRel")
+    pub build_type: String,
+
+    /// Raw build options and configuration (provider-specific key-value pairs)
+    pub build_options: HashMap<String, String>,
 }
 
 impl ProjectComponent {
@@ -32,8 +40,10 @@ impl ProjectComponent {
         build_dir_path: PathBuf,
         source_root_path: PathBuf,
         compilation_database_path: PathBuf,
-        build_options: HashMap<String, String>,
         provider_type: String,
+        generator: String,
+        build_type: String,
+        build_options: HashMap<String, String>,
     ) -> Result<Self, crate::project::ProjectError> {
         use crate::project::ProjectError;
 
@@ -62,8 +72,10 @@ impl ProjectComponent {
             build_dir_path,
             source_root_path,
             compilation_database_path,
-            build_options,
             provider_type,
+            generator,
+            build_type,
+            build_options,
         })
     }
 }

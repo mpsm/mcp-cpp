@@ -4,7 +4,7 @@
 //! using clangd LSP server integration.
 
 pub mod analyze_symbols;
-pub mod cmake_tools;
+pub mod project_tools;
 pub mod search_symbols;
 pub mod symbol_filtering;
 
@@ -13,9 +13,10 @@ use std::sync::Arc;
 use tokio::sync::Mutex;
 
 use crate::lsp::ClangdManager;
+use crate::project::MetaProject;
 
 pub use analyze_symbols::AnalyzeSymbolContextTool;
-pub use cmake_tools::ListBuildDirsTool;
+pub use project_tools::ListProjectComponentsTool;
 pub use search_symbols::SearchSymbolsTool;
 
 /// Helper function to serialize JSON content and handle errors gracefully
@@ -31,8 +32,7 @@ pub fn serialize_result(content: &serde_json::Value) -> String {
 /// - Tools that perform pure computation or analysis on in-memory data should be **sync**
 ///
 /// **Current Tool Classifications:**
-/// - `ListBuildDirsTool` - **sync** (file system analysis, no process interaction)
-/// - `LspRequestTool` - **async** (sends requests to LSP process)
+/// - `ListProjectComponentsTool` - **sync** (MetaProject serialization, no process interaction)
 /// - `SearchSymbolsTool` - **async** (uses LSP for symbol search)
 /// - `AnalyzeSymbolContextTool` - **async** (uses LSP for symbol analysis)
 ///
@@ -45,8 +45,8 @@ pub fn serialize_result(content: &serde_json::Value) -> String {
 #[derive(Debug, serde::Serialize, serde::Deserialize)]
 #[serde(tag = "name")]
 pub enum CppTools {
-    #[serde(rename = "list_build_dirs")]
-    ListBuildDirs(ListBuildDirsTool),
+    #[serde(rename = "list_project_components")]
+    ListProjectComponents(ListProjectComponentsTool),
     #[serde(rename = "search_symbols")]
     SearchSymbols(SearchSymbolsTool),
     #[serde(rename = "analyze_symbol_context")]
@@ -56,7 +56,7 @@ pub enum CppTools {
 impl CppTools {
     pub fn tools() -> Vec<rust_mcp_sdk::schema::Tool> {
         vec![
-            ListBuildDirsTool::tool(),
+            ListProjectComponentsTool::tool(),
             SearchSymbolsTool::tool(),
             AnalyzeSymbolContextTool::tool(),
         ]
@@ -66,20 +66,22 @@ impl CppTools {
         tool_name: &str,
         arguments: serde_json::Value,
         clangd_manager: &Arc<Mutex<ClangdManager>>,
+        meta_project: &MetaProject,
     ) -> Result<CallToolResult, CallToolError> {
         use tracing::info;
 
         info!("Handling tool call: {}", tool_name);
 
         match tool_name {
-            "list_build_dirs" => {
-                let tool: ListBuildDirsTool = serde_json::from_value(arguments).map_err(|e| {
-                    CallToolError::new(std::io::Error::new(
-                        std::io::ErrorKind::InvalidInput,
-                        format!("Failed to deserialize list_build_dirs arguments: {e}"),
-                    ))
-                })?;
-                tool.call_tool()
+            "list_project_components" => {
+                let tool: ListProjectComponentsTool =
+                    serde_json::from_value(arguments).map_err(|e| {
+                        CallToolError::new(std::io::Error::new(
+                            std::io::ErrorKind::InvalidInput,
+                            format!("Failed to deserialize list_project_components arguments: {e}"),
+                        ))
+                    })?;
+                tool.call_tool(meta_project)
             }
             "search_symbols" => {
                 let tool: SearchSymbolsTool = serde_json::from_value(arguments).map_err(|e| {

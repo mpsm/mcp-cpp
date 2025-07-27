@@ -147,13 +147,25 @@ impl ProjectComponentProvider for MesonProvider {
             }
         })?;
 
+        // Extract generator and build type for structured fields
+        let generator = build_options
+            .get("backend")
+            .unwrap_or(&"ninja".to_string())
+            .clone();
+        let build_type = build_options
+            .get("buildtype")
+            .unwrap_or(&"debug".to_string())
+            .clone();
+
         // Create project component with validation
         let component = ProjectComponent::new(
             path.to_path_buf(),
             source_root,
             compilation_database_path,
-            build_options,
             "meson".to_string(),
+            generator,
+            build_type,
+            build_options,
         )?;
 
         Ok(Some(component))

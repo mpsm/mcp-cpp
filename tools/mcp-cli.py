@@ -128,7 +128,7 @@ Examples:
   %(prog)s list-tools
   %(prog)s search-symbols Math --max-results 20
   %(prog)s analyze-symbol "Math::sqrt" --include-usage-patterns
-  %(prog)s list-build-dirs --pretty-json
+  %(prog)s list-project-components --pretty-json
         """
     )
     
@@ -252,10 +252,22 @@ Examples:
         help="Specify build directory path"
     )
     
-    # list-build-dirs subcommand
-    build_dirs_parser = subparsers.add_parser(
-        "list-build-dirs",
-        help="List and analyze CMake build directories"
+    # list-project-components subcommand
+    project_components_parser = subparsers.add_parser(
+        "list-project-components",
+        help="List and analyze all discovered project components (CMake, Meson, etc.)"
+    )
+    project_components_parser.add_argument(
+        "--path",
+        type=str,
+        help="Project root path to scan (triggers fresh scan if different from server default)"
+    )
+    project_components_parser.add_argument(
+        "--depth",
+        type=int,
+        choices=range(0, 11),
+        metavar="0-10",
+        help="Scan depth for component discovery (triggers fresh scan if different from server default)"
     )
     
     return parser
@@ -326,8 +338,13 @@ def main():
                 
             response = client.call_tool("analyze_symbol_context", arguments)
             
-        elif args.command == "list-build-dirs":
-            response = client.call_tool("list_build_dirs", {})
+        elif args.command == "list-project-components":
+            arguments = {}
+            if hasattr(args, 'path') and args.path:
+                arguments["path"] = args.path
+            if hasattr(args, 'depth') and args.depth is not None:
+                arguments["depth"] = args.depth
+            response = client.call_tool("list_project_components", arguments)
         
         # Output the response
         if args.raw_output:
@@ -425,8 +442,8 @@ def _format_rich_output(command: str, response: Dict) -> None:
             _format_symbols_search(console, data)
         elif command == "analyze-symbol":
             _format_symbol_analysis(console, data)
-        elif command == "list-build-dirs":
-            _format_build_dirs(console, data)
+        elif command == "list-project-components":
+            _format_project_components(console, data)
         else:
             # Fallback to JSON
             syntax = Syntax(json.dumps(data, indent=2), "json", theme="monokai")
@@ -711,55 +728,88 @@ def _format_symbol_analysis(console, data: Dict) -> None:
                 console.print()
 
 
-def _format_build_dirs(console, data: Dict) -> None:
-    """Format build directories information"""
-    if "error" in data:
-        console.print(f"[red]Failed to analyze build directories: {data.get('error', 'Unknown error')}[/red]")
-        return
-        
+def _format_project_components(console, data: Dict) -> None:
+    """Format multi-provider project components information"""
     project_name = data.get("project_name", "Unknown")
     project_root = data.get("project_root", "Unknown")
-    build_dirs = data.get("build_dirs", [])
+    component_count = data.get("component_count", 0)
+    provider_types = data.get("provider_types", [])
+    components = data.get("components", [])
+    scan_depth = data.get("scan_depth", 0)
+    discovered_at = data.get("discovered_at", "Unknown")
+    rescanned = data.get("rescanned", False)
     
-    # Project information
+    # Project header with multi-provider info
     if project_name != "Unknown":
-        console.print(Panel(f"[bold cyan]Project: {project_name}[/bold cyan]", 
-                           title="Project Information", border_style="blue"))
+        providers_text = f" • {', '.join(provider_types)}" if provider_types else ""
+        console.print(Panel(f"[bold cyan]Project: {project_name}[/bold cyan]{providers_text}", 
+                           title="Multi-Provider Project Analysis", border_style="blue"))
         
         if project_root != "Unknown":
             console.print(f"[bold]Project Root:[/bold] {project_root}")
+        console.print(f"[bold]Scan Depth:[/bold] {scan_depth} levels")
+        scan_status = " (fresh scan)" if rescanned else " (cached)"
+        console.print(f"[bold]Discovered:[/bold] {discovered_at}{scan_status}")
         console.print()
     
-    # Build directories
-    if not build_dirs:
-        console.print("[yellow]No build directories found[/yellow]")
+    # Component summary
+    if component_count == 0:
+        console.print("[yellow]No project components found[/yellow]")
+        console.print("This directory may not contain any supported build system configurations.")
         return
         
-    console.print(f"[bold green]Found {len(build_dirs)} build director{'y' if len(build_dirs) == 1 else 'ies'}:[/bold green]")
+    console.print(f"[bold green]Found {component_count} project component{'s' if component_count != 1 else ''}:[/bold green]")
+    console.print(f"[dim]Provider types: {', '.join(provider_types)}[/dim]")
     console.print()
     
-    for i, build_dir in enumerate(build_dirs, 1):
-        path = build_dir.get("path", "Unknown")
+    # Group components by provider type
+    components_by_provider = {}
+    for component in components:
+        provider = component.get("provider_type", "unknown")
+        if provider not in components_by_provider:
+            components_by_provider[provider] = []
+        components_by_provider[provider].append(component)
+    
+    # Display components grouped by provider
+    for provider_type, provider_components in components_by_provider.items():
+        provider_icon = "🔨" if provider_type == "cmake" else "⚡" if provider_type == "meson" else "🔧"
+        console.print(f"[bold yellow]{provider_icon} {provider_type.upper()} Components ({len(provider_components)}):[/bold yellow]")
         
-        console.print(f"[bold cyan]{i}. {path}[/bold cyan]")
-        
-        if "generator" in build_dir:
-            console.print(f"   Generator: {build_dir['generator']}")
-        if "build_type" in build_dir:
-            build_type = build_dir['build_type'] or "Not specified"
-            console.print(f"   Build Type: {build_type}")
-        
-        # Show compile_commands.json status
-        compile_exists = build_dir.get("compile_commands_exists", False)
-        status = "✓ Present" if compile_exists else "✗ Missing"
-        console.print(f"   Compile DB: {status}")
-        
-        # Show options if available
-        if "options" in build_dir and build_dir["options"]:
-            console.print("   [dim]Build Options:[/dim]")
-            for key, value in build_dir["options"].items():
-                if key not in ["TestProject_BINARY_DIR", "TestProject_SOURCE_DIR"]:  # Skip verbose paths
-                    console.print(f"     {key}: {value}")
+        for i, component in enumerate(provider_components, 1):
+            build_path = component.get("build_dir_path", "Unknown")
+            source_path = component.get("source_root_path", "Unknown")
+            generator = component.get("generator", "Unknown")
+            build_type = component.get("build_type", "Unknown")
+            
+            console.print(f"  [bold cyan]{i}. {build_path}[/bold cyan]")
+            
+            if source_path != "Unknown":
+                console.print(f"     Source Root: {source_path}")
+            if generator != "Unknown":
+                console.print(f"     Generator: {generator}")
+            if build_type != "Unknown":
+                console.print(f"     Build Type: {build_type}")
+            
+            # Check if compilation database exists
+            compile_db_path = component.get("compilation_database_path", "")
+            if compile_db_path:
+                console.print(f"     Compile DB: ✓ {compile_db_path}")
+            else:
+                console.print(f"     Compile DB: ✗ Not found")
+            
+            # Show build options if available (limit to important ones)
+            build_options = component.get("build_options", {})
+            if build_options:
+                important_options = {k: v for k, v in build_options.items() 
+                                   if not k.endswith(("_BINARY_DIR", "_SOURCE_DIR")) and len(str(v)) < 100}
+                if important_options:
+                    console.print("     [dim]Build Options:[/dim]")
+                    for key, value in list(important_options.items())[:5]:  # Limit to 5 options
+                        console.print(f"       {key}: {value}")
+                    if len(important_options) > 5:
+                        console.print(f"       ... and {len(important_options) - 5} more")
+            
+            console.print()
         
         console.print()
 

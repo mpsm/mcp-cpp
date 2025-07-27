@@ -160,8 +160,14 @@ impl ProjectComponentProvider for CmakeProvider {
             path.to_path_buf(),
             source_root,
             compilation_database_path,
-            cmake_info.build_options,
             "cmake".to_string(),
+            cmake_info
+                .generator
+                .unwrap_or_else(|| "Unknown".to_string()),
+            cmake_info
+                .build_type
+                .unwrap_or_else(|| "Unknown".to_string()),
+            cmake_info.build_options,
         )?;
 
         Ok(Some(component))

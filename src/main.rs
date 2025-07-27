@@ -1,17 +1,17 @@
 mod cmake;
-mod handler;
 mod logging;
 mod lsp;
 mod project;
+mod server;
 mod tools;
 
 use clap::Parser;
-use handler::CppServerHandler;
 use logging::{LogConfig, init_logging};
 use rust_mcp_sdk::schema::{
     Implementation, InitializeResult, LATEST_PROTOCOL_VERSION, ServerCapabilities,
     ServerCapabilitiesTools,
 };
+use server::CppServerHandler;
 
 use rust_mcp_sdk::{
     McpServer, StdioTransport, TransportOptions,
@@ -25,6 +25,10 @@ use tracing::info;
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]
 struct Args {
+    /// Project root directory to scan for build configurations (defaults to current directory)
+    #[arg(long, value_name = "DIR")]
+    root: Option<PathBuf>,
+
     /// Log level (overrides RUST_LOG env var)
     #[arg(long, value_name = "LEVEL")]
     log_level: Option<String>,
@@ -46,7 +50,18 @@ async fn main() -> SdkResult<()> {
         std::process::exit(1);
     }
 
-    info!("Starting C++ MCP Server");
+    // Resolve project root directory
+    let project_root = args.root.unwrap_or_else(|| {
+        std::env::current_dir().unwrap_or_else(|e| {
+            eprintln!("Failed to get current directory: {e}");
+            std::process::exit(1);
+        })
+    });
+
+    info!(
+        "Starting C++ MCP Server with project root: {}",
+        project_root.display()
+    );
 
     // Define server details and capabilities
     let server_details = InitializeResult {
@@ -67,8 +82,8 @@ async fn main() -> SdkResult<()> {
     // Create stdio transport
     let transport = StdioTransport::new(TransportOptions::default())?;
 
-    // Create custom handler
-    let handler = CppServerHandler::new();
+    // Create custom handler with project root
+    let handler = CppServerHandler::new(project_root);
 
     // Create MCP server
     let server: ServerRuntime = server_runtime::create_server(server_details, transport, handler);
