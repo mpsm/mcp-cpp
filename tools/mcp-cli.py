@@ -399,6 +399,13 @@ def format_pretty_json_output(response: Dict) -> None:
 
 def _format_simple_output(response: Dict) -> None:
     """Simple text output when rich is not available"""
+    # Handle list-tools specially (different response format)
+    if "result" in response and "tools" in response["result"]:
+        # This is a list-tools response
+        print(json.dumps(response["result"], indent=2))
+        return
+    
+    # Handle tool call responses
     if "result" in response and "content" in response["result"]:
         content = response["result"]["content"]
         if content and len(content) > 0 and "text" in content[0]:
@@ -418,7 +425,15 @@ def _format_rich_output(command: str, response: Dict) -> None:
     console = Console()
     
     try:
-        # Extract the actual data from MCP response
+        # Handle list-tools specially (different response format)
+        if command == "list-tools":
+            if "result" not in response or "tools" not in response["result"]:
+                console.print("[red]Invalid response format for list-tools[/red]")
+                return
+            _format_tools_list(console, response["result"])
+            return
+        
+        # Extract the actual data from MCP response for tool calls
         if "result" not in response or "content" not in response["result"]:
             console.print("[red]Invalid response format[/red]")
             return

@@ -8,8 +8,8 @@ use std::sync::Arc;
 use tokio::sync::Mutex;
 use tracing::{info, instrument, warn};
 
-use super::serialize_result;
 use super::symbol_filtering::{SymbolFilter, SymbolUtilities};
+use super::utils::serialize_result;
 use crate::cmake::CmakeProjectStatus;
 use crate::lsp::ClangdManager;
 

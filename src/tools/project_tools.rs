@@ -5,7 +5,7 @@ use rust_mcp_sdk::schema::{CallToolResult, TextContent, schema_utils::CallToolEr
 use serde_json::json;
 use tracing::{info, instrument};
 
-use super::serialize_result;
+use super::utils::serialize_result;
 use crate::project::MetaProject;
 
 #[mcp_tool(

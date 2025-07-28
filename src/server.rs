@@ -8,7 +8,11 @@ use tracing::{Level, info};
 
 use crate::lsp::manager::ClangdManager;
 use crate::project::{MetaProject, ProjectScanner};
-use crate::tools::CppTools;
+use crate::register_tools;
+use crate::tools::analyze_symbols::AnalyzeSymbolContextTool;
+use crate::tools::project_tools::ListProjectComponentsTool;
+use crate::tools::search_symbols::SearchSymbolsTool;
+use crate::tools::utils::McpToolHandler;
 use crate::{log_mcp_message, log_timing};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -65,6 +69,49 @@ impl CppServerHandler {
     }
 }
 
+// Implement McpToolHandler trait for each tool type
+impl McpToolHandler<ListProjectComponentsTool> for CppServerHandler {
+    const TOOL_NAME: &'static str = "list_project_components";
+
+    fn call_tool_sync(
+        &self,
+        tool: ListProjectComponentsTool,
+    ) -> Result<CallToolResult, CallToolError> {
+        tool.call_tool(&self.meta_project)
+    }
+}
+
+impl McpToolHandler<SearchSymbolsTool> for CppServerHandler {
+    const TOOL_NAME: &'static str = "search_symbols";
+
+    async fn call_tool_async(
+        &self,
+        tool: SearchSymbolsTool,
+    ) -> Result<CallToolResult, CallToolError> {
+        tool.call_tool(&self.clangd_manager).await
+    }
+}
+
+impl McpToolHandler<AnalyzeSymbolContextTool> for CppServerHandler {
+    const TOOL_NAME: &'static str = "analyze_symbol_context";
+
+    async fn call_tool_async(
+        &self,
+        tool: AnalyzeSymbolContextTool,
+    ) -> Result<CallToolResult, CallToolError> {
+        tool.call_tool(&self.clangd_manager).await
+    }
+}
+
+// Register all tools with compile-time safety - this generates dispatch_tool() and registered_tools()
+register_tools! {
+    CppServerHandler {
+        ListProjectComponentsTool => handle_list_project_components (sync),
+        SearchSymbolsTool => handle_search_symbols (async),
+        AnalyzeSymbolContextTool => handle_analyze_symbol_context (async),
+    }
+}
+
 #[async_trait]
 impl ServerHandler for CppServerHandler {
     async fn handle_list_tools_request(
@@ -80,7 +127,7 @@ impl ServerHandler for CppServerHandler {
         let result = ListToolsResult {
             meta: None,
             next_cursor: None,
-            tools: CppTools::tools(),
+            tools: Self::registered_tools(),
         };
 
         log_mcp_message!(Level::INFO, "outgoing", "list_tools", &result);
@@ -100,17 +147,10 @@ impl ServerHandler for CppServerHandler {
         log_mcp_message!(Level::INFO, "incoming", "call_tool", &request);
         info!("Executing tool: {}", tool_name);
 
-        let result = CppTools::handle_call(
-            &tool_name,
-            request
-                .params
-                .arguments
-                .map(serde_json::Value::Object)
-                .unwrap_or(serde_json::Value::Null),
-            &self.clangd_manager,
-            &self.meta_project,
-        )
-        .await;
+        // Generated dispatch with compile-time safety
+        let result = self
+            .dispatch_tool(&tool_name, request.params.arguments)
+            .await?;
 
         log_mcp_message!(Level::INFO, "outgoing", "call_tool", &result);
         log_timing!(
@@ -119,6 +159,6 @@ impl ServerHandler for CppServerHandler {
             start.elapsed()
         );
 
-        result
+        Ok(result)
     }
 }

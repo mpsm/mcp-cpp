@@ -3,7 +3,13 @@ mod logging;
 mod lsp;
 mod project;
 mod server;
-mod tools;
+mod tools {
+    pub mod analyze_symbols;
+    pub mod project_tools;
+    pub mod search_symbols;
+    pub mod symbol_filtering;
+    pub mod utils;
+}
 
 use clap::Parser;
 use logging::{LogConfig, init_logging};
