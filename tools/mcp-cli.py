@@ -128,7 +128,7 @@ Examples:
   %(prog)s list-tools
   %(prog)s search-symbols Math --max-results 20
   %(prog)s analyze-symbol "Math::sqrt" --include-usage-patterns
-  %(prog)s list-project-components --pretty-json
+  %(prog)s get-project-details --pretty-json
         """
     )
     
@@ -252,17 +252,17 @@ Examples:
         help="Specify build directory path"
     )
     
-    # list-project-components subcommand
-    project_components_parser = subparsers.add_parser(
-        "list-project-components",
-        help="List and analyze all discovered project components (CMake, Meson, etc.)"
+    # get-project-details subcommand
+    project_details_parser = subparsers.add_parser(
+        "get-project-details",
+        help="Get comprehensive project analysis including build configurations and global compilation database"
     )
-    project_components_parser.add_argument(
+    project_details_parser.add_argument(
         "--path",
         type=str,
         help="Project root path to scan (triggers fresh scan if different from server default)"
     )
-    project_components_parser.add_argument(
+    project_details_parser.add_argument(
         "--depth",
         type=int,
         choices=range(0, 11),
@@ -338,13 +338,13 @@ def main():
                 
             response = client.call_tool("analyze_symbol_context", arguments)
             
-        elif args.command == "list-project-components":
+        elif args.command == "get-project-details":
             arguments = {}
             if hasattr(args, 'path') and args.path:
                 arguments["path"] = args.path
             if hasattr(args, 'depth') and args.depth is not None:
                 arguments["depth"] = args.depth
-            response = client.call_tool("list_project_components", arguments)
+            response = client.call_tool("get_project_details", arguments)
         
         # Output the response
         if args.raw_output:
@@ -457,8 +457,8 @@ def _format_rich_output(command: str, response: Dict) -> None:
             _format_symbols_search(console, data)
         elif command == "analyze-symbol":
             _format_symbol_analysis(console, data)
-        elif command == "list-project-components":
-            _format_project_components(console, data)
+        elif command == "get-project-details":
+            _format_project_details(console, data)
         else:
             # Fallback to JSON
             syntax = Syntax(json.dumps(data, indent=2), "json", theme="monokai")
@@ -743,25 +743,44 @@ def _format_symbol_analysis(console, data: Dict) -> None:
                 console.print()
 
 
-def _format_project_components(console, data: Dict) -> None:
-    """Format multi-provider project components information"""
-    project_name = data.get("project_name", "Unknown")
-    project_root = data.get("project_root", "Unknown")
-    component_count = data.get("component_count", 0)
-    provider_types = data.get("provider_types", [])
+def _format_project_details(console, data: Dict) -> None:
+    """Format comprehensive project details including components and global configuration"""
+    project_root_path = data.get("project_root_path", "Unknown")
+    global_compilation_db = data.get("global_compilation_database_path")
     components = data.get("components", [])
     scan_depth = data.get("scan_depth", 0)
     discovered_at = data.get("discovered_at", "Unknown")
     rescanned = data.get("rescanned", False)
     
+    # Compute values client-side
+    project_name = "Unknown"
+    if project_root_path != "Unknown":
+        import os
+        project_name = os.path.basename(str(project_root_path)) or "Unknown"
+    
+    component_count = len(components)
+    
+    # Extract unique provider types from components
+    provider_types = []
+    if components:
+        provider_set = set(comp.get("provider_type", "unknown") for comp in components)
+        provider_types = sorted(list(provider_set))
+    
     # Project header with multi-provider info
     if project_name != "Unknown":
         providers_text = f" • {', '.join(provider_types)}" if provider_types else ""
         console.print(Panel(f"[bold cyan]Project: {project_name}[/bold cyan]{providers_text}", 
-                           title="Multi-Provider Project Analysis", border_style="blue"))
+                           title="Project Details Analysis", border_style="blue"))
         
-        if project_root != "Unknown":
-            console.print(f"[bold]Project Root:[/bold] {project_root}")
+        if project_root_path != "Unknown":
+            console.print(f"[bold]Project Root:[/bold] {project_root_path}")
+        
+        # Display global compilation database if configured
+        if global_compilation_db:
+            console.print(f"[bold]Global Compilation DB:[/bold] [green]{global_compilation_db}[/green]")
+        else:
+            console.print(f"[bold]Global Compilation DB:[/bold] [dim]Not configured (using component-specific databases)[/dim]")
+            
         console.print(f"[bold]Scan Depth:[/bold] {scan_depth} levels")
         scan_status = " (fresh scan)" if rescanned else " (cached)"
         console.print(f"[bold]Discovered:[/bold] {discovered_at}{scan_status}")

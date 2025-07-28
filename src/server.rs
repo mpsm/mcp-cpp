@@ -7,18 +7,16 @@ use rust_mcp_sdk::{McpServer, mcp_server::ServerHandler};
 use tracing::{Level, info};
 
 use crate::lsp::manager::ClangdManager;
-use crate::project::{MetaProject, ProjectScanner};
+use crate::project::MetaProject;
 use crate::register_tools;
 use crate::tools::analyze_symbols::AnalyzeSymbolContextTool;
-use crate::tools::project_tools::ListProjectComponentsTool;
+use crate::tools::project_tools::GetProjectDetailsTool;
 use crate::tools::search_symbols::SearchSymbolsTool;
 use crate::tools::utils::McpToolHandler;
 use crate::{log_mcp_message, log_timing};
-use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Instant;
 use tokio::sync::Mutex;
-use tracing::warn;
 
 pub struct CppServerHandler {
     clangd_manager: Arc<Mutex<ClangdManager>>,
@@ -26,57 +24,19 @@ pub struct CppServerHandler {
 }
 
 impl CppServerHandler {
-    pub fn new(project_root: PathBuf) -> Self {
-        let meta_project = Self::scan_project_root(&project_root, 3);
-
+    pub fn new(meta_project: MetaProject) -> Self {
         Self {
             clangd_manager: Arc::new(Mutex::new(ClangdManager::new())),
             meta_project,
         }
     }
-
-    /// Scan project root with specified depth
-    fn scan_project_root(project_root: &Path, depth: usize) -> MetaProject {
-        info!(
-            "Scanning project root for build configurations: {} (depth: {})",
-            project_root.display(),
-            depth
-        );
-
-        // Create project scanner with default providers
-        let scanner = ProjectScanner::with_default_providers();
-
-        // Scan the project root with specified depth
-        match scanner.scan_project(project_root, depth, None) {
-            Ok(meta_project) => {
-                info!(
-                    "Successfully scanned project: found {} components with providers: {:?}",
-                    meta_project.component_count(),
-                    meta_project.get_provider_types()
-                );
-                meta_project
-            }
-            Err(e) => {
-                warn!(
-                    "Failed to scan project root {}: {}. Creating empty MetaProject.",
-                    project_root.display(),
-                    e
-                );
-                // Create empty MetaProject as fallback
-                MetaProject::new(project_root.to_path_buf(), Vec::new(), depth)
-            }
-        }
-    }
 }
 
 // Implement McpToolHandler trait for each tool type
-impl McpToolHandler<ListProjectComponentsTool> for CppServerHandler {
-    const TOOL_NAME: &'static str = "list_project_components";
+impl McpToolHandler<GetProjectDetailsTool> for CppServerHandler {
+    const TOOL_NAME: &'static str = "get_project_details";
 
-    fn call_tool_sync(
-        &self,
-        tool: ListProjectComponentsTool,
-    ) -> Result<CallToolResult, CallToolError> {
+    fn call_tool_sync(&self, tool: GetProjectDetailsTool) -> Result<CallToolResult, CallToolError> {
         tool.call_tool(&self.meta_project)
     }
 }
@@ -106,9 +66,9 @@ impl McpToolHandler<AnalyzeSymbolContextTool> for CppServerHandler {
 // Register all tools with compile-time safety - this generates dispatch_tool() and registered_tools()
 register_tools! {
     CppServerHandler {
-        ListProjectComponentsTool => handle_list_project_components (sync),
-        SearchSymbolsTool => handle_search_symbols (async),
-        AnalyzeSymbolContextTool => handle_analyze_symbol_context (async),
+        GetProjectDetailsTool => call_tool_sync (sync),
+        SearchSymbolsTool => call_tool_async (async),
+        AnalyzeSymbolContextTool => call_tool_async (async),
     }
 }
 

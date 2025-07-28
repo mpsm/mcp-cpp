@@ -13,6 +13,7 @@ mod tools {
 
 use clap::Parser;
 use logging::{LogConfig, init_logging};
+use project::{MetaProject, ProjectScanner};
 use rust_mcp_sdk::schema::{
     Implementation, InitializeResult, LATEST_PROTOCOL_VERSION, ServerCapabilities,
     ServerCapabilitiesTools,
@@ -24,7 +25,7 @@ use rust_mcp_sdk::{
     error::SdkResult,
     mcp_server::{ServerRuntime, server_runtime},
 };
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use tracing::info;
 
 /// CLI arguments for the MCP C++ server
@@ -35,6 +36,10 @@ struct Args {
     #[arg(long, value_name = "DIR")]
     root: Option<PathBuf>,
 
+    /// Global compilation database path (overrides per-component compilation databases)
+    #[arg(long, short = 'c', value_name = "FILE")]
+    compilation_database: Option<PathBuf>,
+
     /// Log level (overrides RUST_LOG env var)
     #[arg(long, value_name = "LEVEL")]
     log_level: Option<String>,
@@ -44,12 +49,92 @@ struct Args {
     log_file: Option<PathBuf>,
 }
 
+/// Detect global compilation database path from CLI args and auto-detection
+fn detect_global_compilation_database_from_args(
+    project_root: &Path,
+    compilation_database_arg: &Option<PathBuf>,
+) -> Option<PathBuf> {
+    if let Some(explicit_path) = compilation_database_arg {
+        // User provided explicit override - validate it exists
+        if explicit_path.exists() && explicit_path.is_file() {
+            Some(explicit_path.clone())
+        } else {
+            eprintln!(
+                "Error: Compilation database not found: {}",
+                explicit_path.display()
+            );
+            std::process::exit(1);
+        }
+    } else {
+        // Auto-detect: check for compile_commands.json in project root
+        let auto_detect_path = project_root.join("compile_commands.json");
+        if auto_detect_path.exists() && auto_detect_path.is_file() {
+            Some(auto_detect_path)
+        } else {
+            None
+        }
+    }
+}
+
+/// Create MetaProject with all project setup logic centralized
+fn create_meta_project(
+    project_root: PathBuf,
+    global_compilation_db: Option<PathBuf>,
+) -> MetaProject {
+    info!(
+        "Scanning project root for build configurations: {} (depth: 3)",
+        project_root.display()
+    );
+
+    // Create project scanner with default providers
+    let scanner = ProjectScanner::with_default_providers();
+
+    // Scan the project root with depth 3
+    let mut meta_project = match scanner.scan_project(&project_root, 3, None) {
+        Ok(meta_project) => {
+            info!(
+                "Successfully discovered {} components across {} providers: {:?}",
+                meta_project.component_count(),
+                meta_project.get_provider_types().len(),
+                meta_project.get_provider_types()
+            );
+            meta_project
+        }
+        Err(e) => {
+            eprintln!(
+                "Failed to scan project at {}: {}",
+                project_root.display(),
+                e
+            );
+            // Create empty MetaProject as fallback
+            MetaProject::new(project_root, Vec::new(), 3)
+        }
+    };
+
+    // Apply global compilation database if provided
+    if let Some(global_path) = global_compilation_db {
+        info!(
+            "Using global compilation database: {}",
+            global_path.display()
+        );
+        meta_project.global_compilation_database_path = Some(global_path);
+    }
+
+    meta_project
+}
+
 #[tokio::main]
 async fn main() -> SdkResult<()> {
     let args = Args::parse();
 
+    // Extract values before moving
+    let log_level = args.log_level.clone();
+    let log_file = args.log_file.clone();
+    let root_arg = args.root.clone();
+    let compilation_database_arg = args.compilation_database.clone();
+
     // Initialize logging with configuration from env vars and CLI args
-    let log_config = LogConfig::from_env().with_overrides(args.log_level, args.log_file);
+    let log_config = LogConfig::from_env().with_overrides(log_level, log_file);
 
     if let Err(e) = init_logging(log_config) {
         eprintln!("Failed to initialize logging: {e}");
@@ -57,16 +142,23 @@ async fn main() -> SdkResult<()> {
     }
 
     // Resolve project root directory
-    let project_root = args.root.unwrap_or_else(|| {
+    let project_root = root_arg.unwrap_or_else(|| {
         std::env::current_dir().unwrap_or_else(|e| {
             eprintln!("Failed to get current directory: {e}");
             std::process::exit(1);
         })
     });
 
+    // Detect global compilation database
+    let global_compilation_db =
+        detect_global_compilation_database_from_args(&project_root, &compilation_database_arg);
+
+    // Create MetaProject with all project setup
+    let meta_project = create_meta_project(project_root, global_compilation_db);
+
     info!(
         "Starting C++ MCP Server with project root: {}",
-        project_root.display()
+        meta_project.project_root_path.display()
     );
 
     // Define server details and capabilities
@@ -88,8 +180,8 @@ async fn main() -> SdkResult<()> {
     // Create stdio transport
     let transport = StdioTransport::new(TransportOptions::default())?;
 
-    // Create custom handler with project root
-    let handler = CppServerHandler::new(project_root);
+    // Create custom handler with MetaProject
+    let handler = CppServerHandler::new(meta_project);
 
     // Create MCP server
     let server: ServerRuntime = server_runtime::create_server(server_details, transport, handler);

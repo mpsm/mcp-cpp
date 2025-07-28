@@ -23,6 +23,10 @@ pub struct MetaProject {
 
     /// Timestamp when this meta project was discovered
     pub discovered_at: DateTime<Utc>,
+
+    /// Optional global compilation database path that overrides component-specific databases
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub global_compilation_database_path: Option<PathBuf>,
 }
 
 #[allow(dead_code)]
@@ -38,6 +42,23 @@ impl MetaProject {
             components,
             scan_depth,
             discovered_at: Utc::now(),
+            global_compilation_database_path: None,
+        }
+    }
+
+    /// Create a new meta project with optional global compilation database
+    pub fn with_global_compilation_database(
+        project_root_path: PathBuf,
+        components: Vec<ProjectComponent>,
+        scan_depth: usize,
+        global_compilation_database_path: Option<PathBuf>,
+    ) -> Self {
+        Self {
+            project_root_path,
+            components,
+            scan_depth,
+            discovered_at: Utc::now(),
+            global_compilation_database_path,
         }
     }
 
@@ -87,6 +108,15 @@ impl MetaProject {
     /// Get the number of discovered components
     pub fn component_count(&self) -> usize {
         self.components.len()
+    }
+
+    /// Get the project name derived from the root directory
+    pub fn project_name(&self) -> String {
+        self.project_root_path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("unknown")
+            .to_string()
     }
 
     /// Get all provider types present in this meta project

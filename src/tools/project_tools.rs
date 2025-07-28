@@ -2,19 +2,24 @@
 
 use rust_mcp_sdk::macros::{JsonSchema, mcp_tool};
 use rust_mcp_sdk::schema::{CallToolResult, TextContent, schema_utils::CallToolError};
-use serde_json::json;
 use tracing::{info, instrument};
 
 use super::utils::serialize_result;
 use crate::project::MetaProject;
 
 #[mcp_tool(
-    name = "list_project_components",
-    description = "Comprehensive multi-provider project analysis tool that discovers and analyzes all build \
-                   system configurations within a workspace. Works with CMake, Meson, and other supported \
-                   build systems to provide unified project intelligence.
+    name = "get_project_details",
+    description = "Get comprehensive project analysis including build configurations, components, \
+                   and global compilation database information. Provides complete workspace \
+                   intelligence for multi-provider build systems.
 
-                   🏗️ MULTI-PROVIDER DISCOVERY:
+                   🏗️ PROJECT OVERVIEW:
+                   • Project name and root directory information
+                   • Global compilation database path (if configured)
+                   • Component count and provider type summary
+                   • Discovery timestamp and scan configuration
+
+                   🔧 MULTI-PROVIDER DISCOVERY:
                    • Automatic detection of CMake projects (CMakeLists.txt + build directories)
                    • Meson project support (meson.build + build configurations)
                    • Extensible architecture ready for Bazel, Buck, xmake, and other build systems
@@ -27,11 +32,11 @@ use crate::project::MetaProject;
                    • Build options and feature flags extraction
 
                    📋 COMPILATION DATABASE STATUS:
-                   • compile_commands.json availability and validity for each component
+                   • Global compilation database path (overrides component-specific databases)
+                   • Per-component compile_commands.json availability and validity
                    • LSP server compatibility assessment across all build systems
-                   • Cross-provider standardized metadata format
 
-                   🎯 PROJECT COMPONENT STRUCTURE:
+                   🎯 PROJECT STRUCTURE DETAILS:
                    Each discovered component includes:
                    • Build directory path and source root location
                    • Provider type (cmake, meson, etc.) for build system identification
@@ -39,24 +44,18 @@ use crate::project::MetaProject;
                    • Complete build options and configuration details
                    • Compilation database status for LSP integration
 
-                   🚀 INTEGRATION BENEFITS:
-                   • Single tool for all supported build systems
-                   • Consistent component format enables universal tooling
-                   • Perfect for polyglot projects using multiple build systems
-                   • Foundation for LSP server initialization across providers
-
                    🎯 PRIMARY USE CASES:
-                   Multi-provider project assessment • Build system inventory • LSP setup validation
-                   • Polyglot project navigation • Development environment verification
-                   • CI/CD build matrix generation
+                   Project assessment • Build system inventory • LSP setup validation
+                   • Development environment verification • CI/CD build matrix generation
+                   • Global compilation database configuration analysis
 
                    INPUT REQUIREMENTS:
-                   • No parameters required - analyzes discovered project components
+                   • No parameters required - returns complete project analysis
                    • Uses MetaProject workspace scanning results
-                   • Returns all components regardless of provider type"
+                   • Returns all discovered components and global configuration"
 )]
 #[derive(Debug, ::serde::Deserialize, ::serde::Serialize, JsonSchema)]
-pub struct ListProjectComponentsTool {
+pub struct GetProjectDetailsTool {
     /// Optional project root path to scan. DEFAULT: uses server's initial scan root.
     ///
     /// FORMATS ACCEPTED:
@@ -79,8 +78,8 @@ pub struct ListProjectComponentsTool {
     pub depth: Option<u32>,
 }
 
-impl ListProjectComponentsTool {
-    #[instrument(name = "list_project_components", skip(self, meta_project))]
+impl GetProjectDetailsTool {
+    #[instrument(name = "get_project_details", skip(self, meta_project))]
     pub fn call_tool(&self, meta_project: &MetaProject) -> Result<CallToolResult, CallToolError> {
         // Determine if we need to re-scan based on different parameters
         let requested_path = self.path.as_ref().map(std::path::PathBuf::from);
@@ -110,30 +109,23 @@ impl ListProjectComponentsTool {
             meta_project.clone()
         };
 
-        // Get project name from the effective meta project root
-        let project_name = effective_meta_project
-            .project_root_path
-            .file_name()
-            .and_then(|n| n.to_str())
-            .unwrap_or("unknown")
-            .to_string();
+        // Serialize MetaProject directly
+        let mut content = serde_json::to_value(&effective_meta_project).map_err(|e| {
+            CallToolError::new(std::io::Error::other(format!(
+                "Failed to serialize project details: {e}"
+            )))
+        })?;
 
-        // Serialize all components directly - let ProjectComponent define the API!
-        let components = effective_meta_project.components.clone();
-
-        let content = json!({
-            "project_name": project_name,
-            "project_root": effective_meta_project.project_root_path,
-            "component_count": effective_meta_project.component_count(),
-            "provider_types": effective_meta_project.get_provider_types(),
-            "scan_depth": effective_meta_project.scan_depth,
-            "discovered_at": effective_meta_project.discovered_at,
-            "rescanned": needs_rescan,
-            "components": components
-        });
+        // Add the rescanned flag which isn't part of the core MetaProject
+        if let Some(obj) = content.as_object_mut() {
+            obj.insert(
+                "rescanned".to_string(),
+                serde_json::Value::Bool(needs_rescan),
+            );
+        }
 
         info!(
-            "Successfully listed {} project components across {} providers: {:?}",
+            "Successfully analyzed project details: {} components across {} providers: {:?}",
             effective_meta_project.component_count(),
             effective_meta_project.get_provider_types().len(),
             effective_meta_project.get_provider_types()
