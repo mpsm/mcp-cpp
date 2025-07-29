@@ -10,8 +10,10 @@ use tokio::sync::Mutex;
 use tokio::task::JoinHandle;
 use tracing::{Level, debug, info, warn};
 
-use crate::lsp::error::LspError;
-use crate::lsp::types::{IndexingState, JsonRpcNotification, JsonRpcRequest, JsonRpcResponse};
+use crate::legacy_lsp::error::LspError;
+use crate::legacy_lsp::types::{
+    IndexingState, JsonRpcNotification, JsonRpcRequest, JsonRpcResponse,
+};
 use crate::{log_lsp_message, log_timing};
 
 /// Represents the result of parsing an LSP message from the stream

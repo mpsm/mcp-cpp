@@ -6,9 +6,9 @@ use std::sync::Arc;
 use tokio::sync::Mutex;
 use tracing::{info, warn};
 
-use crate::lsp::client::LspClient;
-use crate::lsp::error::LspError;
-use crate::lsp::types::IndexingState;
+use crate::legacy_lsp::client::LspClient;
+use crate::legacy_lsp::error::LspError;
+use crate::legacy_lsp::types::IndexingState;
 
 #[derive(Debug, Clone)]
 pub struct OpenedFileState {
@@ -512,7 +512,7 @@ impl ClangdManager {
             }
 
             // Only return when status is specifically Completed, not just when is_indexing() is false
-            if indexing_state.status == crate::lsp::types::IndexingStatus::Completed {
+            if indexing_state.status == crate::legacy_lsp::types::IndexingStatus::Completed {
                 info!(
                     "✅ ClangdManager::wait_for_indexing_completion() - Indexing completed successfully after {} loops and {:?}",
                     loop_count,
@@ -701,7 +701,7 @@ impl Default for ClangdManager {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::lsp::types::IndexingStatus;
+    use crate::legacy_lsp::types::IndexingStatus;
 
     #[test]
     fn test_parse_clangd_version_valid() {

@@ -6,7 +6,7 @@ use rust_mcp_sdk::schema::{
 use rust_mcp_sdk::{McpServer, mcp_server::ServerHandler};
 use tracing::{Level, info};
 
-use crate::lsp::manager::ClangdManager;
+use crate::legacy_lsp::manager::ClangdManager;
 use crate::project::MetaProject;
 use crate::register_tools;
 use crate::tools::analyze_symbols::AnalyzeSymbolContextTool;

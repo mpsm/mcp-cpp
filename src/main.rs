@@ -1,6 +1,6 @@
 mod cmake;
+mod legacy_lsp;
 mod logging;
-mod lsp;
 mod project;
 mod server;
 mod tools {

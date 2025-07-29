@@ -11,7 +11,7 @@ use tracing::{info, instrument, warn};
 use super::symbol_filtering::SymbolUtilities;
 use super::utils::serialize_result;
 use crate::cmake::CmakeProjectStatus;
-use crate::lsp::ClangdManager;
+use crate::legacy_lsp::ClangdManager;
 
 #[mcp_tool(
     name = "analyze_symbol_context",
@@ -374,7 +374,7 @@ impl AnalyzeSymbolContextTool {
             initial_indexing_state.message
         );
 
-        if initial_indexing_state.status != crate::lsp::types::IndexingStatus::Completed {
+        if initial_indexing_state.status != crate::legacy_lsp::types::IndexingStatus::Completed {
             info!(
                 "⏳ AnalyzeSymbolContextTool::call_tool() - Waiting for indexing completion before symbol analysis"
             );
@@ -410,12 +410,13 @@ impl AnalyzeSymbolContextTool {
             "🔍 AnalyzeSymbolContextTool::call_tool() - Step 1: Finding symbol location for '{}'",
             self.symbol
         );
-        let indexing_completion_time =
-            if initial_indexing_state.status == crate::lsp::types::IndexingStatus::Completed {
-                Some(std::time::Instant::now())
-            } else {
-                None
-            };
+        let indexing_completion_time = if initial_indexing_state.status
+            == crate::legacy_lsp::types::IndexingStatus::Completed
+        {
+            Some(std::time::Instant::now())
+        } else {
+            None
+        };
         let symbol_location = match self
             .find_symbol_location(&manager_guard, indexing_completion_time)
             .await
@@ -576,7 +577,7 @@ impl AnalyzeSymbolContextTool {
                     "class_members": class_members.is_some()
                 },
                 "build_directory_used": build_directory,
-                "indexing_waited": initial_indexing_state.status != crate::lsp::types::IndexingStatus::Completed,
+                "indexing_waited": initial_indexing_state.status != crate::legacy_lsp::types::IndexingStatus::Completed,
                 "indexing_status": SymbolUtilities::format_indexing_status(&final_indexing_state)
             }
         });

@@ -5,7 +5,7 @@ use std::collections::HashSet;
 use std::path::PathBuf;
 use tracing::debug;
 
-use crate::lsp::ClangdManager;
+use crate::legacy_lsp::ClangdManager;
 
 /// Symbol filtering utilities for project boundary detection and kind filtering
 pub struct SymbolFilter;
@@ -257,13 +257,13 @@ impl SymbolUtilities {
 
     /// Format indexing status for JSON output
     pub fn format_indexing_status(
-        indexing_state: &crate::lsp::types::IndexingState,
+        indexing_state: &crate::legacy_lsp::types::IndexingState,
     ) -> serde_json::Value {
         json!({
             "status": match indexing_state.status {
-                crate::lsp::types::IndexingStatus::NotStarted => "not_started",
-                crate::lsp::types::IndexingStatus::InProgress => "in_progress",
-                crate::lsp::types::IndexingStatus::Completed => "completed",
+                crate::legacy_lsp::types::IndexingStatus::NotStarted => "not_started",
+                crate::legacy_lsp::types::IndexingStatus::InProgress => "in_progress",
+                crate::legacy_lsp::types::IndexingStatus::Completed => "completed",
             },
             "is_indexing": indexing_state.is_indexing(),
             "files_processed": indexing_state.files_processed,

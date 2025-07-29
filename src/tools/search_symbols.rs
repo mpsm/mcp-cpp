@@ -11,7 +11,7 @@ use tracing::{info, instrument, warn};
 use super::symbol_filtering::{SymbolFilter, SymbolUtilities};
 use super::utils::serialize_result;
 use crate::cmake::CmakeProjectStatus;
-use crate::lsp::ClangdManager;
+use crate::legacy_lsp::ClangdManager;
 
 #[mcp_tool(
     name = "search_symbols",
@@ -443,7 +443,7 @@ impl SearchSymbolsTool {
         );
 
         // Wait for indexing to complete if not already completed
-        if initial_indexing_state.status != crate::lsp::types::IndexingStatus::Completed {
+        if initial_indexing_state.status != crate::legacy_lsp::types::IndexingStatus::Completed {
             info!(
                 "⏳ SearchSymbolsTool::search_workspace() - Waiting for indexing completion before workspace symbol search (current status: {:?})",
                 initial_indexing_state.status
@@ -463,9 +463,9 @@ impl SearchSymbolsTool {
                     "message": "Symbol search may be incomplete due to ongoing indexing",
                     "query": self.query,
                     "initial_status": match initial_indexing_state.status {
-                        crate::lsp::types::IndexingStatus::NotStarted => "not_started",
-                        crate::lsp::types::IndexingStatus::InProgress => "in_progress",
-                        crate::lsp::types::IndexingStatus::Completed => "completed",
+                        crate::legacy_lsp::types::IndexingStatus::NotStarted => "not_started",
+                        crate::legacy_lsp::types::IndexingStatus::InProgress => "in_progress",
+                        crate::legacy_lsp::types::IndexingStatus::Completed => "completed",
                     },
                     "indexing_status": SymbolUtilities::format_indexing_status(&final_indexing_state)
                 });
@@ -565,7 +565,7 @@ impl SearchSymbolsTool {
                         "search_type": "workspace",
                         "opened_files_count": opened_files_count,
                         "build_directory_used": build_directory,
-                        "indexing_waited": initial_indexing_state.status != crate::lsp::types::IndexingStatus::Completed,
+                        "indexing_waited": initial_indexing_state.status != crate::legacy_lsp::types::IndexingStatus::Completed,
                         "indexing_status": SymbolUtilities::format_indexing_status(&final_indexing_state)
                     }
                 });
