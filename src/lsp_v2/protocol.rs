@@ -243,11 +243,91 @@ impl<T: Transport + 'static> JsonRpcClient<T> {
         Ok(())
     }
 
-    /// Send a JSON-RPC request
+    /// Send a JSON-RPC request with default timeout (30 seconds)
     pub async fn request<P, R>(
         &mut self,
         method: &str,
         params: Option<P>,
+    ) -> Result<R, JsonRpcError>
+    where
+        P: serde::Serialize,
+        R: for<'de> serde::Deserialize<'de>,
+    {
+        self.request_with_timeout(method, params, std::time::Duration::from_secs(30))
+            .await
+    }
+
+    /// Send a JSON-RPC request without timeout (blocking until response)
+    pub async fn request_blocking<P, R>(
+        &mut self,
+        method: &str,
+        params: Option<P>,
+    ) -> Result<R, JsonRpcError>
+    where
+        P: serde::Serialize,
+        R: for<'de> serde::Deserialize<'de>,
+    {
+        let id = self.request_id.fetch_add(1, Ordering::SeqCst);
+        let (response_sender, mut response_receiver) = mpsc::unbounded_channel();
+
+        // Register pending request
+        {
+            let mut pending = self.pending_requests.lock().await;
+            pending.insert(id, response_sender);
+        }
+
+        // Create request
+        let request = JsonRpcRequest {
+            jsonrpc: "2.0".to_string(),
+            id: serde_json::Value::Number(serde_json::Number::from(id)),
+            method: method.to_string(),
+            params: params
+                .map(|p| serde_json::to_value(p).map_err(JsonRpcError::Serialization))
+                .transpose()?,
+        };
+
+        // Send request
+        let request_json = serde_json::to_string(&request).map_err(JsonRpcError::Serialization)?;
+        debug!("JsonRpcClient: Sending blocking request: {}", request_json);
+
+        {
+            let mut transport = self.transport.lock().await;
+            transport
+                .send(&request_json)
+                .await
+                .map_err(|e| JsonRpcError::Transport(e.to_string()))?;
+        }
+
+        // Wait for response without timeout
+        let response = match response_receiver.recv().await {
+            Some(response) => response,
+            None => {
+                // Channel closed - clean up pending request
+                let mut pending = self.pending_requests.lock().await;
+                pending.remove(&id);
+                return Err(JsonRpcError::RequestCancelled);
+            }
+        };
+
+        // Handle response
+        if let Some(error) = response.error {
+            return Err(JsonRpcError::Server {
+                code: error.code,
+                message: error.message,
+                data: error.data,
+            });
+        }
+
+        let result = response.result.ok_or(JsonRpcError::MissingResult)?;
+        serde_json::from_value(result).map_err(JsonRpcError::Deserialization)
+    }
+
+    /// Send a JSON-RPC request with custom timeout
+    pub async fn request_with_timeout<P, R>(
+        &mut self,
+        method: &str,
+        params: Option<P>,
+        timeout: std::time::Duration,
     ) -> Result<R, JsonRpcError>
     where
         P: serde::Serialize,
@@ -284,11 +364,25 @@ impl<T: Transport + 'static> JsonRpcClient<T> {
                 .map_err(|e| JsonRpcError::Transport(e.to_string()))?;
         }
 
-        // Wait for response
-        let response = response_receiver
-            .recv()
-            .await
-            .ok_or(JsonRpcError::RequestCancelled)?;
+        // Wait for response with timeout
+        let response_result = tokio::time::timeout(timeout, response_receiver.recv()).await;
+
+        // Handle timeout - clean up pending request
+        let response = match response_result {
+            Ok(Some(response)) => response,
+            Ok(None) => {
+                // Channel closed - clean up pending request
+                let mut pending = self.pending_requests.lock().await;
+                pending.remove(&id);
+                return Err(JsonRpcError::RequestCancelled);
+            }
+            Err(_) => {
+                // Timeout - clean up pending request
+                let mut pending = self.pending_requests.lock().await;
+                pending.remove(&id);
+                return Err(JsonRpcError::Timeout);
+            }
+        };
 
         // Handle response
         if let Some(error) = response.error {
@@ -335,8 +429,30 @@ impl<T: Transport + 'static> JsonRpcClient<T> {
         transport.is_connected()
     }
 
+    /// Clean up all pending requests (e.g., during restart)
+    pub async fn cleanup_pending_requests(&mut self) {
+        let mut pending = self.pending_requests.lock().await;
+        for (id, sender) in pending.drain() {
+            debug!("JsonRpcClient: Cleaning up pending request ID {}", id);
+            // Try to send a cancellation, but don't wait if the receiver is gone
+            let _ = sender.send(JsonRpcResponse {
+                jsonrpc: "2.0".to_string(),
+                id: Value::Number(serde_json::Number::from(id)),
+                result: None,
+                error: Some(JsonRpcErrorObject {
+                    code: JsonRpcErrorCode::InternalError as i32,
+                    message: "Request cancelled due to connection restart".to_string(),
+                    data: None,
+                }),
+            });
+        }
+    }
+
     /// Close the connection
     pub async fn close(&mut self) -> Result<(), JsonRpcError> {
+        // Clean up all pending requests first
+        self.cleanup_pending_requests().await;
+
         let mut transport = self.transport.lock().await;
         transport
             .close()

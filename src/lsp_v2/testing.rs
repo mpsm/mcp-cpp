@@ -45,13 +45,7 @@ impl ProcessManager for MockProcessManager {
         Ok(())
     }
 
-    async fn stop(&mut self) -> Result<(), Self::Error> {
-        self.running = false;
-        self.process_id = None;
-        Ok(())
-    }
-
-    async fn kill(&mut self) -> Result<(), Self::Error> {
+    async fn stop(&mut self, _mode: crate::lsp_v2::process::StopMode) -> Result<(), Self::Error> {
         self.running = false;
         self.process_id = None;
         Ok(())
@@ -69,5 +63,12 @@ impl ProcessManager for MockProcessManager {
         // For testing purposes, we can't create a real StdioTransport
         // In practice, tests would use MockTransport directly
         Err(ProcessError::NotStarted)
+    }
+
+    fn on_process_exit<H>(&mut self, _handler: H)
+    where
+        H: crate::lsp_v2::process::ProcessExitHandler + 'static,
+    {
+        // Mock implementation - no-op for testing
     }
 }

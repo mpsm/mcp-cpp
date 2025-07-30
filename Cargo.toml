@@ -16,6 +16,7 @@ homepage = "https://github.com/mpsm/mcp-cpp"
 async-trait = "0.1.88"
 chrono = { version = "0.4", features = ["serde"] }
 clap = { version = "4.5.27", features = ["derive"] }
+libc = "0.2"
 lsp-types = "0.97"
 rust-mcp-sdk = { version = "0.5.0", features = ["macros"] }
 serde = { version = "1.0.219", features = ["derive"] }

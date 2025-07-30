@@ -5,7 +5,9 @@
 //! coordinating with the LSP client.
 
 use crate::lsp_v2::client::{LspClient, LspError};
-use crate::lsp_v2::process::{ChildProcessManager, ProcessError, ProcessManager, StderrMonitor};
+use crate::lsp_v2::process::{
+    ChildProcessManager, ProcessError, ProcessManager, StderrMonitor, StopMode,
+};
 use crate::lsp_v2::transport::StdioTransport;
 use async_trait::async_trait;
 use tracing::{debug, info};
@@ -61,10 +63,10 @@ pub trait LspOrchestrator {
 }
 
 // ============================================================================
-// Standard LSP Orchestrator Implementation
+// Simple LSP Orchestrator Implementation
 // ============================================================================
 
-/// Standard orchestrator that manages a child process with LSP client
+/// Simple orchestrator that manages a child process with LSP client
 pub struct StandardLspOrchestrator {
     /// Process manager for the external LSP server
     process_manager: ChildProcessManager,
@@ -93,17 +95,6 @@ impl StandardLspOrchestrator {
         F: Fn(String) + Send + Sync + 'static,
     {
         self.process_manager.on_stderr_line(handler);
-    }
-
-    /// Enable stderr monitoring
-    pub async fn start_stderr_monitoring(&mut self) -> Result<(), OrchestratorError> {
-        self.process_manager.start_monitoring().await?;
-        Ok(())
-    }
-
-    /// Check if stderr monitoring is active
-    pub fn is_monitoring_stderr(&self) -> bool {
-        self.process_manager.is_monitoring()
     }
 }
 
@@ -136,7 +127,7 @@ impl LspOrchestrator for StandardLspOrchestrator {
 
         // Step 5: Initialize the LSP connection
         debug!("Initializing LSP connection");
-        let _result = client.initialize(root_uri).await?;
+        client.initialize(root_uri).await?;
 
         // Step 6: Store the client and mark as started
         self.client = Some(client);
@@ -162,7 +153,7 @@ impl LspOrchestrator for StandardLspOrchestrator {
 
         // Step 2: Stop the external process
         debug!("Stopping LSP server process");
-        self.process_manager.stop().await?;
+        self.process_manager.stop(StopMode::Graceful).await?;
 
         // Step 3: Clean up state
         self.client = None;
@@ -182,8 +173,8 @@ impl LspOrchestrator for StandardLspOrchestrator {
         }
 
         // Step 2: Kill the external process
-        debug!("Killing LSP server process");
-        self.process_manager.kill().await?;
+        debug!("Force killing LSP server process");
+        self.process_manager.stop(StopMode::Force).await?;
 
         // Step 3: Clean up state
         self.client = None;
@@ -223,6 +214,5 @@ mod tests {
 
         assert!(!orchestrator.is_active());
         assert!(orchestrator.client().is_none());
-        assert!(!orchestrator.is_monitoring_stderr());
     }
 }

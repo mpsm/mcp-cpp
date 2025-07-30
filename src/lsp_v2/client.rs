@@ -31,6 +31,11 @@ pub enum LspError {
 
     #[error("LSP protocol error: {0}")]
     Protocol(String),
+
+    #[error(
+        "LSP request timeout: {method} - consider using a longer timeout or checking server responsiveness"
+    )]
+    RequestTimeout { method: String },
 }
 
 // ============================================================================
@@ -127,7 +132,16 @@ impl<T: Transport + 'static> LspClient<T> {
         };
 
         // Send initialize request
-        let result: InitializeResult = self.rpc_client.request("initialize", Some(params)).await?;
+        let result: InitializeResult =
+            match self.rpc_client.request("initialize", Some(params)).await {
+                Ok(result) => result,
+                Err(JsonRpcError::Timeout) => {
+                    return Err(LspError::RequestTimeout {
+                        method: "initialize".to_string(),
+                    });
+                }
+                Err(e) => return Err(LspError::JsonRpc(e)),
+            };
 
         debug!("LSP server capabilities: {:?}", result.capabilities);
         self.server_capabilities = Some(result.capabilities.clone());
@@ -153,7 +167,15 @@ impl<T: Transport + 'static> LspClient<T> {
         info!("Shutting down LSP client");
 
         // Send shutdown request
-        let _: Value = self.rpc_client.request("shutdown", None::<Value>).await?;
+        let _: Value = match self.rpc_client.request("shutdown", None::<Value>).await {
+            Ok(result) => result,
+            Err(JsonRpcError::Timeout) => {
+                return Err(LspError::RequestTimeout {
+                    method: "shutdown".to_string(),
+                });
+            }
+            Err(e) => return Err(LspError::JsonRpc(e)),
+        };
 
         // Send exit notification
         self.rpc_client.notify("exit", None::<Value>).await?;
