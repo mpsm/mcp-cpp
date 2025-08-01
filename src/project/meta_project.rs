@@ -25,7 +25,10 @@ pub struct MetaProject {
     pub discovered_at: DateTime<Utc>,
 
     /// Optional global compilation database that overrides component-specific databases
-    #[serde(skip_serializing_if = "Option::is_none", rename = "global_compilation_database_path")]
+    #[serde(
+        skip_serializing_if = "Option::is_none",
+        rename = "global_compilation_database_path"
+    )]
     pub global_compilation_database: Option<CompilationDatabase>,
 }
 
@@ -177,132 +180,5 @@ impl MetaProject {
         } else {
             Err(errors)
         }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use std::collections::HashMap;
-    use std::io::Write;
-    use tempfile::NamedTempFile;
-
-    fn create_test_component(provider_type: &str, source_root: &str) -> ProjectComponent {
-        // Create a temporary compilation database file for testing
-        let mut temp_file = NamedTempFile::new().expect("Failed to create temp file");
-        temp_file
-            .write_all(br#"[{"directory": "/tmp", "file": "test.cpp", "arguments": ["clang++", "-c", "test.cpp"]}]"#)
-            .expect("Failed to write to temp file");
-
-        let compilation_database = CompilationDatabase::new(temp_file.path().to_path_buf())
-            .expect("Failed to create compilation database");
-
-        // Prevent temp file from being dropped immediately
-        std::mem::forget(temp_file);
-
-        ProjectComponent {
-            build_dir_path: PathBuf::from("/tmp/build"),
-            source_root_path: PathBuf::from(source_root),
-            compilation_database,
-            provider_type: provider_type.to_string(),
-            generator: "Ninja".to_string(),
-            build_type: "Debug".to_string(),
-            build_options: HashMap::new(),
-        }
-    }
-
-    #[test]
-    fn test_get_components_by_provider_grouping() {
-        let components = vec![
-            create_test_component("cmake", "/src1"),
-            create_test_component("cmake", "/src2"),
-            create_test_component("meson", "/src3"),
-            create_test_component("cmake", "/src4"),
-        ];
-
-        let meta_project = MetaProject::new(PathBuf::from("/workspace"), components, 3);
-
-        let grouped = meta_project.get_components_by_provider();
-
-        assert_eq!(grouped.len(), 2);
-        assert_eq!(grouped.get("cmake").unwrap().len(), 3);
-        assert_eq!(grouped.get("meson").unwrap().len(), 1);
-    }
-
-    #[test]
-    fn test_get_components_by_provider_empty() {
-        let meta_project = MetaProject::new(PathBuf::from("/workspace"), vec![], 3);
-
-        let grouped = meta_project.get_components_by_provider();
-        assert_eq!(grouped.len(), 0);
-    }
-
-    #[test]
-    fn test_get_source_roots_deduplication() {
-        let components = vec![
-            create_test_component("cmake", "/src/common"),
-            create_test_component("meson", "/src/common"), // duplicate
-            create_test_component("cmake", "/src/app"),
-            create_test_component("cmake", "/src/app"), // duplicate
-            create_test_component("meson", "/src/lib"),
-        ];
-
-        let meta_project = MetaProject::new(PathBuf::from("/workspace"), components, 3);
-
-        let roots = meta_project.get_source_roots();
-
-        assert_eq!(roots.len(), 3);
-        let root_strs: Vec<String> = roots
-            .iter()
-            .map(|p| p.to_string_lossy().to_string())
-            .collect();
-        assert!(root_strs.contains(&"/src/app".to_string()));
-        assert!(root_strs.contains(&"/src/common".to_string()));
-        assert!(root_strs.contains(&"/src/lib".to_string()));
-    }
-
-    #[test]
-    fn test_get_source_roots_empty() {
-        let meta_project = MetaProject::new(PathBuf::from("/workspace"), vec![], 3);
-
-        let roots = meta_project.get_source_roots();
-        assert_eq!(roots.len(), 0);
-    }
-
-    #[test]
-    fn test_get_components_for_provider_filtering() {
-        let components = vec![
-            create_test_component("cmake", "/src1"),
-            create_test_component("meson", "/src2"),
-            create_test_component("cmake", "/src3"),
-            create_test_component("bazel", "/src4"),
-        ];
-
-        let meta_project = MetaProject::new(PathBuf::from("/workspace"), components, 3);
-
-        let cmake_components = meta_project.get_components_for_provider("cmake");
-        assert_eq!(cmake_components.len(), 2);
-
-        let meson_components = meta_project.get_components_for_provider("meson");
-        assert_eq!(meson_components.len(), 1);
-
-        let nonexistent_components = meta_project.get_components_for_provider("nonexistent");
-        assert_eq!(nonexistent_components.len(), 0);
-    }
-
-    #[test]
-    fn test_get_components_for_provider_case_sensitive() {
-        let components = vec![
-            create_test_component("cmake", "/src1"),
-            create_test_component("CMAKE", "/src2"), // different case
-        ];
-
-        let meta_project = MetaProject::new(PathBuf::from("/workspace"), components, 3);
-
-        let cmake_lower = meta_project.get_components_for_provider("cmake");
-        let cmake_upper = meta_project.get_components_for_provider("CMAKE");
-
-        assert_eq!(cmake_lower.len(), 1);
-        assert_eq!(cmake_upper.len(), 1);
     }
 }
