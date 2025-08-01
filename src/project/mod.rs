@@ -5,6 +5,7 @@
 //! for their respective build system.
 
 pub mod cmake_provider;
+pub mod compilation_database;
 pub mod component;
 pub mod error;
 pub mod meson_provider;
@@ -14,6 +15,8 @@ pub mod scanner;
 
 #[allow(unused_imports)]
 pub use cmake_provider::CmakeProvider;
+#[allow(unused_imports)]
+pub use compilation_database::{CompilationDatabase, CompilationDatabaseError};
 #[allow(unused_imports)]
 pub use component::ProjectComponent;
 #[allow(unused_imports)]

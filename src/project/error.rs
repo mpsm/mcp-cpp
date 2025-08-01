@@ -23,4 +23,13 @@ pub enum ProjectError {
 
     #[error("Source root directory not found: {path}")]
     SourceRootNotFound { path: String },
+
+    #[error("Compilation database is not readable: {error}")]
+    CompilationDatabaseNotReadable { error: String },
+
+    #[error("Compilation database is invalid: {error}")]
+    CompilationDatabaseInvalid { error: String },
+
+    #[error("Compilation database is empty")]
+    CompilationDatabaseEmpty,
 }

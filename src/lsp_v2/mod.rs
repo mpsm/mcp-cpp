@@ -46,9 +46,7 @@ pub mod transport;
 #[allow(unused_imports)]
 pub use client::{LspClient, LspError};
 #[allow(unused_imports)]
-pub use orchestrator::{
-    LspOrchestrator, OrchestratorError, StandardLspOrchestrator,
-};
+pub use orchestrator::{LspOrchestrator, OrchestratorError, StandardLspOrchestrator};
 #[allow(unused_imports)]
 pub use process::{
     ChildProcessManager, ProcessExitEvent, ProcessExitHandler, ProcessManager, ProcessState,

@@ -90,7 +90,7 @@ impl GetProjectDetailsTool {
             None => false,
         } || requested_depth != meta_project.scan_depth;
 
-        let effective_meta_project = if needs_rescan {
+        let fresh_scan = if needs_rescan {
             // Perform fresh scan with user-specified parameters
             let scan_root = requested_path
                 .as_ref()
@@ -102,15 +102,18 @@ impl GetProjectDetailsTool {
                 requested_depth
             );
 
-            self.perform_fresh_scan(scan_root, requested_depth)?
+            Some(self.perform_fresh_scan(scan_root, requested_depth)?)
         } else {
             // Use cached MetaProject
             info!("Using cached MetaProject scan results");
-            meta_project.clone()
+            None
         };
 
+        let effective_meta_project = fresh_scan.as_ref().unwrap_or(meta_project);
+        let rescanned_fresh = fresh_scan.is_some();
+
         // Serialize MetaProject directly
-        let mut content = serde_json::to_value(&effective_meta_project).map_err(|e| {
+        let mut content = serde_json::to_value(effective_meta_project).map_err(|e| {
             CallToolError::new(std::io::Error::other(format!(
                 "Failed to serialize project details: {e}"
             )))
@@ -120,7 +123,7 @@ impl GetProjectDetailsTool {
         if let Some(obj) = content.as_object_mut() {
             obj.insert(
                 "rescanned".to_string(),
-                serde_json::Value::Bool(needs_rescan),
+                serde_json::Value::Bool(rescanned_fresh),
             );
         }
 

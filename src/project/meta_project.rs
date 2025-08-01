@@ -3,14 +3,14 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::PathBuf;
 
-use crate::project::ProjectComponent;
+use crate::project::{CompilationDatabase, ProjectComponent};
 
 /// Meta project representing a workspace with multiple build configurations
 ///
 /// A MetaProject contains the root directory that was scanned and all discovered
 /// ProjectComponents within that workspace. This allows managing complex projects
 /// that may have multiple build systems or configurations.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct MetaProject {
     /// Root directory that was scanned to discover components
     pub project_root_path: PathBuf,
@@ -24,9 +24,9 @@ pub struct MetaProject {
     /// Timestamp when this meta project was discovered
     pub discovered_at: DateTime<Utc>,
 
-    /// Optional global compilation database path that overrides component-specific databases
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub global_compilation_database_path: Option<PathBuf>,
+    /// Optional global compilation database that overrides component-specific databases
+    #[serde(skip_serializing_if = "Option::is_none", rename = "global_compilation_database_path")]
+    pub global_compilation_database: Option<CompilationDatabase>,
 }
 
 #[allow(dead_code)]
@@ -42,7 +42,7 @@ impl MetaProject {
             components,
             scan_depth,
             discovered_at: Utc::now(),
-            global_compilation_database_path: None,
+            global_compilation_database: None,
         }
     }
 
@@ -51,14 +51,14 @@ impl MetaProject {
         project_root_path: PathBuf,
         components: Vec<ProjectComponent>,
         scan_depth: usize,
-        global_compilation_database_path: Option<PathBuf>,
+        global_compilation_database: Option<CompilationDatabase>,
     ) -> Self {
         Self {
             project_root_path,
             components,
             scan_depth,
             discovered_at: Utc::now(),
-            global_compilation_database_path,
+            global_compilation_database,
         }
     }
 
@@ -161,12 +161,12 @@ impl MetaProject {
                 });
             }
 
-            if !component.compilation_database_path.exists() {
+            if !component.compilation_database.path().exists() {
                 errors.push(crate::project::ProjectError::CompilationDatabaseNotFound {
                     path: format!(
                         "Component[{}]: {}",
                         index,
-                        component.compilation_database_path.display()
+                        component.compilation_database.path().display()
                     ),
                 });
             }
@@ -184,12 +184,26 @@ impl MetaProject {
 mod tests {
     use super::*;
     use std::collections::HashMap;
+    use std::io::Write;
+    use tempfile::NamedTempFile;
 
     fn create_test_component(provider_type: &str, source_root: &str) -> ProjectComponent {
+        // Create a temporary compilation database file for testing
+        let mut temp_file = NamedTempFile::new().expect("Failed to create temp file");
+        temp_file
+            .write_all(br#"[{"directory": "/tmp", "file": "test.cpp", "arguments": ["clang++", "-c", "test.cpp"]}]"#)
+            .expect("Failed to write to temp file");
+
+        let compilation_database = CompilationDatabase::new(temp_file.path().to_path_buf())
+            .expect("Failed to create compilation database");
+
+        // Prevent temp file from being dropped immediately
+        std::mem::forget(temp_file);
+
         ProjectComponent {
             build_dir_path: PathBuf::from("/tmp/build"),
             source_root_path: PathBuf::from(source_root),
-            compilation_database_path: PathBuf::from("/tmp/compile_commands.json"),
+            compilation_database,
             provider_type: provider_type.to_string(),
             generator: "Ninja".to_string(),
             build_type: "Debug".to_string(),

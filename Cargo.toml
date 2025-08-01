@@ -30,3 +30,4 @@ walkdir = "2.5.0"
 uuid = { version = "1.17.0", features = ["v4", "serde"] }
 regex = "1.11.1"
 sha2 = "0.10"
+json_compilation_db = "1.0"

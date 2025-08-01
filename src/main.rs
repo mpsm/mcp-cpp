@@ -118,7 +118,10 @@ fn create_meta_project(
             "Using global compilation database: {}",
             global_path.display()
         );
-        meta_project.global_compilation_database_path = Some(global_path);
+        meta_project.global_compilation_database = Some(
+            crate::project::CompilationDatabase::new(global_path)
+                .expect("Failed to load global compilation database"),
+        );
     }
 
     meta_project
