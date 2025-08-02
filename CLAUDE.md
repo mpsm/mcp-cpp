@@ -181,15 +181,22 @@ python3 tools/mcp-cli.py search-symbols "Math::" --raw-output > math_symbols.jso
 
 This tool essentially **democratizes access** to the powerful MCP server capabilities, making semantic C++ code analysis available through simple command-line operations.
 
-## Key Design Principles
+## Development Workflow Integration
 
-1. **Performance First**: Handle large C++ codebases efficiently with smart caching
-2. **Robust LSP Integration**: Connection lifecycle, retry logic, graceful degradation
-3. **MCP Protocol Compliance**: Use rust-mcp-sdk for proper MCP implementation
-4. **Comprehensive Testing**: Unit tests for core logic with CI/CD pipeline
-5. **Structured Error Handling**: Use thiserror for MCP-compatible errors
-6. **Accessible Interface**: Python CLI tool for easy command-line interaction
-7. **Quality Standards**: Always run cargo fmt and clippy after Rust changes
+### Subagent Coordination
+This project uses specialized subagents for focused engineering tasks:
+- **software-architect**: Structural design and dependency management
+- **unit-test-writer**: Meaningful test creation and coverage strategy
+- **validator-troubleshooter**: Systematic validation and infrastructure assessment
+- **code-quality-engineer**: Quality enforcement and anti-pattern detection
+- **lead-engineer**: Task breakdown and cross-functional coordination
+- **code-committer**: Meaningful commit messages with proper authorship (NEVER commits unless explicitly requested)
+
+### Quality Gates (Non-Negotiable)
+- `cargo fmt` - Code formatting
+- `cargo clippy --all-targets --all-features -- -D warnings` - Static analysis
+- `cargo test` - Unit test validation
+- `cargo build` - Compilation verification
 
 ## Development Commands
 
@@ -302,15 +309,13 @@ Deep symbol analysis for comprehensive understanding:
 - Convert LSP errors to structured MCP responses with proper error codes
 - Comprehensive logging for debugging and monitoring
 
-### Code Quality Standards
+### Integration Patterns
 
-- Maintain comprehensive unit test coverage for core logic
-- Use thiserror for structured error types compatible with MCP SDK
-- Include defensive programming practices for all failure modes
-- Add structured logging with tracing crate for observability
-- Follow Rust best practices with clippy and formatting checks
-- **ALWAYS run `cargo fmt` and `cargo clippy` after Rust code changes**
-- **Add unit tests for any new functionality that provides value to project quality**
+- **MCP Transport Layer**: stdio-based communication with rust-mcp-sdk
+- **LSP Client Management**: Process lifecycle with proper resource cleanup
+- **Error Propagation**: thiserror-based structured errors through all layers
+- **Async Coordination**: tokio-based async patterns for non-blocking LSP communication
+- **Resource Management**: Explicit cleanup for processes, file handles, and connections
 
 ### CI/CD Pipeline
 
@@ -615,57 +620,63 @@ await TestHelpers.preserveForDebugging(project, "Debugging specific scenario");
 
 This comprehensive debugging system ensures **no test failure goes uninvestigated** and provides **complete context** for understanding and fixing issues.
 
-## Important Development Practices
+## Workflow Practices
 
-### **CRITICAL: Always Run Quality Checks After Rust Changes**
+### Development Cycle
+1. **Planning**: Use lead-engineer subagent for task breakdown
+2. **Architecture**: Consult software-architect for structural decisions
+3. **Implementation**: Follow project patterns and quality standards
+4. **Testing**: Coordinate unit-test-writer and validator-troubleshooter
+5. **Quality**: Enforce standards with code-quality-engineer
+6. **Integration**: Validate across all testing levels
+7. **Commit Preparation**: Use code-committer for meaningful messages (only when explicitly requested to commit)
 
-After making any changes to Rust code, **ALWAYS** run these commands in order:
-
+### Command Patterns
 ```bash
-# 1. Format code
-cargo fmt
+# Local development validation
+cargo fmt && cargo clippy --all-targets --all-features -- -D warnings && cargo test
 
-# 2. Check for lint issues
-cargo clippy --all-targets --all-features -- -D warnings
+# E2E testing workflow
+cargo build && cd test/e2e && npm test
 
-# 3. Run relevant tests
-cargo test [specific_test_pattern]
+# CLI tool validation
+python3 tools/mcp-cli.py list-build-dirs
+python3 tools/mcp-cli.py search-symbols "pattern"
 
-# 4. Build to verify compilation
-cargo build
+# Debug preserved test failures
+cd test/e2e && npm run inspect:verbose
 ```
 
-### **Unit Testing Philosophy**
+### Commit Workflow Policy
 
-- **Add unit tests for any changes that provide value to project quality**
-- Focus on edge cases, boundary conditions, and error scenarios
-- Test public APIs and critical internal logic
-- Ensure tests are fast, isolated, and deterministic
-- Use descriptive test names that explain the scenario being tested
-- **Don't test obvious things** - Skip trivial getters, simple constructors, and basic collection operations
-- **Design tests that are not fragile** - Test behavioral contracts, not implementation details; should withstand future changes
-- **Focus on non-obvious business logic** - Deduplication algorithms, grouping logic, error handling paths, and complex interactions
+**CRITICAL: Never commit changes unless explicitly requested by the user.**
 
-### **Result Limiting Architecture (FIXED)**
+The code-committer subagent assists with:
+- Analyzing staged changes and drafting meaningful commit messages
+- Ensuring proper authorship attribution and co-author credits
+- Following project commit message standards (why first, what second)
+- Checking git identity and adding appropriate sign-offs
 
-**Previous Issue:**
+**Workflow:**
+1. User requests commit preparation: "Create a commit for these changes"
+2. code-committer analyzes changes and suggests commit message
+3. User explicitly approves: "Go ahead and commit" or "Create that commit"
+4. Only then execute the actual git commit command
 
-- `max_results` parameter was incorrectly passed directly to clangd LSP requests
-- This caused clangd to limit its internal response, potentially returning fewer symbols than available
-- User could request 50 symbols but only get 30 if clangd's filtering reduced results
+**Never assume permission to commit.** Always wait for explicit user instruction.
 
-**Current Solution:**
+### Key Technical Patterns
 
-- clangd is always queried with a fixed 2000 symbol limit for comprehensive results
-- User's `max_results` parameter is applied in post-processing on the MCP server side
-- This preserves clangd's relevance ranking while ensuring predictable result counts
-- Implementation thoroughly tested with 10 comprehensive unit tests
+#### LSP-MCP Bridge Pattern
+- **Large LSP Queries**: Always query clangd with fixed 2000 limit for comprehensive results
+- **Client-side Filtering**: Apply user limits in post-processing to preserve ranking
+- **Error Context Preservation**: Maintain error context through all abstraction layers
+- **Resource Lifecycle**: Explicit management of clangd processes and file handles
 
-**Key Learning:**
-
-- LSP communication should use large fixed limits to get comprehensive data
-- Client-side filtering should handle user preferences and result limiting
-- This pattern applies to any tool that bridges between LSP and MCP protocols
+#### Async Integration Strategy
+- **Non-blocking Communication**: LSP requests don't block MCP responses
+- **Graceful Degradation**: Handle LSP failures without breaking MCP functionality
+- **Progress Tracking**: Real-time indexing progress with completion detection
 
 # important-instruction-reminders
 
