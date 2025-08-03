@@ -3,6 +3,7 @@
 ## 🤝 Collaboration Style Preference
 
 **Technical Peer Collaboration Mode:**
+
 - **Direct, honest technical opinions** - Call out anti-patterns and architectural issues directly
 - **Equal footing partnership** - Co-architects debating design decisions and building consensus
 - **Constructive disagreement encouraged** - Push back on current approaches while offering concrete alternatives
@@ -183,16 +184,20 @@ This tool essentially **democratizes access** to the powerful MCP server capabil
 
 ## Development Workflow Integration
 
-### Subagent Coordination
-This project uses specialized subagents for focused engineering tasks:
-- **software-architect**: Structural design and dependency management
-- **unit-test-writer**: Meaningful test creation and coverage strategy
-- **validator-troubleshooter**: Systematic validation and infrastructure assessment
-- **code-quality-engineer**: Quality enforcement and anti-pattern detection
-- **lead-engineer**: Task breakdown and cross-functional coordination
-- **code-committer**: Meaningful commit messages with proper authorship (NEVER commits unless explicitly requested)
+### Mandatory Subagent Workflows
+
+This project uses specialized subagents for specific engineering workflows:
+
+- **software-architect**: (MANDATORY for all feature design/refactoring) Structural design using SOLID principles, dependency management, separation of concerns, testability-first design, integration patterns, refactoring strategies for maintainability
+
+- **code-quality-engineer**: (MANDATORY for all implementation reviews) Quality enforcement with zero tolerance for compromises, anti-pattern detection, code standards compliance, performance assessment, security best practices validation, technical debt identification
+
+- **quality-engineer**: (MANDATORY for troubleshooting beyond basic issues) Systematic root cause analysis without modifying test subjects, infrastructure assessment, testing gap identification, observability evaluation, validation harness analysis, comprehensive testing insights for difficult problems
+
+- **code-committer**: (MANDATORY for commit preparation) Meaningful commit messages focusing on why first, what second, proper authorship attribution, co-author credits - ALWAYS display commit message to user for acceptance before committing
 
 ### Quality Gates (Non-Negotiable)
+
 - `cargo fmt` - Code formatting
 - `cargo clippy --all-targets --all-features -- -D warnings` - Static analysis
 - `cargo test` - Unit test validation
@@ -623,15 +628,16 @@ This comprehensive debugging system ensures **no test failure goes uninvestigate
 ## Workflow Practices
 
 ### Development Cycle
-1. **Planning**: Use lead-engineer subagent for task breakdown
-2. **Architecture**: Consult software-architect for structural decisions
-3. **Implementation**: Follow project patterns and quality standards
-4. **Testing**: Coordinate unit-test-writer and validator-troubleshooter
-5. **Quality**: Enforce standards with code-quality-engineer
-6. **Integration**: Validate across all testing levels
-7. **Commit Preparation**: Use code-committer for meaningful messages (only when explicitly requested to commit)
+
+1. **Feature Design/Refactoring**: MANDATORY use of software-architect for all architectural decisions
+2. **Implementation**: Follow project patterns and quality standards
+3. **Implementation Review**: MANDATORY use of code-quality-engineer for every feature implementation
+4. **Troubleshooting**: Use quality-engineer for validation issues beyond basic approach
+5. **Testability Analysis**: Use both software-architect (high-level) and quality-engineer (implementation)
+6. **Commit Preparation**: MANDATORY use of code-committer - ALWAYS display message for user acceptance
 
 ### Command Patterns
+
 ```bash
 # Local development validation
 cargo fmt && cargo clippy --all-targets --all-features -- -D warnings && cargo test
@@ -652,28 +658,33 @@ cd test/e2e && npm run inspect:verbose
 **CRITICAL: Never commit changes unless explicitly requested by the user.**
 
 The code-committer subagent assists with:
+
 - Analyzing staged changes and drafting meaningful commit messages
 - Ensuring proper authorship attribution and co-author credits
 - Following project commit message standards (why first, what second)
 - Checking git identity and adding appropriate sign-offs
 
 **Workflow:**
+
 1. User requests commit preparation: "Create a commit for these changes"
 2. code-committer analyzes changes and suggests commit message
-3. User explicitly approves: "Go ahead and commit" or "Create that commit"
-4. Only then execute the actual git commit command
+3. **MANDATORY: ALWAYS display the commit message to user for acceptance**
+4. User explicitly approves: "Go ahead and commit" or "Create that commit"
+5. Only then execute the actual git commit command
 
 **Never assume permission to commit.** Always wait for explicit user instruction.
 
 ### Key Technical Patterns
 
 #### LSP-MCP Bridge Pattern
+
 - **Large LSP Queries**: Always query clangd with fixed 2000 limit for comprehensive results
 - **Client-side Filtering**: Apply user limits in post-processing to preserve ranking
 - **Error Context Preservation**: Maintain error context through all abstraction layers
 - **Resource Lifecycle**: Explicit management of clangd processes and file handles
 
 #### Async Integration Strategy
+
 - **Non-blocking Communication**: LSP requests don't block MCP responses
 - **Graceful Degradation**: Handle LSP failures without breaking MCP functionality
 - **Progress Tracking**: Real-time indexing progress with completion detection
