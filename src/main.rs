@@ -13,6 +13,9 @@ mod tools {
     pub mod utils;
 }
 
+#[cfg(test)]
+mod test_utils;
+
 use clap::Parser;
 use logging::{LogConfig, init_logging};
 use project::{MetaProject, ProjectScanner};

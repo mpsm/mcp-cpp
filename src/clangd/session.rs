@@ -264,6 +264,13 @@ mod tests {
     use crate::clangd::config::ClangdConfigBuilder;
     use tempfile::tempdir;
 
+    // Auto-initialize logging for all tests in this module
+    #[cfg(feature = "test-logging")]
+    #[ctor::ctor]
+    fn init_test_logging() {
+        crate::test_utils::logging::init();
+    }
+
     // Sessions are either successfully constructed or construction fails
 
     #[tokio::test]
