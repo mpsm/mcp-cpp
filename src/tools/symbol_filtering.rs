@@ -44,7 +44,9 @@ impl SymbolFilter {
         // Extract file path from symbol location
         let file_path = if let Some(location) = symbol.get("location") {
             if let Some(uri) = location.get("uri").and_then(|u| u.as_str()) {
-                if let Some(path_str) = uri.strip_prefix("file://") {
+                if let Some(path_str) = uri.strip_prefix("file:///") {
+                    Some(PathBuf::from(path_str))
+                } else if let Some(path_str) = uri.strip_prefix("file://") {
                     Some(PathBuf::from(path_str))
                 } else {
                     Some(PathBuf::from(uri))
@@ -61,7 +63,7 @@ impl SymbolFilter {
             .and_then(|n| n.as_str())
             .unwrap_or("unknown");
 
-        if let Some(path) = file_path {
+        if let Some(path) = std::fs::canonicalize(file_path.unwrap_or_default()).ok() {
             // First check if it's directly in the compilation database (source files)
             if let Some(db) = compilation_database {
                 if db.contains(&path) {
@@ -76,22 +78,31 @@ impl SymbolFilter {
 
             // If not in compilation database, check if it's a project header
             // by seeing if it's under the project source directory
-            if let Some(root) = project_root {
-                // Include any file under the project root
-                if path.starts_with(root) {
-                    debug!(
-                        "✅ Symbol '{}' in {} is PROJECT: under project root {}",
-                        symbol_name,
-                        path.display(),
-                        root.display()
-                    );
-                    return true;
+            if let Some(project_root_path) = project_root {
+                if let Some(root) = std::fs::canonicalize(project_root_path).ok() {
+                    // Include any file under the project root
+                    if path.starts_with(&root) {
+                        debug!(
+                            "✅ Symbol '{}' in {} is PROJECT: under project root {}",
+                            symbol_name,
+                            path.display(),
+                            root.display()
+                        );
+                        return true;
+                    } else {
+                        debug!(
+                            "❌ Symbol '{}' in {} is EXTERNAL: not under project root {}",
+                            symbol_name,
+                            path.display(),
+                            root.display()
+                        );
+                    }
                 } else {
                     debug!(
-                        "❌ Symbol '{}' in {} is EXTERNAL: not under project root {}",
+                        "⚠️  Symbol '{}' in {}: failed to canonicalize project root {}",
                         symbol_name,
                         path.display(),
-                        root.display()
+                        project_root_path.display()
                     );
                 }
             } else {
