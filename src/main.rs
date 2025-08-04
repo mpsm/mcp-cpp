@@ -1,3 +1,4 @@
+mod bazel;
 mod clangd;
 mod cmake;
 mod legacy_lsp;
