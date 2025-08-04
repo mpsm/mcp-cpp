@@ -4,6 +4,7 @@
 //! through a provider pattern. Each provider can detect and parse project components
 //! for their respective build system.
 
+pub mod bazel_provider;
 pub mod cmake_provider;
 pub mod compilation_database;
 pub mod component;
@@ -13,6 +14,8 @@ pub mod meta_project;
 pub mod provider;
 pub mod scanner;
 
+#[allow(unused_imports)]
+pub use bazel_provider::BazelProvider;
 #[allow(unused_imports)]
 pub use cmake_provider::CmakeProvider;
 #[allow(unused_imports)]
