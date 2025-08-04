@@ -151,6 +151,8 @@ impl LspClient {
                 "--compile-commands-dir={}",
                 build_directory.display()
             ))
+            .arg("--remote-index-address=localhost:50051")
+            .arg(format!("--project-root={}", project_root.display()))
             .current_dir(project_root)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
@@ -741,7 +743,7 @@ impl LspClient {
                         if let (Some(uri), Some(state)) = (params.get("uri"), params.get("state")) {
                             if let (Some(uri_str), Some(state_str)) = (uri.as_str(), state.as_str())
                             {
-                                let file_path = uri_str.replace("file://", "");
+                                let file_path = uri_str.replace("file:///", "");
                                 let filename = std::path::Path::new(&file_path)
                                     .file_name()
                                     .and_then(|n| n.to_str())
@@ -760,7 +762,7 @@ impl LspClient {
                             if let (Some(uri_str), Some(diagnostics_array)) =
                                 (uri.as_str(), diagnostics.as_array())
                             {
-                                let file_path = uri_str.replace("file://", "");
+                                let file_path = uri_str.replace("file:///", "");
                                 let filename = std::path::Path::new(&file_path)
                                     .file_name()
                                     .and_then(|n| n.to_str())
