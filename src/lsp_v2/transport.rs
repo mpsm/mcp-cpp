@@ -8,10 +8,20 @@ use async_trait::async_trait;
 use std::collections::VecDeque;
 use std::io;
 use std::sync::{Arc, Mutex};
-use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+use tokio::io::{AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{ChildStdin, ChildStdout};
 use tokio::sync::mpsc;
 use tracing::{error, trace};
+
+// ============================================================================
+// Constants
+// ============================================================================
+
+/// Size of the read buffer for stdout reading operations
+const READ_BUFFER_SIZE: usize = 4096;
+
+/// Default capacity for UTF-8 accumulation buffer
+const UTF8_ACCUMULATION_BUFFER_CAPACITY: usize = 8192;
 
 /// Core transport trait for bidirectional message exchange
 #[async_trait]
@@ -60,6 +70,70 @@ pub struct StdioTransport {
     connected: bool,
 }
 
+/// Internal state for the stdout reader task that handles byte accumulation
+struct StdoutReaderState {
+    /// Buffer for accumulating raw bytes before UTF-8 conversion
+    byte_buffer: Vec<u8>,
+
+    /// Buffer capacity to avoid frequent reallocations  
+    buffer_capacity: usize,
+}
+
+impl StdoutReaderState {
+    /// Create new reader state with default capacity
+    fn new() -> Self {
+        Self {
+            byte_buffer: Vec::with_capacity(UTF8_ACCUMULATION_BUFFER_CAPACITY),
+            buffer_capacity: UTF8_ACCUMULATION_BUFFER_CAPACITY,
+        }
+    }
+
+    /// Add new bytes to the accumulation buffer
+    fn add_bytes(&mut self, bytes: &[u8]) {
+        self.byte_buffer.extend_from_slice(bytes);
+    }
+
+    /// Find the longest valid UTF-8 prefix in the buffer
+    /// Returns valid_bytes that can be safely converted to String
+    fn extract_valid_utf8(&mut self) -> Option<Vec<u8>> {
+        if self.byte_buffer.is_empty() {
+            return None;
+        }
+
+        // Use standard library UTF-8 validation
+        match std::str::from_utf8(&self.byte_buffer) {
+            Ok(_) => {
+                // All bytes are valid UTF-8 - extract everything
+                Some(self.byte_buffer.drain(..).collect())
+            }
+            Err(e) => {
+                let valid_end = e.valid_up_to();
+                if valid_end == 0 {
+                    // No complete UTF-8 characters available yet
+                    // Wait for more data to complete the sequence
+                    None
+                } else {
+                    // Extract valid prefix, keep remainder for later
+                    Some(self.byte_buffer.drain(..valid_end).collect())
+                }
+            }
+        }
+    }
+
+    /// Check if buffer is getting too large and needs capacity management
+    fn should_compact(&self) -> bool {
+        // If buffer is using more than 2x its intended capacity, compact it
+        self.byte_buffer.capacity() > self.buffer_capacity * 2
+    }
+
+    /// Compact the buffer to reduce memory usage
+    fn compact(&mut self) {
+        if self.should_compact() {
+            self.byte_buffer.shrink_to(self.buffer_capacity);
+        }
+    }
+}
+
 impl StdioTransport {
     /// Create a new StdioTransport from child process streams
     pub fn new(stdin: ChildStdin, stdout: ChildStdout) -> Self {
@@ -85,7 +159,10 @@ impl StdioTransport {
         mut receiver: mpsc::UnboundedReceiver<String>,
     ) {
         while let Some(message) = receiver.recv().await {
-            trace!("StdioTransport: Writing to stdin: {}", message);
+            trace!(
+                "StdioTransport: Writing message (length: {})",
+                message.len()
+            );
 
             if let Err(e) = stdin.write_all(message.as_bytes()).await {
                 error!("Failed to write to stdin: {}", e);
@@ -101,26 +178,42 @@ impl StdioTransport {
         trace!("StdioTransport: stdin writer task finished");
     }
 
-    /// Background task that reads messages from stdout
+    /// Background task that reads messages from stdout with byte-safe UTF-8 handling
     async fn stdout_reader_task(stdout: ChildStdout, sender: mpsc::UnboundedSender<String>) {
         let mut reader = BufReader::new(stdout);
-        let mut line = String::new();
+        let mut state = StdoutReaderState::new();
+        let mut read_buffer = Box::new([0u8; READ_BUFFER_SIZE]);
 
         loop {
-            line.clear();
-            match reader.read_line(&mut line).await {
+            match reader.read(read_buffer.as_mut()).await {
                 Ok(0) => {
                     // EOF reached
-                    trace!("StdioTransport: stdout reader reached EOF");
+                    Self::handle_eof(&mut state, &sender);
                     break;
                 }
-                Ok(_) => {
-                    trace!("StdioTransport: Read from stdout: {}", line.trim());
+                Ok(n) => {
+                    // Successfully read bytes from stdout
+                    state.add_bytes(&read_buffer[..n]);
 
-                    if sender.send(line.clone()).is_err() {
-                        trace!("StdioTransport: stdout receiver dropped, stopping reader");
-                        break;
+                    // Extract and send all complete UTF-8 sequences
+                    while let Some(valid_bytes) = state.extract_valid_utf8() {
+                        match String::from_utf8(valid_bytes) {
+                            Ok(data) => {
+                                if sender.send(data).is_err() {
+                                    trace!("StdioTransport: stdout receiver dropped, stopping reader");
+                                    return;
+                                }
+                            }
+                            Err(e) => {
+                                error!("StdioTransport: Failed to convert validated UTF-8 bytes: {}", e);
+                                // This should never happen since we validated the bytes
+                                break;
+                            }
+                        }
                     }
+
+                    // Periodic buffer management to prevent unbounded growth
+                    state.compact();
                 }
                 Err(e) => {
                     error!("Failed to read from stdout: {}", e);
@@ -131,6 +224,36 @@ impl StdioTransport {
 
         trace!("StdioTransport: stdout reader task finished");
     }
+
+    /// Handle EOF condition by processing any remaining valid UTF-8 bytes
+    fn handle_eof(state: &mut StdoutReaderState, sender: &mpsc::UnboundedSender<String>) {
+        trace!("StdioTransport: stdout reader reached EOF");
+
+        // Try to extract any remaining valid UTF-8
+        if let Some(final_bytes) = state.extract_valid_utf8() {
+            // Convert remaining valid bytes to string
+            match String::from_utf8(final_bytes) {
+                Ok(final_string) => {
+                    if !final_string.is_empty() && sender.send(final_string).is_err() {
+                        trace!("StdioTransport: stdout receiver dropped during EOF processing");
+                    }
+                }
+                Err(e) => {
+                    error!("StdioTransport: Invalid UTF-8 in final bytes: {}", e);
+                }
+            }
+        }
+
+        // Check for incomplete UTF-8 sequences left in buffer
+        if !state.byte_buffer.is_empty() {
+            error!(
+                "StdioTransport: {} incomplete bytes remaining at EOF: {:?}",
+                state.byte_buffer.len(),
+                state.byte_buffer
+            );
+        }
+    }
+
 }
 
 #[async_trait]
@@ -220,12 +343,15 @@ impl MockTransport {
 
     /// Create a mock transport with predefined responses
     pub fn with_responses(responses: Vec<String>) -> Self {
-        let transport = Self::new();
-        {
-            let mut response_queue = transport.responses.lock().unwrap();
-            response_queue.extend(responses);
-        }
+        let mut transport = Self::new();
+        transport.add_responses(responses);
         transport
+    }
+
+    /// Add multiple responses to the response queue
+    fn add_responses(&mut self, responses: Vec<String>) {
+        let mut response_queue = self.responses.lock().unwrap();
+        response_queue.extend(responses);
     }
 
     /// Add a response that will be returned by the next receive() call
@@ -361,5 +487,66 @@ mod tests {
         assert!(!transport.is_connected());
         assert!(transport.send("test").await.is_err());
         assert!(transport.receive().await.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_stdout_reader_state_accumulation() {
+        let mut state = StdoutReaderState::new();
+
+        // Add partial UTF-8 sequence
+        let partial_utf8 = &[0xE4, 0xB8]; // First 2 bytes of "世"
+        state.add_bytes(partial_utf8);
+
+        // Should not extract anything yet
+        assert!(state.extract_valid_utf8().is_none());
+
+        // Complete the sequence
+        let completion = &[0x96]; // Final byte of "世"  
+        state.add_bytes(completion);
+
+        // Now should extract the complete character
+        let extracted = state
+            .extract_valid_utf8()
+            .expect("Should extract complete UTF-8");
+        let result = String::from_utf8(extracted).expect("Should be valid UTF-8");
+        assert_eq!(result, "世");
+
+        // Buffer should be empty now
+        assert!(state.extract_valid_utf8().is_none());
+        assert!(state.byte_buffer.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_stdout_reader_mixed_boundaries() {
+        let mut state = StdoutReaderState::new();
+
+        // Simulate data that crosses UTF-8 boundaries
+        let data1 = "Hello ".as_bytes(); // Complete ASCII
+        let data2 = &[0xE4, 0xB8]; // Partial "世"
+        let data3 = &[0x96, 0xE7, 0x95]; // Complete "世" + partial "界"  
+        let data4 = &[0x8C, 0x20, 0xF0, 0x9F]; // Complete "界" + " " + partial 🌍
+        let data5 = &[0x8C, 0x8D]; // Complete 🌍
+
+        // Add data incrementally
+        state.add_bytes(data1);
+        let result1 = state.extract_valid_utf8().expect("Should extract 'Hello '");
+        assert_eq!(String::from_utf8(result1).unwrap(), "Hello ");
+
+        state.add_bytes(data2);
+        assert!(state.extract_valid_utf8().is_none()); // Incomplete
+
+        state.add_bytes(data3);
+        let result2 = state.extract_valid_utf8().expect("Should extract '世'");
+        assert_eq!(String::from_utf8(result2).unwrap(), "世");
+
+        state.add_bytes(data4);
+        let result3 = state.extract_valid_utf8().expect("Should extract '界 '");
+        assert_eq!(String::from_utf8(result3).unwrap(), "界 ");
+
+        state.add_bytes(data5);
+        let result4 = state.extract_valid_utf8().expect("Should extract '🌍'");
+        assert_eq!(String::from_utf8(result4).unwrap(), "🌍");
+
+        assert!(state.byte_buffer.is_empty());
     }
 }
