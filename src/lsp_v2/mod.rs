@@ -31,7 +31,6 @@ pub mod transport;
 // // Create transport and client
 // let transport = process.create_stdio_transport()?;
 // let mut client = LspClient::new(transport);
-// client.start().await?;
 //
 // // Initialize LSP
 // client.initialize(Some("file:///path/to/project".to_string())).await?;

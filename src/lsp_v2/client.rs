@@ -66,12 +66,6 @@ impl<T: Transport + 'static> LspClient<T> {
         }
     }
 
-    /// Start the message processing loop
-    pub async fn start(&mut self) -> Result<(), LspError> {
-        self.rpc_client.start_message_loop().await?;
-        Ok(())
-    }
-
     /// Initialize the LSP connection
     pub async fn initialize(
         &mut self,

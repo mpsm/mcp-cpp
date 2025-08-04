@@ -200,12 +200,17 @@ impl StdioTransport {
                         match String::from_utf8(valid_bytes) {
                             Ok(data) => {
                                 if sender.send(data).is_err() {
-                                    trace!("StdioTransport: stdout receiver dropped, stopping reader");
+                                    trace!(
+                                        "StdioTransport: stdout receiver dropped, stopping reader"
+                                    );
                                     return;
                                 }
                             }
                             Err(e) => {
-                                error!("StdioTransport: Failed to convert validated UTF-8 bytes: {}", e);
+                                error!(
+                                    "StdioTransport: Failed to convert validated UTF-8 bytes: {}",
+                                    e
+                                );
                                 // This should never happen since we validated the bytes
                                 break;
                             }
@@ -253,7 +258,6 @@ impl StdioTransport {
             );
         }
     }
-
 }
 
 #[async_trait]

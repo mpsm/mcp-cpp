@@ -153,11 +153,14 @@ pub enum JsonRpcError {
 // JSON-RPC Client
 // ============================================================================
 
+/// Type alias for notification handler to reduce complexity
+type NotificationHandler = Arc<dyn Fn(JsonRpcNotification) + Send + Sync>;
+
 /// JSON-RPC client with request/response correlation
 #[allow(dead_code)]
 pub struct JsonRpcClient<T: Transport> {
-    /// Framed transport for LSP message handling
-    transport: Arc<Mutex<LspFraming<T>>>,
+    /// Channel for sending outbound messages (requests and notifications)
+    outbound_sender: mpsc::UnboundedSender<String>,
 
     /// Request ID counter
     request_id: AtomicU64,
@@ -165,8 +168,11 @@ pub struct JsonRpcClient<T: Transport> {
     /// Pending requests waiting for responses
     pending_requests: Arc<Mutex<HashMap<u64, mpsc::UnboundedSender<JsonRpcResponse>>>>,
 
-    /// Notification handler
-    notification_handler: Option<Arc<dyn Fn(JsonRpcNotification) + Send + Sync>>,
+    /// Notification handler (shared with transport task)
+    notification_handler: Arc<Mutex<Option<NotificationHandler>>>,
+
+    /// Type parameter marker
+    _phantom: std::marker::PhantomData<T>,
 }
 
 #[allow(dead_code)]
@@ -174,73 +180,101 @@ impl<T: Transport + 'static> JsonRpcClient<T> {
     /// Create a new JSON-RPC client
     pub fn new(transport: T) -> Self {
         let framed_transport = LspFraming::new(transport);
+        let transport_arc = Arc::new(Mutex::new(framed_transport));
+        let (outbound_sender, mut outbound_receiver) = mpsc::unbounded_channel::<String>();
+        let pending_requests = Arc::new(Mutex::new(HashMap::new()));
+
+        // Notification handler shared with transport task
+        let notification_handler = Arc::new(Mutex::new(None::<NotificationHandler>));
+        let handler_clone = Arc::clone(&notification_handler);
+
+        // Transport handler task for bidirectional communication
+        let transport_clone = Arc::clone(&transport_arc);
+        let pending_clone = Arc::clone(&pending_requests);
+
+        tokio::spawn(async move {
+            loop {
+                tokio::select! {
+                    // Outbound messages (prioritized)
+                    Some(message) = outbound_receiver.recv() => {
+                        let mut transport = transport_clone.lock().await;
+                        if let Err(e) = transport.send(&message).await {
+                            error!("Failed to send message: {}", e);
+                            break;
+                        }
+                        // Release lock immediately
+                        drop(transport);
+                    }
+                    // Inbound messages
+                    result = async {
+                        let mut transport = transport_clone.lock().await;
+                        transport.receive().await
+                    } => {
+                        match result {
+                            Ok(message) => {
+                                let handler = handler_clone.lock().await.clone();
+                                Self::process_inbound_message(message, &pending_clone, &handler).await;
+                            }
+                            Err(e) => {
+                                error!("Failed to receive message: {}", e);
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
+            trace!("Transport handler task finished");
+        });
 
         Self {
-            transport: Arc::new(Mutex::new(framed_transport)),
+            outbound_sender,
             request_id: AtomicU64::new(1),
-            pending_requests: Arc::new(Mutex::new(HashMap::new())),
-            notification_handler: None,
+            pending_requests,
+            notification_handler,
+            _phantom: std::marker::PhantomData,
         }
     }
 
     /// Set notification handler
-    pub fn on_notification<F>(&mut self, handler: F)
+    pub async fn on_notification<F>(&self, handler: F)
     where
         F: Fn(JsonRpcNotification) + Send + Sync + 'static,
     {
-        self.notification_handler = Some(Arc::new(handler));
+        *self.notification_handler.lock().await = Some(Arc::new(handler));
     }
 
-    /// Start the message processing loop
-    pub async fn start_message_loop(&mut self) -> Result<(), JsonRpcError> {
-        let transport = Arc::clone(&self.transport);
-        let pending_requests = Arc::clone(&self.pending_requests);
-        let notification_handler = self.notification_handler.clone();
+    /// Process an inbound message (response or notification)
+    async fn process_inbound_message(
+        message: String,
+        pending_requests: &Arc<Mutex<HashMap<u64, mpsc::UnboundedSender<JsonRpcResponse>>>>,
+        notification_handler: &Option<NotificationHandler>,
+    ) {
+        trace!("JsonRpcClient: Received message: {}", message);
 
-        tokio::spawn(async move {
-            loop {
-                let message = {
-                    let mut transport_guard = transport.lock().await;
-                    match transport_guard.receive().await {
-                        Ok(msg) => msg,
-                        Err(e) => {
-                            error!("Failed to receive message: {}", e);
-                            break;
-                        }
+        // Try to parse as response first
+        if let Ok(response) = serde_json::from_str::<JsonRpcResponse>(&message) {
+            if let Some(id) = response.id.as_u64() {
+                let mut pending = pending_requests.lock().await;
+                if let Some(sender) = pending.remove(&id) {
+                    if sender.send(response).is_err() {
+                        debug!("Response receiver dropped for request {}", id);
                     }
-                };
-
-                trace!("JsonRpcClient: Received message: {}", message);
-
-                // Try to parse as response first
-                if let Ok(response) = serde_json::from_str::<JsonRpcResponse>(&message) {
-                    if let Some(id) = response.id.as_u64() {
-                        let mut pending = pending_requests.lock().await;
-                        if let Some(sender) = pending.remove(&id) {
-                            if sender.send(response).is_err() {
-                                debug!("Response receiver dropped for request {}", id);
-                            }
-                        } else {
-                            debug!("Received response for unknown request {}", id);
-                        }
-                    }
-                }
-                // Try to parse as notification
-                else if let Ok(notification) =
-                    serde_json::from_str::<JsonRpcNotification>(&message)
-                {
-                    if let Some(handler) = &notification_handler {
-                        handler(notification);
-                    }
-                }
-                // Unknown message format
-                else {
-                    debug!("Received unparseable message: {}", message);
+                } else {
+                    debug!("Received response for unknown request {}", id);
                 }
             }
-        });
-
-        Ok(())
+        }
+        // Try to parse as notification
+        else if let Ok(notification) = serde_json::from_str::<JsonRpcNotification>(&message) {
+            debug!("Received notification: {:?}", notification);
+            if let Some(handler) = notification_handler {
+                handler(notification);
+            }
+        }
+        // Unknown message format
+        else {
+            debug!("Received unparseable message: {}", message);
+        }
     }
 
     /// Send a JSON-RPC request with default timeout (30 seconds)
@@ -290,13 +324,10 @@ impl<T: Transport + 'static> JsonRpcClient<T> {
         let request_json = serde_json::to_string(&request).map_err(JsonRpcError::Serialization)?;
         debug!("JsonRpcClient: Sending blocking request: {}", request_json);
 
-        {
-            let mut transport = self.transport.lock().await;
-            transport
-                .send(&request_json)
-                .await
-                .map_err(|e| JsonRpcError::Transport(e.to_string()))?;
-        }
+        // Send through the channel
+        self.outbound_sender
+            .send(request_json)
+            .map_err(|_| JsonRpcError::Transport("Outbound channel closed".to_string()))?;
 
         // Wait for response without timeout
         let response = match response_receiver.recv().await {
@@ -356,13 +387,10 @@ impl<T: Transport + 'static> JsonRpcClient<T> {
         let request_json = serde_json::to_string(&request).map_err(JsonRpcError::Serialization)?;
         debug!("JsonRpcClient: Sending request: {}", request_json);
 
-        {
-            let mut transport = self.transport.lock().await;
-            transport
-                .send(&request_json)
-                .await
-                .map_err(|e| JsonRpcError::Transport(e.to_string()))?;
-        }
+        // Send through the channel
+        self.outbound_sender
+            .send(request_json)
+            .map_err(|_| JsonRpcError::Transport("Outbound channel closed".to_string()))?;
 
         // Wait for response with timeout
         let response_result = tokio::time::timeout(timeout, response_receiver.recv()).await;
@@ -414,19 +442,18 @@ impl<T: Transport + 'static> JsonRpcClient<T> {
             serde_json::to_string(&notification).map_err(JsonRpcError::Serialization)?;
         debug!("JsonRpcClient: Sending notification: {}", notification_json);
 
-        let mut transport = self.transport.lock().await;
-        transport
-            .send(&notification_json)
-            .await
-            .map_err(|e| JsonRpcError::Transport(e.to_string()))?;
+        // Send via channel
+        self.outbound_sender
+            .send(notification_json)
+            .map_err(|_| JsonRpcError::Transport("Outbound channel closed".to_string()))?;
 
         Ok(())
     }
 
     /// Check if transport is connected
     pub async fn is_connected(&self) -> bool {
-        let transport = self.transport.lock().await;
-        transport.is_connected()
+        // Check if our channel is still open
+        !self.outbound_sender.is_closed()
     }
 
     /// Clean up all pending requests (e.g., during restart)
@@ -453,11 +480,8 @@ impl<T: Transport + 'static> JsonRpcClient<T> {
         // Clean up all pending requests first
         self.cleanup_pending_requests().await;
 
-        let mut transport = self.transport.lock().await;
-        transport
-            .close()
-            .await
-            .map_err(|e| JsonRpcError::Transport(e.to_string()))?;
+        // The transport handler will exit when the channel is closed
+        // (which happens when this struct is dropped)
         Ok(())
     }
 }

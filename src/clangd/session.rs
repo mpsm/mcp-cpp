@@ -116,11 +116,7 @@ impl ClangdSession {
         debug!("Creating LSP client");
         let mut lsp_client = LspClient::new(transport);
 
-        // Step 4: Start the LSP client message loop
-        debug!("Starting LSP client message loop");
-        lsp_client.start().await?;
-
-        // Step 5: Initialize the LSP connection
+        // Step 4: Initialize the LSP connection
         debug!("Initializing LSP connection");
         let root_uri = config.get_root_uri();
 
@@ -145,7 +141,7 @@ impl ClangdSession {
         let started_at = Instant::now();
         info!("Clangd session started successfully");
 
-        // Step 6: Return fully initialized session
+        // Step 5: Return fully initialized session
         let stderr_handler = config.stderr_handler.clone();
         Ok(Self {
             config,
