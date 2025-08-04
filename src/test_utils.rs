@@ -99,3 +99,22 @@ macro_rules! setup_test_logging {
         }
     };
 }
+
+/// Get clangd path for integration tests
+///
+/// Checks the CLANGD_PATH environment variable and falls back to "clangd" if not set.
+/// This allows tests to work both in CI (where CLANGD_PATH=/usr/bin/clangd-20) and
+/// local development (where clangd is in PATH).
+///
+/// # Examples
+///
+/// ```rust
+/// use crate::test_utils::get_test_clangd_path;
+///
+/// let clangd_path = get_test_clangd_path();
+/// // Returns "/usr/bin/clangd-20" if CLANGD_PATH is set, otherwise "clangd"
+/// ```
+#[cfg(test)]
+pub fn get_test_clangd_path() -> String {
+    std::env::var("CLANGD_PATH").unwrap_or_else(|_| "clangd".to_string())
+}

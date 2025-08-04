@@ -300,7 +300,7 @@ mod tests {
         let config = ClangdConfigBuilder::new()
             .working_directory(temp_dir.path())
             .build_directory(&build_dir)
-            .clangd_path("clangd") // Use real clangd for integration test
+            .clangd_path(crate::test_utils::get_test_clangd_path()) // Use configured clangd path
             .build()
             .unwrap();
 
@@ -327,7 +327,7 @@ mod tests {
         let config = ClangdConfigBuilder::new()
             .working_directory(temp_dir.path())
             .build_directory(&build_dir)
-            .clangd_path("clangd") // Use real clangd for integration test
+            .clangd_path(crate::test_utils::get_test_clangd_path()) // Use configured clangd path
             .build()
             .unwrap();
 

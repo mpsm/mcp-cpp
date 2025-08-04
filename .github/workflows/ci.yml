@@ -125,6 +125,52 @@ jobs:
       - name: Build debug
         run: cargo build --verbose
 
+  rust-integration-tests:
+    name: Rust Integration Tests (clangd)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install clangd
+        run: |
+          sudo apt-get update
+          # Get Ubuntu codename dynamically
+          UBUNTU_CODENAME=$(lsb_release -cs)
+          echo "Detected Ubuntu codename: $UBUNTU_CODENAME"
+          # Add LLVM repository
+          wget -O - https://apt.llvm.org/llvm-snapshot.gpg.key | sudo apt-key add -
+          echo "deb http://apt.llvm.org/${UBUNTU_CODENAME}/ llvm-toolchain-${UBUNTU_CODENAME}-20 main" | sudo tee /etc/apt/sources.list.d/llvm.list
+          sudo apt-get update
+          sudo apt-get install -y clangd-20
+
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: ${{ runner.os }}-cargo-registry-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-registry-
+
+      - name: Cache cargo build
+        uses: actions/cache@v4
+        with:
+          path: target
+          key: ${{ runner.os }}-cargo-integration-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-integration-
+            ${{ runner.os }}-cargo-
+
+      - name: Run clangd integration tests
+        run: cargo test --features clangd-integration-tests --verbose
+        env:
+          CLANGD_PATH: /usr/bin/clangd-20
+
   # C++ jobs - run in parallel
   cpp-build:
     name: C++ Build Check

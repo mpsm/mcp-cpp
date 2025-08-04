@@ -205,7 +205,7 @@ mod tests {
         let config = ClangdConfigBuilder::new()
             .working_directory(&project_root)
             .build_directory(&build_dir)
-            .clangd_path("clangd") // Use real clangd for integration test
+            .clangd_path(crate::test_utils::get_test_clangd_path()) // Use configured clangd path
             .build()
             .unwrap();
 
@@ -296,10 +296,11 @@ mod tests {
         use std::process::Command;
 
         // Check if clangd is available
-        let clangd_check = Command::new("clangd").arg("--version").output();
+        let clangd_path = crate::test_utils::get_test_clangd_path();
+        let clangd_check = Command::new(&clangd_path).arg("--version").output();
 
         if clangd_check.is_err() {
-            println!("Skipping clangd integration test: clangd binary not found");
+            println!("Skipping clangd integration test: {clangd_path} binary not found");
             return;
         }
 
@@ -336,7 +337,7 @@ int main() {
         let config = ClangdConfigBuilder::new()
             .working_directory(&project_root)
             .build_directory(&build_dir)
-            .clangd_path("clangd") // Use real clangd
+            .clangd_path(&clangd_path) // Use configured clangd path
             .build()
             .unwrap();
 
