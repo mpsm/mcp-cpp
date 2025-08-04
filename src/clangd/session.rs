@@ -24,7 +24,7 @@ use crate::lsp_v2::{
 pub trait ClangdSessionTrait: Send + Sync {
     /// Associated error type for session operations
     type Error: std::error::Error + Send + Sync + 'static;
-    
+
     /// Associated LSP client type - enables polymorphic client usage
     type Client: Send + Sync;
 
@@ -32,13 +32,13 @@ pub trait ClangdSessionTrait: Send + Sync {
     async fn close(self) -> Result<(), Self::Error>;
 
     /// Get LSP client (always available)
-    /// 
+    ///
     /// Returns reference to the underlying LSP client, which can be either
     /// a real LspClient<StdioTransport> or MockLspClient depending on implementation.
     fn client(&self) -> &Self::Client;
 
     /// Get mutable LSP client (always available)
-    /// 
+    ///
     /// Returns mutable reference to the underlying LSP client for operations
     /// that require client state modification.
     fn client_mut(&mut self) -> &mut Self::Client;
@@ -155,7 +155,6 @@ impl ClangdSession {
             stderr_handler,
         })
     }
-
 
     /// Graceful async cleanup - consumes self to prevent further use
     ///

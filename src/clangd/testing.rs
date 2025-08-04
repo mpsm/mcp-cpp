@@ -91,7 +91,7 @@ impl ClangdSessionTrait for MockClangdSession {
     }
 
     /// Get LSP client
-    /// 
+    ///
     /// Returns reference to the mock LSP client for testing operations.
     /// This enables proper polymorphic usage without panicking.
     fn client(&self) -> &Self::Client {
@@ -99,7 +99,7 @@ impl ClangdSessionTrait for MockClangdSession {
     }
 
     /// Get mutable LSP client
-    /// 
+    ///
     /// Returns mutable reference to the mock LSP client for operations
     /// that require client state modification during testing.
     fn client_mut(&mut self) -> &mut Self::Client {
@@ -146,7 +146,6 @@ impl MockLspClient {
         self.initialized
     }
 }
-
 
 // ============================================================================
 // Mock Session Factory Implementation

@@ -14,7 +14,7 @@ use std::fmt;
 ///
 /// Enables polymorphic usage of real LspClient and MockLspClient while
 /// maintaining type safety and proper error handling.
-/// 
+///
 /// This is a minimal trait focused on the core functionality needed by LSP sessions.
 /// For more comprehensive LSP operations, consumers should use the concrete client types directly.
 #[async_trait]

@@ -220,4 +220,3 @@ impl<T: Transport + 'static> LspClient<T> {
         &mut self.rpc_client
     }
 }
-

@@ -194,7 +194,7 @@ pub struct ChildProcessManager {
 #[allow(dead_code)]
 impl ChildProcessManager {
     /// Create a new child process manager
-    /// 
+    ///
     /// # Arguments
     /// * `command` - The command to execute
     /// * `args` - Command line arguments
@@ -577,7 +577,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_child_process_manager_lifecycle() {
-        let mut manager = ChildProcessManager::new("echo".to_string(), vec!["hello".to_string()], None);
+        let mut manager =
+            ChildProcessManager::new("echo".to_string(), vec!["hello".to_string()], None);
 
         assert!(!manager.is_running());
         assert!(manager.process_id().is_none());
@@ -628,7 +629,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_process_state_transitions() {
-        let mut manager = ChildProcessManager::new("echo".to_string(), vec!["hello".to_string()], None);
+        let mut manager =
+            ChildProcessManager::new("echo".to_string(), vec!["hello".to_string()], None);
 
         // Initial state should be NotStarted
         assert_eq!(manager.get_state(), ProcessState::NotStarted);
@@ -651,7 +653,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_invalid_operations() {
-        let mut manager = ChildProcessManager::new("echo".to_string(), vec!["hello".to_string()], None);
+        let mut manager =
+            ChildProcessManager::new("echo".to_string(), vec!["hello".to_string()], None);
 
         // Cannot stop when not started
         let result = manager.stop(StopMode::Graceful).await;
@@ -674,7 +677,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_create_transport_simple() {
-        let mut manager = ChildProcessManager::new("echo".to_string(), vec!["hello".to_string()], None);
+        let mut manager =
+            ChildProcessManager::new("echo".to_string(), vec!["hello".to_string()], None);
 
         // Cannot create transport when not started
         let result = manager.create_stdio_transport();
