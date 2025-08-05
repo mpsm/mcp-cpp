@@ -114,7 +114,127 @@ macro_rules! setup_test_logging {
 /// let clangd_path = get_test_clangd_path();
 /// // Returns "/usr/bin/clangd-20" if CLANGD_PATH is set, otherwise "clangd"
 /// ```
-#[cfg(test)]
+#[cfg(any(test, feature = "clangd-integration-tests"))]
 pub fn get_test_clangd_path() -> String {
     std::env::var("CLANGD_PATH").unwrap_or_else(|_| "clangd".to_string())
+}
+
+/// Integration test helpers for working with test/test-project
+#[cfg(test)]
+pub mod integration {
+    use std::fs;
+    use std::path::{Path, PathBuf};
+    use tempfile::TempDir;
+    use walkdir::WalkDir;
+
+    /// Test project with automatic cleanup
+    pub struct TestProject {
+        _temp_dir: TempDir, // Underscore prefix keeps it alive until drop
+        pub project_root: PathBuf,
+        pub build_dir: PathBuf,
+    }
+
+    impl TestProject {
+        /// Create a new test project by copying test/test-project
+        pub async fn new() -> Result<Self, std::io::Error> {
+            // Create temp directory (auto-cleanup on drop)
+            let temp_dir = TempDir::new()?;
+            let project_root = temp_dir.path().to_path_buf();
+
+            // Copy test/test-project to temp location
+            copy_dir_recursively("test/test-project", &project_root)?;
+
+            // Create build directory
+            let build_dir = project_root.join("build-debug");
+            fs::create_dir(&build_dir)?;
+
+            Ok(TestProject {
+                _temp_dir: temp_dir,
+                project_root,
+                build_dir,
+            })
+        }
+
+        /// Configure with cmake to generate compile_commands.json
+        pub async fn cmake_configure(&self) -> Result<(), std::io::Error> {
+            use tokio::process::Command;
+
+            let output = Command::new("cmake")
+                .arg("-S")
+                .arg(&self.project_root)
+                .arg("-B")
+                .arg(&self.build_dir)
+                .arg("-DCMAKE_BUILD_TYPE=Debug")
+                .arg("-DCMAKE_EXPORT_COMPILE_COMMANDS=ON")
+                .output()
+                .await?;
+
+            if !output.status.success() {
+                return Err(std::io::Error::other(format!(
+                    "cmake failed: {}",
+                    String::from_utf8_lossy(&output.stderr)
+                )));
+            }
+
+            Ok(())
+        }
+    }
+
+    fn copy_dir_recursively(src: &str, dst: &Path) -> Result<(), std::io::Error> {
+        let src_path = Path::new(src);
+        if !src_path.exists() {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::NotFound,
+                format!("Source directory {} does not exist", src_path.display()),
+            ));
+        }
+
+        for entry in WalkDir::new(src) {
+            let entry = entry?;
+            let src_path = entry.path();
+            let rel_path = src_path.strip_prefix(src).unwrap();
+            let dst_path = dst.join(rel_path);
+
+            if entry.file_type().is_dir() {
+                fs::create_dir_all(&dst_path)?;
+            } else {
+                fs::copy(src_path, &dst_path)?;
+            }
+        }
+        Ok(())
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        #[tokio::test]
+        async fn test_test_project_creation() {
+            let project = TestProject::new().await.unwrap();
+
+            assert!(project.project_root.exists());
+            assert!(project.build_dir.exists());
+            assert!(project.project_root.join("CMakeLists.txt").exists());
+            assert!(project.project_root.join("src").exists());
+            assert!(project.project_root.join("include").exists());
+        }
+
+        #[tokio::test]
+        async fn test_test_project_cmake_configure() {
+            let project = TestProject::new().await.unwrap();
+            project.cmake_configure().await.unwrap();
+
+            assert!(project.build_dir.join("compile_commands.json").exists());
+            assert!(project.build_dir.join("CMakeCache.txt").exists());
+        }
+
+        #[test]
+        fn test_copy_dir_recursively_missing_source() {
+            use tempfile::TempDir;
+            let temp_dir = TempDir::new().unwrap();
+            let result = copy_dir_recursively("nonexistent/path", temp_dir.path());
+            assert!(result.is_err());
+            assert_eq!(result.unwrap_err().kind(), std::io::ErrorKind::NotFound);
+        }
+    }
 }

@@ -161,7 +161,7 @@ impl<T: Transport + 'static> LspClient<T> {
         info!("Shutting down LSP client");
 
         // Send shutdown request
-        let _: Value = match self.rpc_client.request("shutdown", None::<Value>).await {
+        let _: () = match self.rpc_client.request("shutdown", None::<Value>).await {
             Ok(result) => result,
             Err(JsonRpcError::Timeout) => {
                 return Err(LspError::RequestTimeout {

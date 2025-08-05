@@ -349,8 +349,14 @@ impl<T: Transport + 'static> JsonRpcClient<T> {
             });
         }
 
-        let result = response.result.ok_or(JsonRpcError::MissingResult)?;
-        serde_json::from_value(result).map_err(JsonRpcError::Deserialization)
+        match response.result {
+            Some(Value::Null) => {
+                // Handle null results (e.g., LSP shutdown) by trying to deserialize null as R
+                serde_json::from_value(Value::Null).map_err(JsonRpcError::Deserialization)
+            }
+            Some(result) => serde_json::from_value(result).map_err(JsonRpcError::Deserialization),
+            None => Err(JsonRpcError::MissingResult),
+        }
     }
 
     /// Send a JSON-RPC request with custom timeout
@@ -421,8 +427,14 @@ impl<T: Transport + 'static> JsonRpcClient<T> {
             });
         }
 
-        let result = response.result.ok_or(JsonRpcError::MissingResult)?;
-        serde_json::from_value(result).map_err(JsonRpcError::Deserialization)
+        match response.result {
+            Some(Value::Null) => {
+                // Handle null results (e.g., LSP shutdown) by trying to deserialize null as R
+                serde_json::from_value(Value::Null).map_err(JsonRpcError::Deserialization)
+            }
+            Some(result) => serde_json::from_value(result).map_err(JsonRpcError::Deserialization),
+            None => Err(JsonRpcError::MissingResult),
+        }
     }
 
     /// Send a JSON-RPC notification

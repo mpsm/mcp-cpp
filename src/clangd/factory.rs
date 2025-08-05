@@ -169,7 +169,15 @@ mod tests {
     use std::fs;
     use tempfile::tempdir;
 
-    fn create_test_project() -> (tempfile::TempDir, PathBuf, PathBuf) {
+    // Auto-initialize logging for all tests in this module
+    #[cfg(feature = "test-logging")]
+    #[ctor::ctor]
+    fn init_test_logging() {
+        crate::test_utils::logging::init();
+    }
+
+    // Helper to create a minimal test project (for non-integration tests)
+    fn create_minimal_test_project() -> (tempfile::TempDir, PathBuf, PathBuf) {
         let temp_dir = tempdir().unwrap();
         let project_root = temp_dir.path().to_path_buf();
         let build_dir = project_root.join("build");
@@ -200,7 +208,7 @@ mod tests {
     #[cfg(feature = "clangd-integration-tests")]
     #[tokio::test]
     async fn test_create_session_with_config() {
-        let (_temp_dir, project_root, build_dir) = create_test_project();
+        let (_temp_dir, project_root, build_dir) = create_minimal_test_project();
 
         let config = ClangdConfigBuilder::new()
             .working_directory(&project_root)
@@ -276,7 +284,7 @@ mod tests {
 
     #[test]
     fn test_validate_config_success() {
-        let (_temp_dir, project_root, build_dir) = create_test_project();
+        let (_temp_dir, project_root, build_dir) = create_minimal_test_project();
 
         let config = ClangdConfigBuilder::new()
             .working_directory(&project_root)
@@ -304,54 +312,116 @@ mod tests {
             return;
         }
 
-        let (_temp_dir, project_root, build_dir) = create_test_project();
+        use crate::test_utils::integration::TestProject;
+        let test_project = TestProject::new().await.unwrap();
+        test_project.cmake_configure().await.unwrap();
 
-        // Create a simple C++ file for more realistic testing
-        let cpp_file = project_root.join("main.cpp");
-        std::fs::write(
-            &cpp_file,
-            r#"
-#include <iostream>
-int main() {
-    std::cout << "Hello, World!" << std::endl;
-    return 0;
-}
-"#,
-        )
-        .unwrap();
-
-        // Update compile_commands.json with real entry
-        let compile_commands = serde_json::json!([
-            {
-                "directory": project_root.to_string_lossy(),
-                "command": format!("clang++ -o main {}", cpp_file.to_string_lossy()),
-                "file": cpp_file.to_string_lossy()
-            }
-        ]);
-        std::fs::write(
-            build_dir.join("compile_commands.json"),
-            serde_json::to_string_pretty(&compile_commands).unwrap(),
-        )
-        .unwrap();
+        let project_root = &test_project.project_root;
+        let build_dir = &test_project.build_dir;
 
         let config = ClangdConfigBuilder::new()
-            .working_directory(&project_root)
-            .build_directory(&build_dir)
-            .clangd_path(&clangd_path) // Use configured clangd path
+            .working_directory(project_root)
+            .build_directory(build_dir)
+            .clangd_path(&clangd_path)
             .build()
             .unwrap();
 
         let factory = ClangdSessionFactory::new();
         let session = factory.create_session(config).await.unwrap();
 
-        // This test verifies that the session can be created with real clangd
-        // In a full integration test, we would start it and make LSP requests
-        assert_eq!(session.working_directory(), &project_root);
-        assert_eq!(session.build_directory(), &build_dir);
-        // Sessions are always ready when constructed
+        assert_eq!(session.working_directory(), project_root);
+        assert_eq!(session.build_directory(), build_dir);
         assert!(session.uptime().as_nanos() > 0);
 
-        // Clean shutdown
         session.close().await.unwrap();
+    }
+
+    #[cfg(feature = "clangd-integration-tests")]
+    #[tokio::test]
+    async fn test_factory_with_real_test_project() {
+        use crate::test_utils::integration::TestProject;
+        use std::process::Command;
+
+        // Check if clangd is available
+        let clangd_path = crate::test_utils::get_test_clangd_path();
+        let clangd_check = Command::new(&clangd_path).arg("--version").output();
+
+        if clangd_check.is_err() {
+            println!("Skipping clangd integration test: {clangd_path} binary not found");
+            return;
+        }
+
+        let test_project = TestProject::new().await.unwrap();
+        test_project.cmake_configure().await.unwrap();
+
+        let factory = ClangdSessionFactory::new();
+        let session = factory
+            .create_session_with_build_dir(
+                test_project.project_root.clone(),
+                test_project.build_dir.clone(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(session.working_directory(), &test_project.project_root);
+        assert_eq!(session.build_directory(), &test_project.build_dir);
+        assert!(session.uptime().as_nanos() > 0);
+
+        let file_path = test_project.project_root.join("include/Math.hpp");
+        assert!(file_path.exists(), "Test file should exist");
+
+        assert!(session.client().is_initialized());
+
+        session.close().await.unwrap();
+    }
+
+    #[cfg(feature = "clangd-integration-tests")]
+    #[tokio::test]
+    async fn test_factory_multiple_sessions() {
+        use crate::test_utils::integration::TestProject;
+        use std::process::Command;
+
+        // Check if clangd is available
+        let clangd_path = crate::test_utils::get_test_clangd_path();
+        let clangd_check = Command::new(&clangd_path).arg("--version").output();
+
+        if clangd_check.is_err() {
+            println!("Skipping clangd integration test: {clangd_path} binary not found");
+            return;
+        }
+
+        // Create two separate test projects
+        let test_project1 = TestProject::new().await.unwrap();
+        test_project1.cmake_configure().await.unwrap();
+
+        let test_project2 = TestProject::new().await.unwrap();
+        test_project2.cmake_configure().await.unwrap();
+
+        let factory = ClangdSessionFactory::new();
+
+        let session1 = factory
+            .create_session_with_build_dir(
+                test_project1.project_root.clone(),
+                test_project1.build_dir.clone(),
+            )
+            .await
+            .unwrap();
+
+        let session2 = factory
+            .create_session_with_build_dir(
+                test_project2.project_root.clone(),
+                test_project2.build_dir.clone(),
+            )
+            .await
+            .unwrap();
+
+        assert_ne!(session1.working_directory(), session2.working_directory());
+        assert_ne!(session1.build_directory(), session2.build_directory());
+
+        assert!(session1.uptime().as_nanos() > 0);
+        assert!(session2.uptime().as_nanos() > 0);
+
+        session1.close().await.unwrap();
+        session2.close().await.unwrap();
     }
 }

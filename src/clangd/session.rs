@@ -312,7 +312,6 @@ mod tests {
         assert_eq!(session.build_directory(), &build_dir);
         assert!(session.uptime().as_nanos() > 0);
 
-        // Clean shutdown
         session.close().await.unwrap();
     }
 
@@ -344,14 +343,13 @@ mod tests {
     async fn test_trait_polymorphism_with_mocks() {
         use crate::clangd::testing::test_helpers::*;
 
-        let (_temp_dir, project_root, build_dir) = create_test_project();
+        let (_temp_dir, project_root, build_dir) = create_mock_test_project();
         let session = create_mock_session(&project_root, &build_dir).unwrap();
 
         // This should NOT panic - demonstrates the fix
         let client = session.client();
         assert!(client.is_initialized());
 
-        // Clean shutdown
         session.close().await.unwrap();
     }
 
@@ -368,12 +366,74 @@ mod tests {
             Ok(format!("Session ran for {uptime:?}"))
         }
 
-        let (_temp_dir, project_root, build_dir) = create_test_project();
+        let (_temp_dir, project_root, build_dir) = create_mock_test_project();
         let mock_session = create_mock_session(&project_root, &build_dir).unwrap();
 
         // This demonstrates proper polymorphic usage without panics
         let result = use_session_polymorphically(mock_session).await;
         assert!(result.is_ok());
         assert!(result.unwrap().contains("Session ran for"));
+    }
+
+    #[cfg(all(test, feature = "clangd-integration-tests"))]
+    #[tokio::test]
+    async fn test_clangd_session_with_real_project() {
+        use crate::clangd::factory::{ClangdSessionFactory, ClangdSessionFactoryTrait};
+        use crate::test_utils::integration::TestProject;
+
+        let test_project = TestProject::new().await.unwrap();
+        test_project.cmake_configure().await.unwrap();
+
+        let config = ClangdConfigBuilder::new()
+            .working_directory(&test_project.project_root)
+            .build_directory(&test_project.build_dir)
+            .clangd_path(crate::test_utils::get_test_clangd_path())
+            .build()
+            .unwrap();
+
+        let factory = ClangdSessionFactory::new();
+        let session = factory.create_session(config).await.unwrap();
+
+        assert!(session.uptime().as_nanos() > 0);
+        assert_eq!(session.working_directory(), &test_project.project_root);
+        assert_eq!(session.build_directory(), &test_project.build_dir);
+
+        let client = session.client();
+        assert!(client.is_initialized());
+
+        session.close().await.unwrap();
+    }
+
+    #[cfg(all(test, feature = "clangd-integration-tests"))]
+    #[tokio::test]
+    async fn test_clangd_session_file_operations() {
+        use crate::clangd::factory::{ClangdSessionFactory, ClangdSessionFactoryTrait};
+        use crate::test_utils::integration::TestProject;
+        // Note: For full file operations, we'd need to work through the manager
+        // For now, we'll verify basic session functionality
+
+        let test_project = TestProject::new().await.unwrap();
+        test_project.cmake_configure().await.unwrap();
+
+        let config = ClangdConfigBuilder::new()
+            .working_directory(&test_project.project_root)
+            .build_directory(&test_project.build_dir)
+            .clangd_path(crate::test_utils::get_test_clangd_path())
+            .build()
+            .unwrap();
+
+        let factory = ClangdSessionFactory::new();
+        let session = factory.create_session(config).await.unwrap();
+
+        let file_path = test_project.project_root.join("src/Math.cpp");
+        let file_content = std::fs::read_to_string(&file_path).unwrap();
+        assert!(!file_content.is_empty(), "Test file should have content");
+
+        assert!(session.client().is_initialized());
+
+        assert_eq!(session.working_directory(), &test_project.project_root);
+        assert_eq!(session.build_directory(), &test_project.build_dir);
+
+        session.close().await.unwrap();
     }
 }

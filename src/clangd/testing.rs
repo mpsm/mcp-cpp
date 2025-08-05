@@ -317,16 +317,17 @@ impl MockMetaProject {
 pub mod test_helpers {
     use super::*;
     use crate::clangd::config::ClangdConfigBuilder;
+    #[cfg(test)]
     use std::fs;
 
-    /// Create a temporary directory with a mock project structure
-    pub fn create_test_project() -> (PathBuf, PathBuf, PathBuf) {
-        use std::env;
-
-        let temp_dir = env::temp_dir().join(format!("clangd-test-{}", uuid::Uuid::new_v4()));
-        fs::create_dir_all(&temp_dir).unwrap();
-
-        let project_root = temp_dir.clone();
+    /// Create a temporary directory with a mock project structure (for mock tests only)
+    ///
+    /// Note: This creates a minimal structure for mock testing. For integration tests
+    /// with real C++ files, use `crate::test_utils::integration::TestProject` instead.
+    #[cfg(test)]
+    pub fn create_mock_test_project() -> (tempfile::TempDir, PathBuf, PathBuf) {
+        let temp_dir = tempfile::TempDir::new().unwrap();
+        let project_root = temp_dir.path().to_path_buf();
         let build_dir = project_root.join("build");
 
         fs::create_dir(&build_dir).unwrap();
@@ -368,7 +369,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_mock_session_lifecycle() {
-        let (_temp_dir, project_root, build_dir) = create_test_project();
+        let (_temp_dir, project_root, build_dir) = create_mock_test_project();
         let session = create_mock_session(&project_root, &build_dir).unwrap();
 
         // Session is immediately ready when constructed
@@ -385,7 +386,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_mock_session_construction_failure() {
-        let (_temp_dir, project_root, build_dir) = create_test_project();
+        let (_temp_dir, project_root, build_dir) = create_mock_test_project();
         let config = create_test_config(&project_root, &build_dir).unwrap();
 
         // Constructor failure means no session object exists
@@ -397,7 +398,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_mock_session_close_failure() {
-        let (_temp_dir, project_root, build_dir) = create_test_project();
+        let (_temp_dir, project_root, build_dir) = create_mock_test_project();
         let mut session = create_mock_session(&project_root, &build_dir).unwrap();
 
         // Configure the session to fail on close
@@ -410,7 +411,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_mock_session_stderr_handling() {
-        let (_temp_dir, project_root, build_dir) = create_test_project();
+        let (_temp_dir, project_root, build_dir) = create_mock_test_project();
         let mut session = create_mock_session(&project_root, &build_dir).unwrap();
 
         let stderr_lines = Arc::new(Mutex::new(Vec::<String>::new()));
@@ -436,7 +437,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_mock_factory_session_creation() {
-        let (_temp_dir, project_root, build_dir) = create_test_project();
+        let (_temp_dir, project_root, build_dir) = create_mock_test_project();
         let config = create_test_config(&project_root, &build_dir).unwrap();
 
         let factory = MockClangdSessionFactory::new();
@@ -455,7 +456,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_mock_factory_with_build_dir() {
-        let (_temp_dir, project_root, build_dir) = create_test_project();
+        let (_temp_dir, project_root, build_dir) = create_mock_test_project();
 
         let factory = MockClangdSessionFactory::new();
         let session = factory
@@ -476,7 +477,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_mock_factory_validation_failure() {
-        let (_temp_dir, project_root, build_dir) = create_test_project();
+        let (_temp_dir, project_root, build_dir) = create_mock_test_project();
 
         let mut factory = MockClangdSessionFactory::new();
         factory.set_validation_failure(true);
@@ -488,7 +489,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_resource_cleanup_on_construction_failure() {
-        let (_temp_dir, project_root, build_dir) = create_test_project();
+        let (_temp_dir, project_root, build_dir) = create_mock_test_project();
         let config = create_test_config(&project_root, &build_dir).unwrap();
 
         // Constructor failure means no session object exists
@@ -501,7 +502,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_session_drop_behavior() {
-        let (_temp_dir, project_root, build_dir) = create_test_project();
+        let (_temp_dir, project_root, build_dir) = create_mock_test_project();
         let session = create_mock_session(&project_root, &build_dir).unwrap();
 
         // Session is immediately ready when constructed
@@ -514,7 +515,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_mock_factory_validation_comprehensive() {
-        let (_temp_dir, project_root, build_dir) = create_test_project();
+        let (_temp_dir, project_root, build_dir) = create_mock_test_project();
 
         // Test multiple validation failures
         let mut factory = MockClangdSessionFactory::new();
@@ -549,7 +550,7 @@ mod tests {
     async fn test_trait_design_violation_fix() {
         // This test demonstrates the fix for the critical trait design violation
         // Previously, calling client() on MockClangdSession would panic
-        let (_temp_dir, project_root, build_dir) = create_test_project();
+        let (_temp_dir, project_root, build_dir) = create_mock_test_project();
         let session = create_mock_session(&project_root, &build_dir).unwrap();
 
         // This should NOT panic - demonstrates the fix ✅
@@ -567,7 +568,7 @@ mod tests {
     #[tokio::test]
     async fn test_polymorphic_session_usage() {
         // Test that we can use sessions polymorphically through the trait
-        let (_temp_dir, project_root, build_dir) = create_test_project();
+        let (_temp_dir, project_root, build_dir) = create_mock_test_project();
         let session = create_mock_session(&project_root, &build_dir).unwrap();
 
         // This function accepts any session implementing ClangdSessionTrait
