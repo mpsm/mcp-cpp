@@ -10,6 +10,7 @@ use tracing::{info, instrument, warn};
 
 use super::symbol_filtering::{SymbolFilter, SymbolUtilities};
 use super::utils::serialize_result;
+use crate::bazel::BazelProjectStatus;
 use crate::cmake::CmakeProjectStatus;
 use crate::legacy_lsp::ClangdManager;
 
@@ -327,14 +328,14 @@ impl SearchSymbolsTool {
 
         for file_path in files {
             // Convert to URI format if needed
-            let file_uri = if file_path.starts_with("file://") {
+            let file_uri = if file_path.starts_with("/") {
                 file_path.clone()
             } else {
                 format!("file://{file_path}")
             };
 
             // Convert URI to file path for opening
-            let path = if let Some(stripped) = file_uri.strip_prefix("file://") {
+            let path = if let Some(stripped) = file_uri.strip_prefix("file:///") {
                 PathBuf::from(stripped)
             } else {
                 PathBuf::from(file_path)
@@ -596,30 +597,52 @@ impl SearchSymbolsTool {
     }
 
     fn resolve_build_directory() -> Result<Option<PathBuf>, String> {
+        // First try CMake
         match CmakeProjectStatus::analyze_current_directory() {
             Ok(status) => match status.build_directories.len() {
                 1 => {
                     let build_dir = &status.build_directories[0];
                     info!(
-                        "Auto-resolved to single build directory: {}",
+                        "Auto-resolved to single CMake build directory: {}",
                         build_dir.path.display()
                     );
-                    Ok(Some(build_dir.path.clone()))
+                    return Ok(Some(build_dir.path.clone()));
                 }
                 0 => {
-                    info!("No build directories found");
-                    Ok(None)
+                    info!("No CMake build directories found");
                 }
                 _ => {
-                    info!("Multiple build directories found, requiring explicit selection");
-                    Ok(None)
+                    info!("Multiple CMake build directories found, requiring explicit selection");
+                    return Ok(None);
                 }
             },
             Err(e) => {
                 info!("Not a CMake project or failed to analyze: {}", e);
-                Err(format!("Failed to analyze build directories: {e}"))
             }
         }
+
+        // If CMake didn't work, try Bazel
+        match BazelProjectStatus::analyze_current_directory() {
+            Ok(status) => {
+                if status.is_bazel_project {
+                    info!(
+                        "Auto-resolved to Bazel workspace: {}",
+                        status.workspace_root.display()
+                    );
+                    // For Bazel, the workspace root serves as the build directory
+                    return Ok(Some(status.workspace_root));
+                } else {
+                    info!("Directory analyzed but not a Bazel project");
+                }
+            }
+            Err(e) => {
+                info!("Not a Bazel project or failed to analyze: {}", e);
+            }
+        }
+
+        // Neither CMake nor Bazel found
+        info!("No CMake or Bazel build configuration found");
+        Err("Failed to analyze build directories: neither CMake nor Bazel project detected".to_string())
     }
 }
 

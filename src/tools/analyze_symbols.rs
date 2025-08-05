@@ -10,6 +10,7 @@ use tracing::{info, instrument, warn};
 
 use super::symbol_filtering::SymbolUtilities;
 use super::utils::serialize_result;
+use crate::bazel::BazelProjectStatus;
 use crate::cmake::CmakeProjectStatus;
 use crate::legacy_lsp::ClangdManager;
 
@@ -763,7 +764,7 @@ impl AnalyzeSymbolContextTool {
             symbol_location.get("range"),
         ) {
             // First, ensure the file is opened in clangd
-            if let Some(file_path_str) = uri.strip_prefix("file://") {
+            if let Some(file_path_str) = uri.strip_prefix("file:///") {
                 let file_path = std::path::PathBuf::from(file_path_str);
                 if let Err(e) = manager.open_file_if_needed(&file_path).await {
                     info!(
@@ -822,7 +823,7 @@ impl AnalyzeSymbolContextTool {
             symbol_location.get("range"),
         ) {
             // First, ensure the file is opened in clangd
-            if let Some(file_path_str) = uri.strip_prefix("file://") {
+            if let Some(file_path_str) = uri.strip_prefix("file:///") {
                 let file_path = std::path::PathBuf::from(file_path_str);
                 if let Err(e) = manager.open_file_if_needed(&file_path).await {
                     info!(
@@ -887,7 +888,7 @@ impl AnalyzeSymbolContextTool {
         ) {
             // First, ensure the file is opened in clangd
             info!("Attempting to open file from URI: {}", uri);
-            if let Some(file_path_str) = uri.strip_prefix("file://") {
+            if let Some(file_path_str) = uri.strip_prefix("file:///") {
                 let file_path = std::path::PathBuf::from(file_path_str);
                 info!("Opening file: {}", file_path.display());
                 if let Err(e) = manager.open_file_if_needed(&file_path).await {
@@ -1000,7 +1001,7 @@ impl AnalyzeSymbolContextTool {
             symbol_location.get("range"),
         ) {
             // First, ensure the file is opened in clangd
-            if let Some(file_path_str) = uri.strip_prefix("file://") {
+            if let Some(file_path_str) = uri.strip_prefix("file:///") {
                 let file_path = std::path::PathBuf::from(file_path_str);
                 if let Err(e) = manager.open_file_if_needed(&file_path).await {
                     info!(
@@ -1163,7 +1164,7 @@ impl AnalyzeSymbolContextTool {
 
     fn extract_call_context(&self, uri: &str, range: &serde_json::Value) -> Option<String> {
         // Extract a brief context around the call location
-        if let Some(file_path_str) = uri.strip_prefix("file://") {
+        if let Some(file_path_str) = uri.strip_prefix("file:///") {
             if let Ok(content) = std::fs::read_to_string(file_path_str) {
                 if let Some(start_line) = range
                     .get("start")
@@ -1248,7 +1249,7 @@ impl AnalyzeSymbolContextTool {
         range: &serde_json::Value,
     ) -> Option<String> {
         // Open the file to get context around the usage
-        if let Some(path_str) = file_uri.strip_prefix("file://") {
+        if let Some(path_str) = file_uri.strip_prefix("file:///") {
             let path = std::path::PathBuf::from(path_str);
             if (manager.open_file_if_needed(&path).await).is_ok() {
                 // Get a range around the usage for context (5 lines before and after)
@@ -1439,7 +1440,7 @@ impl AnalyzeSymbolContextTool {
             symbol_location.get("range"),
         ) {
             // First, ensure the file is opened in clangd
-            if let Some(file_path_str) = uri.strip_prefix("file://") {
+            if let Some(file_path_str) = uri.strip_prefix("file:///") {
                 let file_path = std::path::PathBuf::from(file_path_str);
                 if let Err(e) = manager.open_file_if_needed(&file_path).await {
                     info!(
@@ -1547,7 +1548,7 @@ impl AnalyzeSymbolContextTool {
         let uri = symbol_location.get("uri").and_then(|u| u.as_str())?;
 
         // Ensure the file is opened in clangd
-        if let Some(file_path_str) = uri.strip_prefix("file://") {
+        if let Some(file_path_str) = uri.strip_prefix("file:///") {
             let file_path = std::path::PathBuf::from(file_path_str);
             if let Err(e) = manager.open_file_if_needed(&file_path).await {
                 info!(
@@ -1716,30 +1717,52 @@ impl AnalyzeSymbolContextTool {
     }
 
     fn resolve_build_directory() -> Result<Option<PathBuf>, String> {
+        // First try CMake
         match CmakeProjectStatus::analyze_current_directory() {
             Ok(status) => match status.build_directories.len() {
                 1 => {
                     let build_dir = &status.build_directories[0];
                     info!(
-                        "Auto-resolved to single build directory: {}",
+                        "Auto-resolved to single CMake build directory: {}",
                         build_dir.path.display()
                     );
-                    Ok(Some(build_dir.path.clone()))
+                    return Ok(Some(build_dir.path.clone()));
                 }
                 0 => {
-                    info!("No build directories found");
-                    Ok(None)
+                    info!("No CMake build directories found");
                 }
                 _ => {
-                    info!("Multiple build directories found, requiring explicit selection");
-                    Ok(None)
+                    info!("Multiple CMake build directories found, requiring explicit selection");
+                    return Ok(None);
                 }
             },
             Err(e) => {
                 info!("Not a CMake project or failed to analyze: {}", e);
-                Err(format!("Failed to analyze build directories: {e}"))
             }
         }
+
+        // If CMake didn't work, try Bazel
+        match BazelProjectStatus::analyze_current_directory() {
+            Ok(status) => {
+                if status.is_bazel_project {
+                    info!(
+                        "Auto-resolved to Bazel workspace: {}",
+                        status.workspace_root.display()
+                    );
+                    // For Bazel, the workspace root serves as the build directory
+                    return Ok(Some(status.workspace_root));
+                } else {
+                    info!("Directory analyzed but not a Bazel project");
+                }
+            }
+            Err(e) => {
+                info!("Not a Bazel project or failed to analyze: {}", e);
+            }
+        }
+
+        // Neither CMake nor Bazel found
+        info!("No CMake or Bazel build configuration found");
+        Err("Failed to analyze build directories: neither CMake nor Bazel project detected".to_string())
     }
 }
 
