@@ -167,9 +167,10 @@ jobs:
             ${{ runner.os }}-cargo-
 
       - name: Run clangd integration tests
-        run: cargo test --features clangd-integration-tests --verbose
+        run: cargo test --features clangd-integration-tests,test-logging --verbose clangd
         env:
           CLANGD_PATH: /usr/bin/clangd-20
+          RUST_LOG: trace
 
   # C++ jobs - run in parallel
   cpp-build:

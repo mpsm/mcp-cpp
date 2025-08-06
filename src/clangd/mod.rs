@@ -8,17 +8,13 @@
 //! # Architecture
 //!
 //! - **ClangdSession**: Manages lifecycle of clangd process + LSP client
-//! - **ClangdSessionFactory**: Creates and configures sessions
 //! - **ClangdConfig**: Configuration with builder pattern and validation
 //! - **Error Types**: Comprehensive error handling with context preservation
 //!
 //! # Usage
 //!
 //! ```rust
-//! use clangd::{ClangdSessionFactory, ClangdConfigBuilder};
-//!
-//! // Create factory
-//! let factory = ClangdSessionFactory::new();
+//! use clangd::{ClangdSession, ClangdConfigBuilder};
 //!
 //! // Build configuration
 //! let config = ClangdConfigBuilder::new()
@@ -26,22 +22,19 @@
 //!     .build_directory("/path/to/build")
 //!     .build()?;
 //!
-//! // Create and start session
-//! let mut session = factory.create_session(config).await?;
-//! session.start().await?;
+//! // Create session
+//! let session = ClangdSession::new(config).await?;
 //!
 //! // Use LSP client
-//! if let Some(client) = session.client_mut() {
-//!     // Make LSP requests...
-//! }
+//! let client = session.client();
+//! // Make LSP requests...
 //!
 //! // Clean shutdown
-//! session.shutdown().await?;
+//! session.close().await?;
 //! ```
 
 pub mod config;
 pub mod error;
-pub mod factory;
 pub mod session;
 pub mod testing;
 
@@ -51,11 +44,9 @@ pub use config::{ClangdConfig, ClangdConfigBuilder};
 #[allow(unused_imports)]
 pub use error::{ClangdConfigError, ClangdSessionError};
 #[allow(unused_imports)]
-pub use factory::{ClangdSessionFactory, ClangdSessionFactoryTrait};
-#[allow(unused_imports)]
 pub use session::{ClangdSession, ClangdSessionTrait};
 
 // Re-export testing utilities when in test mode
 #[cfg(test)]
 #[allow(unused_imports)]
-pub use testing::{MockClangdSession, MockClangdSessionFactory, MockMetaProject};
+pub use testing::{MockClangdSession, MockMetaProject};

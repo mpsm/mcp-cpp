@@ -5,12 +5,11 @@
 
 use async_trait::async_trait;
 use std::path::PathBuf;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::time::Instant;
 
 use crate::clangd::config::ClangdConfig;
 use crate::clangd::error::ClangdSessionError;
-use crate::clangd::factory::ClangdSessionFactoryTrait;
 use crate::clangd::session::ClangdSessionTrait;
 use crate::project::{MetaProject, ProjectComponent, ProjectError};
 
@@ -148,102 +147,6 @@ impl MockLspClient {
 }
 
 // ============================================================================
-// Mock Session Factory Implementation
-// ============================================================================
-
-/// Mock factory for testing session creation
-pub struct MockClangdSessionFactory {
-    sessions_created: Arc<Mutex<usize>>,
-    should_fail_validation: bool,
-    should_fail_creation: bool,
-    default_clangd_path: String,
-}
-
-impl MockClangdSessionFactory {
-    /// Create a new mock factory
-    pub fn new() -> Self {
-        Self {
-            sessions_created: Arc::new(Mutex::new(0)),
-            should_fail_validation: false,
-            should_fail_creation: false,
-            default_clangd_path: "mock-clangd".to_string(),
-        }
-    }
-
-    /// Configure validation to fail
-    pub fn set_validation_failure(&mut self, should_fail: bool) {
-        self.should_fail_validation = should_fail;
-    }
-
-    /// Configure session creation to fail
-    pub fn set_creation_failure(&mut self, should_fail: bool) {
-        self.should_fail_creation = should_fail;
-    }
-
-    /// Get the number of sessions created
-    pub fn sessions_created(&self) -> usize {
-        *self.sessions_created.lock().unwrap()
-    }
-
-    /// Reset the creation counter
-    pub fn reset_counter(&mut self) {
-        *self.sessions_created.lock().unwrap() = 0;
-    }
-}
-
-#[async_trait]
-impl ClangdSessionFactoryTrait for MockClangdSessionFactory {
-    type Session = MockClangdSession;
-    type Error = ClangdSessionError;
-
-    async fn create_session(&self, config: ClangdConfig) -> Result<Self::Session, Self::Error> {
-        // Validate configuration first (matches real factory behavior)
-        self.validate_config(&config)?;
-
-        if self.should_fail_creation {
-            return Err(ClangdSessionError::startup_failed("Mock creation failure"));
-        }
-
-        // Increment counter
-        {
-            let mut count = self.sessions_created.lock().unwrap();
-            *count += 1;
-        }
-
-        Ok(MockClangdSession::new(config))
-    }
-
-    async fn create_session_with_build_dir(
-        &self,
-        project_root: PathBuf,
-        build_directory: PathBuf,
-    ) -> Result<Self::Session, Self::Error> {
-        let config = crate::clangd::config::ClangdConfigBuilder::new()
-            .working_directory(&project_root)
-            .clangd_path(&self.default_clangd_path)
-            .build_directory(build_directory)
-            .build()?;
-
-        self.create_session(config).await
-    }
-
-    fn validate_config(&self, _config: &ClangdConfig) -> Result<(), Self::Error> {
-        if self.should_fail_validation {
-            return Err(ClangdSessionError::startup_failed(
-                "Mock validation failure",
-            ));
-        }
-        Ok(())
-    }
-}
-
-impl Default for MockClangdSessionFactory {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-// ============================================================================
 // Mock MetaProject for Testing
 // ============================================================================
 
@@ -365,6 +268,7 @@ pub mod test_helpers {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Mutex;
     use test_helpers::*;
 
     #[tokio::test]
@@ -436,58 +340,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_mock_factory_session_creation() {
-        let (_temp_dir, project_root, build_dir) = create_mock_test_project();
-        let config = create_test_config(&project_root, &build_dir).unwrap();
-
-        let factory = MockClangdSessionFactory::new();
-        let session = factory.create_session(config).await.unwrap();
-
-        assert_eq!(factory.sessions_created(), 1);
-        assert_eq!(session.working_directory(), &project_root);
-        assert_eq!(session.build_directory(), &build_dir);
-
-        // Session is ready to use immediately
-        assert!(session.uptime().as_nanos() > 0);
-
-        // Clean shutdown
-        session.close().await.unwrap();
-    }
-
-    #[tokio::test]
-    async fn test_mock_factory_with_build_dir() {
-        let (_temp_dir, project_root, build_dir) = create_mock_test_project();
-
-        let factory = MockClangdSessionFactory::new();
-        let session = factory
-            .create_session_with_build_dir(project_root.clone(), build_dir.clone())
-            .await
-            .unwrap();
-
-        assert_eq!(factory.sessions_created(), 1);
-        assert_eq!(session.working_directory(), &project_root);
-        assert_eq!(session.build_directory(), &build_dir);
-
-        // Session is ready to use immediately
-        assert!(session.uptime().as_nanos() > 0);
-
-        // Clean shutdown
-        session.close().await.unwrap();
-    }
-
-    #[tokio::test]
-    async fn test_mock_factory_validation_failure() {
-        let (_temp_dir, project_root, build_dir) = create_mock_test_project();
-
-        let mut factory = MockClangdSessionFactory::new();
-        factory.set_validation_failure(true);
-
-        let config = create_test_config(&project_root, &build_dir).unwrap();
-        let result = factory.validate_config(&config);
-        assert!(result.is_err());
-    }
-
-    #[tokio::test]
     async fn test_resource_cleanup_on_construction_failure() {
         let (_temp_dir, project_root, build_dir) = create_mock_test_project();
         let config = create_test_config(&project_root, &build_dir).unwrap();
@@ -511,27 +363,6 @@ mod tests {
         assert!(session.uptime().as_nanos() > 0);
 
         // Session cleanup happens automatically when dropped
-    }
-
-    #[tokio::test]
-    async fn test_mock_factory_validation_comprehensive() {
-        let (_temp_dir, project_root, build_dir) = create_mock_test_project();
-
-        // Test multiple validation failures
-        let mut factory = MockClangdSessionFactory::new();
-
-        // Test 1: Normal validation should pass
-        let config = create_test_config(&project_root, &build_dir).unwrap();
-        assert!(factory.validate_config(&config).is_ok());
-
-        // Test 2: Configure validation failure
-        factory.set_validation_failure(true);
-        assert!(factory.validate_config(&config).is_err());
-
-        // Test 3: Reset and try session creation with validation failure
-        let result = factory.create_session(config).await;
-        assert!(result.is_err());
-        assert_eq!(factory.sessions_created(), 0); // Should not increment on validation failure
     }
 
     #[test]

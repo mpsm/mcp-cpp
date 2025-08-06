@@ -378,7 +378,6 @@ mod tests {
     #[cfg(all(test, feature = "clangd-integration-tests"))]
     #[tokio::test]
     async fn test_clangd_session_with_real_project() {
-        use crate::clangd::factory::{ClangdSessionFactory, ClangdSessionFactoryTrait};
         use crate::test_utils::integration::TestProject;
 
         let test_project = TestProject::new().await.unwrap();
@@ -391,8 +390,7 @@ mod tests {
             .build()
             .unwrap();
 
-        let factory = ClangdSessionFactory::new();
-        let session = factory.create_session(config).await.unwrap();
+        let session = ClangdSession::new(config).await.unwrap();
 
         assert!(session.uptime().as_nanos() > 0);
         assert_eq!(session.working_directory(), &test_project.project_root);
@@ -407,7 +405,6 @@ mod tests {
     #[cfg(all(test, feature = "clangd-integration-tests"))]
     #[tokio::test]
     async fn test_clangd_session_file_operations() {
-        use crate::clangd::factory::{ClangdSessionFactory, ClangdSessionFactoryTrait};
         use crate::test_utils::integration::TestProject;
         // Note: For full file operations, we'd need to work through the manager
         // For now, we'll verify basic session functionality
@@ -422,8 +419,7 @@ mod tests {
             .build()
             .unwrap();
 
-        let factory = ClangdSessionFactory::new();
-        let session = factory.create_session(config).await.unwrap();
+        let session = ClangdSession::new(config).await.unwrap();
 
         let file_path = test_project.project_root.join("src/Math.cpp");
         let file_content = std::fs::read_to_string(&file_path).unwrap();

@@ -114,7 +114,7 @@ macro_rules! setup_test_logging {
 /// let clangd_path = get_test_clangd_path();
 /// // Returns "/usr/bin/clangd-20" if CLANGD_PATH is set, otherwise "clangd"
 /// ```
-#[cfg(any(test, feature = "clangd-integration-tests"))]
+#[cfg(all(test, feature = "clangd-integration-tests"))]
 pub fn get_test_clangd_path() -> String {
     std::env::var("CLANGD_PATH").unwrap_or_else(|_| "clangd".to_string())
 }
