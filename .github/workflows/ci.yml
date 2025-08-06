@@ -145,7 +145,7 @@ jobs:
           wget -O - https://apt.llvm.org/llvm-snapshot.gpg.key | sudo apt-key add -
           echo "deb http://apt.llvm.org/${UBUNTU_CODENAME}/ llvm-toolchain-${UBUNTU_CODENAME}-20 main" | sudo tee /etc/apt/sources.list.d/llvm.list
           sudo apt-get update
-          sudo apt-get install -y clangd-20
+          sudo apt-get install -y clangd-20 build-essential cmake
 
       - name: Cache cargo registry
         uses: actions/cache@v4
