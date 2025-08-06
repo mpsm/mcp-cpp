@@ -35,8 +35,10 @@
 
 pub mod config;
 pub mod error;
+pub mod index;
 pub mod session;
 pub mod testing;
+pub mod version;
 
 // Re-export main types for convenience
 #[allow(unused_imports)]
@@ -44,7 +46,11 @@ pub use config::{ClangdConfig, ClangdConfigBuilder};
 #[allow(unused_imports)]
 pub use error::{ClangdConfigError, ClangdSessionError};
 #[allow(unused_imports)]
+pub use index::ProjectIndex;
+#[allow(unused_imports)]
 pub use session::{ClangdSession, ClangdSessionTrait};
+#[allow(unused_imports)]
+pub use version::{ClangdVersion, ClangdVersionError};
 
 // Re-export testing utilities when in test mode
 #[cfg(test)]
