@@ -11,6 +11,7 @@ use tracing::{debug, info, warn};
 
 use crate::clangd::config::ClangdConfig;
 use crate::clangd::error::ClangdSessionError;
+use crate::clangd::index::IndexMonitor;
 use crate::lsp_v2::{
     ChildProcessManager, LspClient, ProcessManager, StderrMonitor, StdioTransport, StopMode,
 };
@@ -70,6 +71,9 @@ pub struct ClangdSession {
 
     /// LSP client (always present and initialized)
     lsp_client: LspClient<StdioTransport>,
+
+    /// Indexing progress monitor
+    index_monitor: IndexMonitor,
 
     /// Session start timestamp
     started_at: Instant,
@@ -138,15 +142,61 @@ impl ClangdSession {
             init_result.capabilities
         );
 
+        // Step 5: Create and wire IndexMonitor
+        debug!("Creating and wiring IndexMonitor");
+        let index_monitor = IndexMonitor::new();
+        let notification_handler = index_monitor.create_handler();
+        lsp_client
+            .rpc_client()
+            .on_notification(notification_handler)
+            .await;
+
+        // Wire request handler for window/workDoneProgress/create
+        lsp_client
+            .rpc_client()
+            .on_request(move |request| {
+                use crate::lsp_v2::protocol::{JsonRpcErrorObject, JsonRpcResponse};
+
+                if request.method == "window/workDoneProgress/create" {
+                    debug!(
+                        "Accepting workDoneProgress/create request: {:?}",
+                        request.id
+                    );
+                    // Accept the progress token by sending success response
+                    JsonRpcResponse {
+                        jsonrpc: "2.0".to_string(),
+                        id: request.id,
+                        result: Some(serde_json::Value::Null),
+                        error: None,
+                    }
+                } else {
+                    // Unsupported request - return method not found error
+                    JsonRpcResponse {
+                        jsonrpc: "2.0".to_string(),
+                        id: request.id,
+                        result: None,
+                        error: Some(JsonRpcErrorObject {
+                            code: -32601,
+                            message: format!("Method not found: {}", request.method),
+                            data: None,
+                        }),
+                    }
+                }
+            })
+            .await;
+
+        debug!("IndexMonitor and request handler wired successfully");
+
         let started_at = Instant::now();
         info!("Clangd session started successfully");
 
-        // Step 5: Return fully initialized session
+        // Step 6: Return fully initialized session
         let stderr_handler = config.stderr_handler.clone();
         Ok(Self {
             config,
             process_manager,
             lsp_client,
+            index_monitor,
             started_at,
             stderr_handler,
         })
@@ -187,6 +237,11 @@ impl ClangdSession {
     /// Get session uptime
     pub fn uptime(&self) -> std::time::Duration {
         self.started_at.elapsed()
+    }
+
+    /// Get reference to the indexing monitor
+    pub fn index_monitor(&self) -> &IndexMonitor {
+        &self.index_monitor
     }
 }
 

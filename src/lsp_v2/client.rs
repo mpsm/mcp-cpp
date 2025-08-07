@@ -111,7 +111,12 @@ impl<T: Transport + 'static> LspClient<T> {
                     }),
                     ..Default::default()
                 }),
-                window: None,
+                window: Some(
+                    serde_json::from_value(serde_json::json!({
+                        "workDoneProgress": true
+                    }))
+                    .unwrap(),
+                ),
                 general: None,
                 experimental: None,
                 notebook_document: None,
