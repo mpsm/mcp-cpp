@@ -11,6 +11,7 @@ use crate::lsp_v2::transport::StdioTransport;
 pub use crate::lsp_v2::transport::MockTransport;
 
 /// Mock process manager for testing
+#[allow(dead_code)]
 pub struct MockProcessManager {
     running: bool,
     process_id: Option<u32>,
@@ -18,6 +19,7 @@ pub struct MockProcessManager {
 
 impl MockProcessManager {
     /// Create a new mock process manager
+    #[allow(dead_code)]
     pub fn new() -> Self {
         Self {
             running: false,

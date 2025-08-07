@@ -63,15 +63,15 @@ impl SymbolFilter {
 
         if let Some(path) = file_path {
             // First check if it's directly in the compilation database (source files)
-            if let Some(db) = compilation_database {
-                if db.contains(&path) {
-                    debug!(
-                        "✅ Symbol '{}' in {} is PROJECT: found in compilation database",
-                        symbol_name,
-                        path.display()
-                    );
-                    return true;
-                }
+            if let Some(db) = compilation_database
+                && db.contains(&path)
+            {
+                debug!(
+                    "✅ Symbol '{}' in {} is PROJECT: found in compilation database",
+                    symbol_name,
+                    path.display()
+                );
+                return true;
             }
 
             // If not in compilation database, check if it's a project header

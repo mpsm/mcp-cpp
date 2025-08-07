@@ -609,15 +609,15 @@ impl ClangdManager {
         let version_regex = regex::Regex::new(r"(?i)version\s+(\d+)\.?")
             .map_err(|e| LspError::ProcessError(format!("Failed to create version regex: {e}")))?;
 
-        if let Some(captures) = version_regex.captures(version_output) {
-            if let Some(version_match) = captures.get(1) {
-                let version_str = version_match.as_str();
-                return version_str.parse::<u32>().map_err(|e| {
-                    LspError::ProcessError(format!(
-                        "Failed to parse version number '{version_str}': {e}"
-                    ))
-                });
-            }
+        if let Some(captures) = version_regex.captures(version_output)
+            && let Some(version_match) = captures.get(1)
+        {
+            let version_str = version_match.as_str();
+            return version_str.parse::<u32>().map_err(|e| {
+                LspError::ProcessError(format!(
+                    "Failed to parse version number '{version_str}': {e}"
+                ))
+            });
         }
 
         Err(LspError::ProcessError(format!(

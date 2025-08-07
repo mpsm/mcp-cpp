@@ -34,22 +34,22 @@ impl LogConfig {
             let mut path_buf = PathBuf::from(path);
 
             // Add process ID if MCP_LOG_UNIQUE is set
-            if env::var("MCP_LOG_UNIQUE").unwrap_or_default() == "true" {
-                if let Some(filename) = path_buf.file_stem() {
-                    let extension = path_buf
-                        .extension()
-                        .and_then(|ext| ext.to_str())
-                        .unwrap_or("");
+            if env::var("MCP_LOG_UNIQUE").unwrap_or_default() == "true"
+                && let Some(filename) = path_buf.file_stem()
+            {
+                let extension = path_buf
+                    .extension()
+                    .and_then(|ext| ext.to_str())
+                    .unwrap_or("");
 
-                    let pid = std::process::id();
-                    let unique_filename = if extension.is_empty() {
-                        format!("{}.{}", filename.to_string_lossy(), pid)
-                    } else {
-                        format!("{}.{}.{}", filename.to_string_lossy(), pid, extension)
-                    };
+                let pid = std::process::id();
+                let unique_filename = if extension.is_empty() {
+                    format!("{}.{}", filename.to_string_lossy(), pid)
+                } else {
+                    format!("{}.{}.{}", filename.to_string_lossy(), pid, extension)
+                };
 
-                    path_buf.set_file_name(unique_filename);
-                }
+                path_buf.set_file_name(unique_filename);
             }
 
             path_buf

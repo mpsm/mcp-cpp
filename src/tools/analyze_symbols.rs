@@ -684,10 +684,9 @@ impl AnalyzeSymbolContextTool {
                                         // Check for qualified name match
                                         if let Some(detail) =
                                             s.get("detail").and_then(|d| d.as_str())
+                                            && detail.contains(&self.symbol)
                                         {
-                                            if detail.contains(&self.symbol) {
-                                                return true;
-                                            }
+                                            return true;
                                         }
 
                                         // Check container scope for qualified matches
@@ -718,10 +717,10 @@ impl AnalyzeSymbolContextTool {
                                 })
                                 .or_else(|| symbol_array.first());
 
-                            if let Some(symbol) = best_match {
-                                if let Some(location) = symbol.get("location") {
-                                    return Ok(Some(location.clone()));
-                                }
+                            if let Some(symbol) = best_match
+                                && let Some(location) = symbol.get("location")
+                            {
+                                return Ok(Some(location.clone()));
                             }
                         }
 
@@ -787,24 +786,20 @@ impl AnalyzeSymbolContextTool {
                 if let Ok(definition_result) = manager
                     .send_lsp_request("textDocument/definition".to_string(), Some(params.clone()))
                     .await
+                    && let Some(locations) = definition_result.as_array()
+                    && let Some(first_def) = locations.first()
                 {
-                    if let Some(locations) = definition_result.as_array() {
-                        if let Some(first_def) = locations.first() {
-                            definition_location = Some(first_def.clone());
-                        }
-                    }
+                    definition_location = Some(first_def.clone());
                 }
 
                 // Get declaration location
                 if let Ok(declaration_result) = manager
                     .send_lsp_request("textDocument/declaration".to_string(), Some(params))
                     .await
+                    && let Some(locations) = declaration_result.as_array()
+                    && let Some(first_decl) = locations.first()
                 {
-                    if let Some(locations) = declaration_result.as_array() {
-                        if let Some(first_decl) = locations.first() {
-                            declaration_location = Some(first_decl.clone());
-                        }
-                    }
+                    declaration_location = Some(first_decl.clone());
                 }
             }
         }
@@ -848,28 +843,27 @@ impl AnalyzeSymbolContextTool {
                 if let Ok(references_result) = manager
                     .send_lsp_request("textDocument/references".to_string(), Some(params))
                     .await
+                    && let Some(references) = references_result.as_array()
                 {
-                    if let Some(references) = references_result.as_array() {
-                        let total_references = references.len();
-                        let mut file_count = std::collections::HashSet::new();
+                    let total_references = references.len();
+                    let mut file_count = std::collections::HashSet::new();
 
-                        // Count unique files
-                        for reference in references {
-                            if let Some(uri) = reference.get("uri").and_then(|u| u.as_str()) {
-                                file_count.insert(uri);
-                            }
+                    // Count unique files
+                    for reference in references {
+                        if let Some(uri) = reference.get("uri").and_then(|u| u.as_str()) {
+                            file_count.insert(uri);
                         }
-
-                        return Some(json!({
-                            "total_references": total_references,
-                            "files_containing_references": file_count.len(),
-                            "reference_density": if !file_count.is_empty() {
-                                total_references as f64 / file_count.len() as f64
-                            } else {
-                                0.0
-                            }
-                        }));
                     }
+
+                    return Some(json!({
+                        "total_references": total_references,
+                        "files_containing_references": file_count.len(),
+                        "reference_density": if !file_count.is_empty() {
+                            total_references as f64 / file_count.len() as f64
+                        } else {
+                            0.0
+                        }
+                    }));
                 }
             }
         }
@@ -919,70 +913,62 @@ impl AnalyzeSymbolContextTool {
                         Some(params),
                     )
                     .await
+                    && let Some(hierarchy_items) = type_hierarchy_result.as_array()
+                    && let Some(hierarchy_item) = hierarchy_items.first()
                 {
-                    if let Some(hierarchy_items) = type_hierarchy_result.as_array() {
-                        if let Some(hierarchy_item) = hierarchy_items.first() {
-                            let mut base_classes = Vec::new();
-                            let mut derived_classes = Vec::new();
+                    let mut base_classes = Vec::new();
+                    let mut derived_classes = Vec::new();
 
-                            // Get supertypes (base classes) with timeout protection
-                            let supertypes_params = json!({
-                                "item": hierarchy_item
-                            });
+                    // Get supertypes (base classes) with timeout protection
+                    let supertypes_params = json!({
+                        "item": hierarchy_item
+                    });
 
-                            if let Ok(Ok(supertypes_response)) = tokio::time::timeout(
-                                std::time::Duration::from_secs(5),
-                                manager.send_lsp_request(
-                                    "typeHierarchy/supertypes".to_string(),
-                                    Some(supertypes_params),
-                                ),
-                            )
-                            .await
-                            {
-                                if let Some(supertypes) = supertypes_response.as_array() {
-                                    for supertype in supertypes {
-                                        if let Some(name) =
-                                            supertype.get("name").and_then(|n| n.as_str())
-                                        {
-                                            base_classes.push(name.to_string());
-                                        }
-                                    }
-                                }
-                            }
-
-                            // Get subtypes (derived classes) with timeout protection
-                            let subtypes_params = json!({
-                                "item": hierarchy_item
-                            });
-
-                            if let Ok(Ok(subtypes_response)) = tokio::time::timeout(
-                                std::time::Duration::from_secs(5),
-                                manager.send_lsp_request(
-                                    "typeHierarchy/subtypes".to_string(),
-                                    Some(subtypes_params),
-                                ),
-                            )
-                            .await
-                            {
-                                if let Some(subtypes) = subtypes_response.as_array() {
-                                    for subtype in subtypes {
-                                        if let Some(name) =
-                                            subtype.get("name").and_then(|n| n.as_str())
-                                        {
-                                            derived_classes.push(name.to_string());
-                                        }
-                                    }
-                                }
-                            }
-
-                            if !base_classes.is_empty() || !derived_classes.is_empty() {
-                                return Some(json!({
-                                    "base_classes": base_classes,
-                                    "derived_classes": derived_classes,
-                                    "has_inheritance": !base_classes.is_empty() || !derived_classes.is_empty()
-                                }));
+                    if let Ok(Ok(supertypes_response)) = tokio::time::timeout(
+                        std::time::Duration::from_secs(5),
+                        manager.send_lsp_request(
+                            "typeHierarchy/supertypes".to_string(),
+                            Some(supertypes_params),
+                        ),
+                    )
+                    .await
+                        && let Some(supertypes) = supertypes_response.as_array()
+                    {
+                        for supertype in supertypes {
+                            if let Some(name) = supertype.get("name").and_then(|n| n.as_str()) {
+                                base_classes.push(name.to_string());
                             }
                         }
+                    }
+
+                    // Get subtypes (derived classes) with timeout protection
+                    let subtypes_params = json!({
+                        "item": hierarchy_item
+                    });
+
+                    if let Ok(Ok(subtypes_response)) = tokio::time::timeout(
+                        std::time::Duration::from_secs(5),
+                        manager.send_lsp_request(
+                            "typeHierarchy/subtypes".to_string(),
+                            Some(subtypes_params),
+                        ),
+                    )
+                    .await
+                        && let Some(subtypes) = subtypes_response.as_array()
+                    {
+                        for subtype in subtypes {
+                            if let Some(name) = subtype.get("name").and_then(|n| n.as_str()) {
+                                derived_classes.push(name.to_string());
+                            }
+                        }
+                    }
+
+                    if !base_classes.is_empty() || !derived_classes.is_empty() {
+                        return Some(json!({
+                            "base_classes": base_classes,
+                            "derived_classes": derived_classes,
+                            "has_inheritance": !base_classes.is_empty() || !derived_classes.is_empty()
+                        }));
                     }
                 }
             }
@@ -1029,63 +1015,59 @@ impl AnalyzeSymbolContextTool {
                     .await
                 {
                     Ok(call_hierarchy_result) => {
-                        if let Some(hierarchy_items) = call_hierarchy_result.as_array() {
-                            if let Some(hierarchy_item) = hierarchy_items.first() {
-                                let mut incoming_calls = Vec::new();
-                                let mut outgoing_calls = Vec::new();
-                                let max_depth = self.max_call_depth.unwrap_or(3) as usize;
+                        if let Some(hierarchy_items) = call_hierarchy_result.as_array()
+                            && let Some(hierarchy_item) = hierarchy_items.first()
+                        {
+                            let mut incoming_calls = Vec::new();
+                            let mut outgoing_calls = Vec::new();
+                            let max_depth = self.max_call_depth.unwrap_or(3) as usize;
 
-                                // Get incoming calls (who calls this function)
-                                if let Ok(incoming_result) = manager
-                                    .send_lsp_request(
-                                        "callHierarchy/incomingCalls".to_string(),
-                                        Some(json!({ "item": hierarchy_item })),
-                                    )
-                                    .await
-                                {
-                                    if let Some(incoming_array) = incoming_result.as_array() {
-                                        for (index, call) in incoming_array.iter().enumerate() {
-                                            if index >= max_depth {
-                                                break;
-                                            }
-                                            if let Some(from) = call.get("from") {
-                                                incoming_calls
-                                                    .push(self.extract_call_info(from, call));
-                                            }
-                                        }
+                            // Get incoming calls (who calls this function)
+                            if let Ok(incoming_result) = manager
+                                .send_lsp_request(
+                                    "callHierarchy/incomingCalls".to_string(),
+                                    Some(json!({ "item": hierarchy_item })),
+                                )
+                                .await
+                                && let Some(incoming_array) = incoming_result.as_array()
+                            {
+                                for (index, call) in incoming_array.iter().enumerate() {
+                                    if index >= max_depth {
+                                        break;
+                                    }
+                                    if let Some(from) = call.get("from") {
+                                        incoming_calls.push(self.extract_call_info(from, call));
                                     }
                                 }
-
-                                // Get outgoing calls (what this function calls)
-                                if let Ok(outgoing_result) = manager
-                                    .send_lsp_request(
-                                        "callHierarchy/outgoingCalls".to_string(),
-                                        Some(json!({ "item": hierarchy_item })),
-                                    )
-                                    .await
-                                {
-                                    if let Some(outgoing_array) = outgoing_result.as_array() {
-                                        for (index, call) in outgoing_array.iter().enumerate() {
-                                            if index >= max_depth {
-                                                break;
-                                            }
-                                            if let Some(to) = call.get("to") {
-                                                outgoing_calls
-                                                    .push(self.extract_call_info(to, call));
-                                            }
-                                        }
-                                    }
-                                }
-
-                                return Some(json!({
-                                    "incoming_calls": incoming_calls,
-                                    "outgoing_calls": outgoing_calls,
-                                    "total_callers": incoming_calls.len(),
-                                    "total_callees": outgoing_calls.len(),
-                                    "call_depth_analyzed": max_depth,
-                                    "has_call_relationships": !incoming_calls.is_empty() || !outgoing_calls.is_empty()
-                                }));
                             }
+
+                            // Get outgoing calls (what this function calls)
+                            if let Ok(outgoing_result) = manager
+                                .send_lsp_request(
+                                    "callHierarchy/outgoingCalls".to_string(),
+                                    Some(json!({ "item": hierarchy_item })),
+                                )
+                                .await
+                                && let Some(outgoing_array) = outgoing_result.as_array()
+                            {
+                                for (index, call) in outgoing_array.iter().enumerate() {
+                                    if index >= max_depth {
+                                        break;
+                                    }
+                                    if let Some(to) = call.get("to") {
+                                        outgoing_calls.push(self.extract_call_info(to, call));
+                                    }
+                                }
+                            }
+
+                            return Some(json!({
+                                "incoming_calls": incoming_calls,
+                                "outgoing_calls": outgoing_calls,
+                                "total_callers": incoming_calls.len(),
+                                "total_callees": outgoing_calls.len(),
+                                "call_depth_analyzed": max_depth,
+                                "has_call_relationships": !incoming_calls.is_empty() || !outgoing_calls.is_empty()
+                            }));
                         }
                     }
                     Err(e) => {
@@ -1163,18 +1145,16 @@ impl AnalyzeSymbolContextTool {
 
     fn extract_call_context(&self, uri: &str, range: &serde_json::Value) -> Option<String> {
         // Extract a brief context around the call location
-        if let Some(file_path_str) = uri.strip_prefix("file://") {
-            if let Ok(content) = std::fs::read_to_string(file_path_str) {
-                if let Some(start_line) = range
-                    .get("start")
-                    .and_then(|s| s.get("line"))
-                    .and_then(|l| l.as_u64())
-                {
-                    let lines: Vec<&str> = content.lines().collect();
-                    if start_line < lines.len() as u64 {
-                        return Some(lines[start_line as usize].trim().to_string());
-                    }
-                }
+        if let Some(file_path_str) = uri.strip_prefix("file://")
+            && let Ok(content) = std::fs::read_to_string(file_path_str)
+            && let Some(start_line) = range
+                .get("start")
+                .and_then(|s| s.get("line"))
+                .and_then(|l| l.as_u64())
+        {
+            let lines: Vec<&str> = content.lines().collect();
+            if start_line < lines.len() as u64 {
+                return Some(lines[start_line as usize].trim().to_string());
             }
         }
         None
@@ -1188,53 +1168,51 @@ impl AnalyzeSymbolContextTool {
         if let (Some(uri), Some(range)) = (
             symbol_location.get("uri").and_then(|u| u.as_str()),
             symbol_location.get("range"),
-        ) {
-            if let Some(start) = range.get("start") {
-                let params = json!({
-                    "textDocument": {
-                        "uri": uri
-                    },
-                    "position": start,
-                    "context": {
-                        "includeDeclaration": false  // We want usage examples, not declarations
+        ) && let Some(start) = range.get("start")
+        {
+            let params = json!({
+                "textDocument": {
+                    "uri": uri
+                },
+                "position": start,
+                "context": {
+                    "includeDeclaration": false  // We want usage examples, not declarations
+                }
+            });
+
+            if let Ok(references_result) = manager
+                .send_lsp_request("textDocument/references".to_string(), Some(params))
+                .await
+                && let Some(references) = references_result.as_array()
+            {
+                let max_examples = self.max_usage_examples.unwrap_or(5) as usize;
+                let mut usage_examples = Vec::new();
+
+                for (index, reference) in references.iter().enumerate() {
+                    if index >= max_examples {
+                        break;
                     }
-                });
 
-                if let Ok(references_result) = manager
-                    .send_lsp_request("textDocument/references".to_string(), Some(params))
-                    .await
-                {
-                    if let Some(references) = references_result.as_array() {
-                        let max_examples = self.max_usage_examples.unwrap_or(5) as usize;
-                        let mut usage_examples = Vec::new();
-
-                        for (index, reference) in references.iter().enumerate() {
-                            if index >= max_examples {
-                                break;
-                            }
-
-                            if let (Some(ref_uri), Some(ref_range)) = (
-                                reference.get("uri").and_then(|u| u.as_str()),
-                                reference.get("range"),
-                            ) {
-                                // Get context around the usage
-                                if let Some(context) =
-                                    self.get_usage_context(manager, ref_uri, ref_range).await
-                                {
-                                    usage_examples.push(json!({
-                                        "file": ref_uri,
-                                        "range": ref_range,
-                                        "context": context,
-                                        "pattern_type": self.classify_usage_pattern(&context)
-                                    }));
-                                }
-                            }
-                        }
-
-                        if !usage_examples.is_empty() {
-                            return Some(json!(usage_examples));
+                    if let (Some(ref_uri), Some(ref_range)) = (
+                        reference.get("uri").and_then(|u| u.as_str()),
+                        reference.get("range"),
+                    ) {
+                        // Get context around the usage
+                        if let Some(context) =
+                            self.get_usage_context(manager, ref_uri, ref_range).await
+                        {
+                            usage_examples.push(json!({
+                                "file": ref_uri,
+                                "range": ref_range,
+                                "context": context,
+                                "pattern_type": self.classify_usage_pattern(&context)
+                            }));
                         }
                     }
+                }
+
+                if !usage_examples.is_empty() {
+                    return Some(json!(usage_examples));
                 }
             }
         }
@@ -1312,11 +1290,11 @@ impl AnalyzeSymbolContextTool {
         }
 
         // Add type information from hover
-        if let Some(hover) = data.hover_info {
-            if let Some(contents) = hover.get("contents") {
-                info["type_info"] = self.extract_enhanced_type_info(contents);
-                info["documentation"] = self.extract_documentation(contents);
-            }
+        if let Some(hover) = data.hover_info
+            && let Some(contents) = hover.get("contents")
+        {
+            info["type_info"] = self.extract_enhanced_type_info(contents);
+            info["documentation"] = self.extract_documentation(contents);
         }
 
         // Add usage statistics
@@ -1353,24 +1331,23 @@ impl AnalyzeSymbolContextTool {
         hover_info: &Option<serde_json::Value>,
     ) -> String {
         // Try to extract kind from hover info first
-        if let Some(hover) = hover_info {
-            if let Some(contents) = hover.get("contents") {
-                if let Some(value_str) = contents.get("value").and_then(|v| v.as_str()) {
-                    // Simple heuristics to determine symbol kind from hover text
-                    if value_str.contains("class ") {
-                        return "class".to_string();
-                    } else if value_str.contains("struct ") {
-                        return "struct".to_string();
-                    } else if value_str.contains("enum ") {
-                        return "enum".to_string();
-                    } else if value_str.contains("namespace ") {
-                        return "namespace".to_string();
-                    } else if value_str.contains("(") && value_str.contains(")") {
-                        return "function".to_string();
-                    } else if value_str.contains("typedef ") {
-                        return "typedef".to_string();
-                    }
-                }
+        if let Some(hover) = hover_info
+            && let Some(contents) = hover.get("contents")
+            && let Some(value_str) = contents.get("value").and_then(|v| v.as_str())
+        {
+            // Simple heuristics to determine symbol kind from hover text
+            if value_str.contains("class ") {
+                return "class".to_string();
+            } else if value_str.contains("struct ") {
+                return "struct".to_string();
+            } else if value_str.contains("enum ") {
+                return "enum".to_string();
+            } else if value_str.contains("namespace ") {
+                return "namespace".to_string();
+            } else if value_str.contains("(") && value_str.contains(")") {
+                return "function".to_string();
+            } else if value_str.contains("typedef ") {
+                return "typedef".to_string();
             }
         }
 
@@ -1383,22 +1360,20 @@ impl AnalyzeSymbolContextTool {
     }
 
     fn extract_qualified_name(&self, hover_info: &Option<serde_json::Value>) -> String {
-        if let Some(hover) = hover_info {
-            if let Some(contents) = hover.get("contents") {
-                if let Some(value_str) = contents.get("value").and_then(|v| v.as_str()) {
-                    // Try to extract qualified name from hover text
-                    for line in value_str.lines() {
-                        if line.contains("::") {
-                            // Simple extraction - this could be improved
-                            if let Some(start) = line.find(&self.symbol) {
-                                let before = &line[..start];
-                                if let Some(namespace_start) = before.rfind(' ') {
-                                    let qualified =
-                                        &line[namespace_start + 1..start + self.symbol.len()];
-                                    if qualified.contains("::") {
-                                        return qualified.to_string();
-                                    }
-                                }
+        if let Some(hover) = hover_info
+            && let Some(contents) = hover.get("contents")
+            && let Some(value_str) = contents.get("value").and_then(|v| v.as_str())
+        {
+            // Try to extract qualified name from hover text
+            for line in value_str.lines() {
+                if line.contains("::") {
+                    // Simple extraction - this could be improved
+                    if let Some(start) = line.find(&self.symbol) {
+                        let before = &line[..start];
+                        if let Some(namespace_start) = before.rfind(' ') {
+                            let qualified = &line[namespace_start + 1..start + self.symbol.len()];
+                            if qualified.contains("::") {
+                                return qualified.to_string();
                             }
                         }
                     }
@@ -1621,19 +1596,18 @@ impl AnalyzeSymbolContextTool {
                         .get("start")
                         .and_then(|s| s.get("line"))
                         .and_then(|l| l.as_u64())
+                        && start_line == target_start_line
                     {
-                        if start_line == target_start_line {
-                            return Some(symbol.clone());
-                        }
+                        return Some(symbol.clone());
                     }
                 }
             }
 
             // Also check nested symbols recursively
-            if let Some(children) = symbol.get("children").and_then(|c| c.as_array()) {
-                if let Some(found) = self.find_target_class_in_symbols(children, symbol_location) {
-                    return Some(found);
-                }
+            if let Some(children) = symbol.get("children").and_then(|c| c.as_array())
+                && let Some(found) = self.find_target_class_in_symbols(children, symbol_location)
+            {
+                return Some(found);
             }
         }
 
@@ -1698,18 +1672,17 @@ impl AnalyzeSymbolContextTool {
         if let Ok(symbols) = manager
             .send_lsp_request("workspace/symbol".to_string(), Some(params))
             .await
+            && let Some(symbol_array) = symbols.as_array()
         {
-            if let Some(symbol_array) = symbols.as_array() {
-                return symbol_array
-                    .iter()
-                    .filter_map(|s| {
-                        s.get("name")
-                            .and_then(|n| n.as_str())
-                            .map(|s| s.to_string())
-                    })
-                    .take(5)
-                    .collect();
-            }
+            return symbol_array
+                .iter()
+                .filter_map(|s| {
+                    s.get("name")
+                        .and_then(|n| n.as_str())
+                        .map(|s| s.to_string())
+                })
+                .take(5)
+                .collect();
         }
 
         vec![]

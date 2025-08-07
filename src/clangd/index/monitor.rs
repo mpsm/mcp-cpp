@@ -170,14 +170,13 @@ impl IndexMonitor {
 
     /// Handle window/workDoneProgress/create notification
     async fn handle_progress_create(params: Option<Value>, state: Arc<Mutex<IndexingState>>) {
-        if let Some(params) = params {
-            if let Some(token) = params.get("token").and_then(|t| t.as_str()) {
-                if token == "backgroundIndexProgress" {
-                    let mut state = state.lock().await;
-                    state.progress_token = Some(token.to_string());
-                    debug!("IndexMonitor: Tracking progress token: {}", token);
-                }
-            }
+        if let Some(params) = params
+            && let Some(token) = params.get("token").and_then(|t| t.as_str())
+            && token == "backgroundIndexProgress"
+        {
+            let mut state = state.lock().await;
+            state.progress_token = Some(token.to_string());
+            debug!("IndexMonitor: Tracking progress token: {}", token);
         }
     }
 
@@ -270,10 +269,10 @@ impl IndexMonitor {
 /// Parse progress message in format "current/total" -> (current, total)
 fn parse_progress_message(message: &str) -> Option<(u32, u32)> {
     let parts: Vec<&str> = message.split('/').collect();
-    if parts.len() == 2 {
-        if let (Ok(current), Ok(total)) = (parts[0].parse::<u32>(), parts[1].parse::<u32>()) {
-            return Some((current, total));
-        }
+    if parts.len() == 2
+        && let (Ok(current), Ok(total)) = (parts[0].parse::<u32>(), parts[1].parse::<u32>())
+    {
+        return Some((current, total));
     }
     None
 }

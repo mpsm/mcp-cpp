@@ -306,15 +306,14 @@ impl LspClient {
 
             // Add a timestamp header to the log file
             let timestamp = chrono::Utc::now().format("%Y-%m-%d %H:%M:%S UTC");
-            if let Some(ref mut file) = log_file {
-                if let Err(e) = file
+            if let Some(ref mut file) = log_file
+                && let Err(e) = file
                     .write_all(
                         format!("\n=== CLANGD SESSION STARTED: {timestamp} ===\n").as_bytes(),
                     )
                     .await
-                {
-                    warn!("Failed to write header to clangd log file: {}", e);
-                }
+            {
+                warn!("Failed to write header to clangd log file: {}", e);
             }
 
             let mut line = String::new();
@@ -367,13 +366,12 @@ impl LspClient {
 
             // Add session end marker
             let timestamp = chrono::Utc::now().format("%Y-%m-%d %H:%M:%S UTC");
-            if let Some(ref mut file) = log_file {
-                if let Err(e) = file
+            if let Some(ref mut file) = log_file
+                && let Err(e) = file
                     .write_all(format!("=== CLANGD SESSION ENDED: {timestamp} ===\n\n").as_bytes())
                     .await
-                {
-                    warn!("Failed to write footer to clangd log file: {}", e);
-                }
+            {
+                warn!("Failed to write footer to clangd log file: {}", e);
             }
 
             info!("Clangd stderr logging task terminated");
@@ -471,10 +469,10 @@ impl LspClient {
         // Step 1: Send graceful shutdown signal to reader task
         {
             let mut shutdown_signal = self.shutdown_signal.lock().await;
-            if let Some(tx) = shutdown_signal.take() {
-                if tx.send(()).is_err() {
-                    shutdown_errors.push("Failed to send shutdown signal to reader task");
-                }
+            if let Some(tx) = shutdown_signal.take()
+                && tx.send(()).is_err()
+            {
+                shutdown_errors.push("Failed to send shutdown signal to reader task");
             }
         }
 
@@ -612,12 +610,12 @@ impl LspClient {
             match method.as_str() {
                 "window/workDoneProgress/create" => {
                     // clangd requesting progress token
-                    if let Some(params) = &response.params {
-                        if let Some(token) = params.get("token") {
-                            info!("Progress token requested: {}", token);
-                            // We should send a response accepting the token, but we can't do that here
-                            // since this is a notification handler. For now, just log it.
-                        }
+                    if let Some(params) = &response.params
+                        && let Some(token) = params.get("token")
+                    {
+                        info!("Progress token requested: {}", token);
+                        // We should send a response accepting the token, but we can't do that here
+                        // since this is a notification handler. For now, just log it.
                     }
                 }
                 "$/progress" => {
@@ -737,42 +735,37 @@ impl LspClient {
                 }
                 "textDocument/clangd.fileStatus" => {
                     // File status updates
-                    if let Some(params) = &response.params {
-                        if let (Some(uri), Some(state)) = (params.get("uri"), params.get("state")) {
-                            if let (Some(uri_str), Some(state_str)) = (uri.as_str(), state.as_str())
-                            {
-                                let file_path = uri_str.replace("file://", "");
-                                let filename = std::path::Path::new(&file_path)
-                                    .file_name()
-                                    .and_then(|n| n.to_str())
-                                    .unwrap_or("unknown");
-                                info!("📄 File status: {} - {}", filename, state_str);
-                            }
-                        }
+                    if let Some(params) = &response.params
+                        && let (Some(uri), Some(state)) = (params.get("uri"), params.get("state"))
+                        && let (Some(uri_str), Some(state_str)) = (uri.as_str(), state.as_str())
+                    {
+                        let file_path = uri_str.replace("file://", "");
+                        let filename = std::path::Path::new(&file_path)
+                            .file_name()
+                            .and_then(|n| n.to_str())
+                            .unwrap_or("unknown");
+                        info!("📄 File status: {} - {}", filename, state_str);
                     }
                 }
                 "textDocument/publishDiagnostics" => {
                     // Diagnostic messages (errors, warnings, etc.)
-                    if let Some(params) = &response.params {
-                        if let (Some(uri), Some(diagnostics)) =
+                    if let Some(params) = &response.params
+                        && let (Some(uri), Some(diagnostics)) =
                             (params.get("uri"), params.get("diagnostics"))
-                        {
-                            if let (Some(uri_str), Some(diagnostics_array)) =
-                                (uri.as_str(), diagnostics.as_array())
-                            {
-                                let file_path = uri_str.replace("file://", "");
-                                let filename = std::path::Path::new(&file_path)
-                                    .file_name()
-                                    .and_then(|n| n.to_str())
-                                    .unwrap_or("unknown");
-                                if !diagnostics_array.is_empty() {
-                                    info!(
-                                        "⚠️  Diagnostics for {}: {} issues",
-                                        filename,
-                                        diagnostics_array.len()
-                                    );
-                                }
-                            }
+                        && let (Some(uri_str), Some(diagnostics_array)) =
+                            (uri.as_str(), diagnostics.as_array())
+                    {
+                        let file_path = uri_str.replace("file://", "");
+                        let filename = std::path::Path::new(&file_path)
+                            .file_name()
+                            .and_then(|n| n.to_str())
+                            .unwrap_or("unknown");
+                        if !diagnostics_array.is_empty() {
+                            info!(
+                                "⚠️  Diagnostics for {}: {} issues",
+                                filename,
+                                diagnostics_array.len()
+                            );
                         }
                     }
                 }
@@ -789,10 +782,10 @@ impl Drop for LspClient {
         warn!("LspClient being dropped - attempting emergency cleanup");
 
         // Signal the reader task to stop
-        if let Ok(mut shutdown_signal) = self.shutdown_signal.try_lock() {
-            if let Some(tx) = shutdown_signal.take() {
-                let _ = tx.send(());
-            }
+        if let Ok(mut shutdown_signal) = self.shutdown_signal.try_lock()
+            && let Some(tx) = shutdown_signal.take()
+        {
+            let _ = tx.send(());
         }
 
         // Abort the reader task if it's still running

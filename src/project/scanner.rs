@@ -112,12 +112,11 @@ impl ProjectScanner {
             }
 
             // Skip hidden directories if configured
-            if options.skip_hidden {
-                if let Some(file_name) = path.file_name() {
-                    if file_name.to_string_lossy().starts_with('.') {
-                        continue;
-                    }
-                }
+            if options.skip_hidden
+                && let Some(file_name) = path.file_name()
+                && file_name.to_string_lossy().starts_with('.')
+            {
+                continue;
             }
 
             // Skip if we've already scanned this path (can happen with symlinks)
@@ -131,10 +130,10 @@ impl ProjectScanner {
                     components.push(component);
 
                     // Check if we've hit the component limit
-                    if let Some(max) = options.max_components {
-                        if components.len() >= max {
-                            break;
-                        }
+                    if let Some(max) = options.max_components
+                        && components.len() >= max
+                    {
+                        break;
                     }
                 }
                 Ok(None) => {

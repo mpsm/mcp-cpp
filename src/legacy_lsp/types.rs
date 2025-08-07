@@ -172,13 +172,13 @@ impl IndexingState {
         self.percentage = percentage;
 
         // Calculate time estimate based on progress
-        if let (Some(start_time), Some(pct)) = (self.start_time, percentage) {
-            if pct > 0 {
-                let elapsed = start_time.elapsed();
-                let estimated_total = elapsed.as_secs() * 100 / pct as u64;
-                let remaining = estimated_total.saturating_sub(elapsed.as_secs());
-                self.estimated_completion_seconds = Some(remaining as u32);
-            }
+        if let (Some(start_time), Some(pct)) = (self.start_time, percentage)
+            && pct > 0
+        {
+            let elapsed = start_time.elapsed();
+            let estimated_total = elapsed.as_secs() * 100 / pct as u64;
+            let remaining = estimated_total.saturating_sub(elapsed.as_secs());
+            self.estimated_completion_seconds = Some(remaining as u32);
         }
 
         // If no data for estimate and only one file, use 1 second default
