@@ -219,7 +219,7 @@ jobs:
 
   # C++ jobs - run in parallel
   cpp-build:
-    name: C++ Build Check
+    name: C++ Build Check (CMake + Meson)
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
@@ -228,7 +228,13 @@ jobs:
       - name: Install dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y build-essential cmake
+          sudo apt-get install -y build-essential cmake meson ninja-build
+
+      - name: Verify build tools installation
+        run: |
+          cmake --version
+          meson --version
+          ninja --version
 
       - name: Cache CMake build
         uses: actions/cache@v4
@@ -238,13 +244,39 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-cmake-
 
-      - name: Configure CMake
+      - name: Cache Meson build
+        uses: actions/cache@v4
+        with:
+          path: test/test-meson-project/builddir
+          key: ${{ runner.os }}-meson-${{ hashFiles('test/test-meson-project/meson.build', 'test/test-meson-project/**/*.cpp', 'test/test-meson-project/**/*.h') }}
+          restore-keys: |
+            ${{ runner.os }}-meson-
+
+      - name: Configure CMake project
         working-directory: test/test-project
         run: cmake -B build -S .
 
-      - name: Build C++ test project
+      - name: Build CMake project
         working-directory: test/test-project
-        run: cmake --build build # TypeScript jobs - run in parallel
+        run: cmake --build build
+
+      - name: Configure Meson project
+        working-directory: test/test-meson-project
+        run: meson setup builddir .
+
+      - name: Build Meson project
+        working-directory: test/test-meson-project
+        run: meson compile -C builddir
+
+      - name: Verify build artifacts
+        run: |
+          # Verify CMake artifacts
+          test -f test/test-project/build/test_app
+          # Verify Meson artifacts
+          test -f test/test-meson-project/builddir/test_meson_app
+          test -f test/test-meson-project/builddir/libtest_meson_lib.a
+
+  # TypeScript jobs - run in parallel
   ts-format-lint:
     name: TypeScript Format & Lint
     runs-on: ubuntu-latest
