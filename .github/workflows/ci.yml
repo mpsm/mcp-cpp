@@ -172,6 +172,51 @@ jobs:
           CLANGD_PATH: /usr/bin/clangd-20
           RUST_LOG: trace
 
+  project-integration-tests:
+    name: Project Integration Tests (CMake + Meson)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install build tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake meson ninja-build
+
+      - name: Verify build tools installation
+        run: |
+          cmake --version
+          meson --version
+          ninja --version
+
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: ${{ runner.os }}-cargo-registry-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-registry-
+
+      - name: Cache cargo build
+        uses: actions/cache@v4
+        with:
+          path: target
+          key: ${{ runner.os }}-cargo-project-tests-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-project-tests-
+            ${{ runner.os }}-cargo-
+
+      - name: Run project integration tests
+        run: cargo test --features project-integration-tests,test-logging --verbose project
+        env:
+          RUST_LOG: trace
+
   # C++ jobs - run in parallel
   cpp-build:
     name: C++ Build Check

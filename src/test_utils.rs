@@ -127,32 +127,161 @@ pub mod integration {
     use tempfile::TempDir;
     use walkdir::WalkDir;
 
+    /// Test workspace that can contain multiple test projects
+    pub struct TestWorkspace {
+        _temp_dir: TempDir, // Underscore prefix keeps it alive until drop
+        pub root: PathBuf,
+    }
+
+    impl TestWorkspace {
+        /// Create a new test workspace
+        pub fn new() -> Result<Self, std::io::Error> {
+            let temp_dir = TempDir::new()?;
+            let root = temp_dir.path().to_path_buf();
+
+            Ok(TestWorkspace {
+                _temp_dir: temp_dir,
+                root,
+            })
+        }
+
+        /// Create a CMake test project within this workspace
+        pub async fn create_cmake_project(
+            &self,
+            name: &str,
+        ) -> Result<TestProject, std::io::Error> {
+            let project_root = self.root.join(name);
+            // Ensure parent directories exist if name contains path separators
+            if let Some(parent) = project_root.parent() {
+                fs::create_dir_all(parent)?;
+            }
+            TestProject::create_at(
+                &project_root,
+                "test/test-project",
+                "build-debug",
+                ProjectType::CMake,
+            )
+            .await
+        }
+
+        /// Create a Meson test project within this workspace
+        #[cfg(feature = "project-integration-tests")]
+        pub async fn create_meson_project(
+            &self,
+            name: &str,
+        ) -> Result<TestProject, std::io::Error> {
+            let project_root = self.root.join(name);
+            // Ensure parent directories exist if name contains path separators
+            if let Some(parent) = project_root.parent() {
+                fs::create_dir_all(parent)?;
+            }
+            #[cfg(feature = "project-integration-tests")]
+            {
+                TestProject::create_at(
+                    &project_root,
+                    "test/test-meson-project",
+                    "builddir",
+                    ProjectType::Meson,
+                )
+                .await
+            }
+        }
+
+        /// Get the workspace root path
+        pub fn path(&self) -> &Path {
+            &self.root
+        }
+    }
+
+    #[derive(Debug, Clone, Copy, PartialEq)]
+    pub enum ProjectType {
+        CMake,
+        #[cfg(feature = "project-integration-tests")]
+        Meson,
+    }
+
     /// Test project with automatic cleanup
     pub struct TestProject {
-        _temp_dir: TempDir, // Underscore prefix keeps it alive until drop
+        _temp_dir: Option<TempDir>, // Some if owned, None if part of workspace
         pub project_root: PathBuf,
         pub build_dir: PathBuf,
+        pub project_type: ProjectType,
     }
 
     impl TestProject {
-        /// Create a new test project by copying test/test-project
+        /// Create a new standalone CMake test project
         pub async fn new() -> Result<Self, std::io::Error> {
             // Create temp directory (auto-cleanup on drop)
             let temp_dir = TempDir::new()?;
             let project_root = temp_dir.path().to_path_buf();
-
-            // Copy test/test-project to temp location
-            copy_dir_recursively("test/test-project", &project_root)?;
-
-            // Create build directory
-            let build_dir = project_root.join("build-debug");
-            fs::create_dir(&build_dir)?;
+            let build_dir =
+                Self::init_project(&project_root, "test/test-project", "build-debug").await?;
 
             Ok(TestProject {
-                _temp_dir: temp_dir,
+                _temp_dir: Some(temp_dir),
                 project_root,
                 build_dir,
+                project_type: ProjectType::CMake,
             })
+        }
+
+        /// Create a test project at a specific path (used by TestWorkspace)
+        pub(super) async fn create_at(
+            project_root: &Path,
+            template_path: &str,
+            build_dir_name: &str,
+            project_type: ProjectType,
+        ) -> Result<Self, std::io::Error> {
+            let build_dir = Self::init_project(project_root, template_path, build_dir_name).await?;
+
+            Ok(TestProject {
+                _temp_dir: None, // Not owned, part of workspace
+                project_root: project_root.to_path_buf(),
+                build_dir,
+                project_type,
+            })
+        }
+
+        /// Initialize a test project from template
+        async fn init_project(
+            project_root: &Path,
+            template_path: &str,
+            build_dir_name: &str,
+        ) -> Result<PathBuf, std::io::Error> {
+            // Ensure the project root exists
+            fs::create_dir_all(project_root)?;
+
+            // Copy template contents to the specified location
+            copy_dir_recursively(template_path, project_root)?;
+
+            // Remove any existing build* directories that were copied
+            for entry in fs::read_dir(project_root)? {
+                let entry = entry?;
+                let path = entry.path();
+                if path.is_dir()
+                    && let Some(name) = path.file_name()
+                {
+                    let name_str = name.to_string_lossy();
+                    if name_str.starts_with("build") {
+                        fs::remove_dir_all(&path)?;
+                    }
+                }
+            }
+
+            // Create build directory
+            let build_dir = project_root.join(build_dir_name);
+            fs::create_dir(&build_dir)?;
+
+            Ok(build_dir)
+        }
+
+        /// Configure the project using the appropriate build system
+        pub async fn configure(&self) -> Result<(), std::io::Error> {
+            match self.project_type {
+                ProjectType::CMake => self.cmake_configure().await,
+                #[cfg(feature = "project-integration-tests")]
+                ProjectType::Meson => self.meson_configure().await,
+            }
         }
 
         /// Configure with cmake to generate compile_commands.json
@@ -170,9 +299,35 @@ pub mod integration {
                 .await?;
 
             if !output.status.success() {
+                let stdout = String::from_utf8_lossy(&output.stdout);
+                let stderr = String::from_utf8_lossy(&output.stderr);
                 return Err(std::io::Error::other(format!(
-                    "cmake failed: {}",
-                    String::from_utf8_lossy(&output.stderr)
+                    "cmake failed:\nstdout: {}\nstderr: {}",
+                    stdout, stderr
+                )));
+            }
+
+            Ok(())
+        }
+
+        /// Configure with meson to generate compile_commands.json
+        #[cfg(feature = "project-integration-tests")]
+        pub async fn meson_configure(&self) -> Result<(), std::io::Error> {
+            use tokio::process::Command;
+
+            let output = Command::new("meson")
+                .arg("setup")
+                .arg(&self.build_dir)
+                .arg(&self.project_root)
+                .output()
+                .await?;
+
+            if !output.status.success() {
+                let stdout = String::from_utf8_lossy(&output.stdout);
+                let stderr = String::from_utf8_lossy(&output.stderr);
+                return Err(std::io::Error::other(format!(
+                    "meson failed:\nstdout: {}\nstderr: {}",
+                    stdout, stderr
                 )));
             }
 

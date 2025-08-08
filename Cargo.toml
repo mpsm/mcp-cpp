@@ -42,3 +42,5 @@ default = []
 clangd-integration-tests = []
 # Enable detailed logging in tests (uses tracing-subscriber)
 test-logging = []
+# Enable integration tests for project scanning (requires cmake and meson)
+project-integration-tests = []

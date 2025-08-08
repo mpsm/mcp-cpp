@@ -79,6 +79,13 @@ impl MetaProject {
         grouped
     }
 
+    /// Get a component by its build directory path
+    pub fn get_component_by_build_dir(&self, build_dir: &PathBuf) -> Option<&ProjectComponent> {
+        self.components
+            .iter()
+            .find(|c| c.build_dir_path == *build_dir)
+    }
+
     /// Get unique source root directories from all components
     pub fn get_source_roots(&self) -> Vec<&PathBuf> {
         let mut roots: Vec<&PathBuf> = self
