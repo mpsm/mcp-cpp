@@ -271,7 +271,8 @@ jobs:
       - name: Verify build artifacts
         run: |
           # Verify CMake artifacts
-          test -f test/test-project/build/test_app
+          test -f test/test-project/build/TestProject
+          test -f test/test-project/build/libTestLib.a
           # Verify Meson artifacts
           test -f test/test-meson-project/builddir/test_meson_app
           test -f test/test-meson-project/builddir/libtest_meson_lib.a
