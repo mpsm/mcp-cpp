@@ -168,6 +168,7 @@ impl Default for ProjectScanner {
 
 #[cfg(test)]
 mod tests {
+    #[cfg(feature = "project-integration-tests")]
     use crate::test_utils::integration::TestWorkspace;
 
     // Auto-initialize logging for all tests in this module

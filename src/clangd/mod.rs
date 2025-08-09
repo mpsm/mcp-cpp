@@ -35,6 +35,7 @@
 
 pub mod config;
 pub mod error;
+pub mod file_manager;
 pub mod index;
 pub mod session;
 pub mod testing;
@@ -45,6 +46,8 @@ pub mod version;
 pub use config::{ClangdConfig, ClangdConfigBuilder};
 #[allow(unused_imports)]
 pub use error::{ClangdConfigError, ClangdSessionError};
+#[allow(unused_imports)]
+pub use file_manager::ClangdFileManager;
 #[allow(unused_imports)]
 pub use index::ProjectIndex;
 #[allow(unused_imports)]

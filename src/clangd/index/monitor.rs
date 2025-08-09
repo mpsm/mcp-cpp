@@ -449,9 +449,8 @@ mod tests {
 mod integration_tests {
     use super::*;
     use crate::clangd::config::ClangdConfigBuilder;
-    use crate::clangd::session::{ClangdSession, ClangdSessionTrait};
+    use crate::clangd::session::ClangdSession;
     use crate::test_utils::integration::TestProject;
-    use lsp_types::{DidOpenTextDocumentParams, TextDocumentItem};
     use std::time::Duration;
 
     #[tokio::test]
@@ -475,26 +474,9 @@ mod integration_tests {
         let initial_status = session.index_monitor().get_progress().await;
         assert_eq!(initial_status, IndexingStatus::NotStarted);
 
-        // Open main.cpp to trigger indexing
+        // Open main.cpp to trigger indexing using the proper file manager API
         let main_cpp_path = test_project.project_root.join("src/main.cpp");
-        let main_cpp_content = std::fs::read_to_string(&main_cpp_path).unwrap();
-        let main_cpp_uri = format!("file://{}", main_cpp_path.display());
-
-        let did_open_params = DidOpenTextDocumentParams {
-            text_document: TextDocumentItem {
-                uri: main_cpp_uri.parse().unwrap(),
-                language_id: "cpp".to_string(),
-                version: 1,
-                text: main_cpp_content,
-            },
-        };
-
-        session
-            .client_mut()
-            .rpc_client_mut()
-            .notify("textDocument/didOpen", Some(did_open_params))
-            .await
-            .unwrap();
+        session.ensure_file_ready(&main_cpp_path).await.unwrap();
 
         // Wait for indexing to complete with timeout
         let completion_result = tokio::time::timeout(
@@ -549,26 +531,9 @@ mod integration_tests {
             async move { monitor.wait_for_indexing_completion().await }
         });
 
-        // Open main.cpp to trigger indexing
+        // Open main.cpp to trigger indexing using the proper file manager API
         let main_cpp_path = test_project.project_root.join("src/main.cpp");
-        let main_cpp_content = std::fs::read_to_string(&main_cpp_path).unwrap();
-        let main_cpp_uri = format!("file://{}", main_cpp_path.display());
-
-        let did_open_params = DidOpenTextDocumentParams {
-            text_document: TextDocumentItem {
-                uri: main_cpp_uri.parse().unwrap(),
-                language_id: "cpp".to_string(),
-                version: 1,
-                text: main_cpp_content,
-            },
-        };
-
-        session
-            .client_mut()
-            .rpc_client_mut()
-            .notify("textDocument/didOpen", Some(did_open_params))
-            .await
-            .unwrap();
+        session.ensure_file_ready(&main_cpp_path).await.unwrap();
 
         // All waiters should complete successfully
         let (result1, result2, result3) = tokio::time::timeout(Duration::from_secs(30), async {

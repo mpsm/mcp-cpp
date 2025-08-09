@@ -128,11 +128,13 @@ pub mod integration {
     use walkdir::WalkDir;
 
     /// Test workspace that can contain multiple test projects
+    #[cfg(feature = "project-integration-tests")]
     pub struct TestWorkspace {
         _temp_dir: TempDir, // Underscore prefix keeps it alive until drop
         pub root: PathBuf,
     }
 
+    #[cfg(feature = "project-integration-tests")]
     impl TestWorkspace {
         /// Create a new test workspace
         pub fn new() -> Result<Self, std::io::Error> {
@@ -205,6 +207,7 @@ pub mod integration {
         _temp_dir: Option<TempDir>, // Some if owned, None if part of workspace
         pub project_root: PathBuf,
         pub build_dir: PathBuf,
+        #[cfg_attr(not(feature = "project-integration-tests"), allow(dead_code))]
         pub project_type: ProjectType,
     }
 
@@ -226,6 +229,7 @@ pub mod integration {
         }
 
         /// Create a test project at a specific path (used by TestWorkspace)
+        #[cfg_attr(not(feature = "project-integration-tests"), allow(dead_code))]
         pub(super) async fn create_at(
             project_root: &Path,
             template_path: &str,
@@ -276,6 +280,7 @@ pub mod integration {
         }
 
         /// Configure the project using the appropriate build system
+        #[cfg_attr(not(feature = "project-integration-tests"), allow(dead_code))]
         pub async fn configure(&self) -> Result<(), std::io::Error> {
             match self.project_type {
                 ProjectType::CMake => self.cmake_configure().await,

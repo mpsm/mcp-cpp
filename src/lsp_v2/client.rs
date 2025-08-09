@@ -6,8 +6,10 @@
 use crate::lsp_v2::protocol::{JsonRpcClient, JsonRpcError};
 use crate::lsp_v2::transport::Transport;
 use lsp_types::{
-    ClientCapabilities, InitializeParams, InitializeResult, InitializedParams,
-    TextDocumentClientCapabilities, WorkspaceClientCapabilities,
+    ClientCapabilities, DidChangeTextDocumentParams, DidCloseTextDocumentParams,
+    DidOpenTextDocumentParams, InitializeParams, InitializeResult, InitializedParams,
+    TextDocumentClientCapabilities, TextDocumentContentChangeEvent, TextDocumentIdentifier,
+    TextDocumentItem, VersionedTextDocumentIdentifier, WorkspaceClientCapabilities,
 };
 use serde_json::Value;
 use tracing::{debug, info};
@@ -217,5 +219,107 @@ impl<T: Transport + 'static> LspClient<T> {
     /// Get mutable reference to the JSON-RPC client for advanced usage
     pub fn rpc_client_mut(&mut self) -> &mut JsonRpcClient<T> {
         &mut self.rpc_client
+    }
+
+    // ========================================================================
+    // Document Synchronization Methods
+    // ========================================================================
+
+    /// Open a text document in the language server
+    ///
+    /// Sends a textDocument/didOpen notification to inform the server
+    /// that a document has been opened by the client.
+    pub async fn open_text_document(
+        &mut self,
+        uri: String,
+        language_id: String,
+        version: i32,
+        text: String,
+    ) -> Result<(), LspError> {
+        if !self.initialized {
+            return Err(LspError::NotInitialized);
+        }
+
+        let params = DidOpenTextDocumentParams {
+            text_document: TextDocumentItem {
+                uri: uri
+                    .parse()
+                    .map_err(|e| LspError::Protocol(format!("Invalid URI: {}", e)))?,
+                language_id,
+                version,
+                text,
+            },
+        };
+
+        debug!("Opening text document: {:?}", params.text_document.uri);
+        self.rpc_client
+            .notify("textDocument/didOpen", Some(params))
+            .await?;
+
+        Ok(())
+    }
+
+    /// Close a text document in the language server
+    ///
+    /// Sends a textDocument/didClose notification to inform the server
+    /// that a document has been closed by the client.
+    pub async fn close_text_document(&mut self, uri: String) -> Result<(), LspError> {
+        if !self.initialized {
+            return Err(LspError::NotInitialized);
+        }
+
+        let params = DidCloseTextDocumentParams {
+            text_document: TextDocumentIdentifier {
+                uri: uri
+                    .parse()
+                    .map_err(|e| LspError::Protocol(format!("Invalid URI: {}", e)))?,
+            },
+        };
+
+        debug!("Closing text document: {:?}", params.text_document.uri);
+        self.rpc_client
+            .notify("textDocument/didClose", Some(params))
+            .await?;
+
+        Ok(())
+    }
+
+    /// Notify the server that a text document has changed
+    ///
+    /// Sends a textDocument/didChange notification with the full new content
+    /// of the document.
+    pub async fn change_text_document(
+        &mut self,
+        uri: String,
+        version: i32,
+        text: String,
+    ) -> Result<(), LspError> {
+        if !self.initialized {
+            return Err(LspError::NotInitialized);
+        }
+
+        let params = DidChangeTextDocumentParams {
+            text_document: VersionedTextDocumentIdentifier {
+                uri: uri
+                    .parse()
+                    .map_err(|e| LspError::Protocol(format!("Invalid URI: {}", e)))?,
+                version,
+            },
+            content_changes: vec![TextDocumentContentChangeEvent {
+                range: None, // Full document sync
+                range_length: None,
+                text,
+            }],
+        };
+
+        debug!(
+            "Changing text document: {:?} (version {})",
+            params.text_document.uri, params.text_document.version
+        );
+        self.rpc_client
+            .notify("textDocument/didChange", Some(params))
+            .await?;
+
+        Ok(())
     }
 }
