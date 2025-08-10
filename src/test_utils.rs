@@ -398,3 +398,208 @@ pub mod integration {
         }
     }
 }
+
+/// Common test project setup utilities for cross-module use
+#[cfg(test)]
+pub mod project {
+    use std::path::PathBuf;
+    use std::fs;
+
+    /// Create a temporary directory with a mock build folder structure
+    ///
+    /// This is the most commonly used pattern across tests - creates:
+    /// - Temporary directory that auto-cleans on drop
+    /// - Build subdirectory with compile_commands.json
+    /// - Returns (temp_dir, project_root, build_dir) for easy use
+    pub fn create_mock_build_folder() -> (tempfile::TempDir, PathBuf, PathBuf) {
+        let temp_dir = tempfile::TempDir::new().unwrap();
+        let project_root = temp_dir.path().to_path_buf();
+        let build_dir = project_root.join("build");
+
+        fs::create_dir(&build_dir).unwrap();
+        fs::write(build_dir.join("compile_commands.json"), "[]").unwrap();
+
+        (temp_dir, project_root, build_dir)
+    }
+
+    /// Create multiple build directories for testing multi-config scenarios
+    ///
+    /// Creates Debug, Release, and RelWithDebInfo build directories with
+    /// appropriate compile_commands.json files for testing build directory
+    /// detection logic.
+    pub fn create_multi_build_folders(
+    ) -> (tempfile::TempDir, PathBuf, Vec<(String, PathBuf)>) {
+        let temp_dir = tempfile::TempDir::new().unwrap();
+        let project_root = temp_dir.path().to_path_buf();
+        
+        let build_configs = vec![
+            ("build-debug", "Debug"),
+            ("build-release", "Release"), 
+            ("build-relwithdebinfo", "RelWithDebInfo"),
+        ];
+        
+        let mut build_dirs = Vec::new();
+        
+        for (dir_name, config_name) in build_configs {
+            let build_dir = project_root.join(dir_name);
+            fs::create_dir(&build_dir).unwrap();
+            fs::write(build_dir.join("compile_commands.json"), "[]").unwrap();
+            
+            // Create a minimal CMakeCache.txt for build type detection
+            let cmake_cache_content = format!(
+                "CMAKE_BUILD_TYPE:STRING={}\n\
+                CMAKE_SOURCE_DIR:INTERNAL={}\n",
+                config_name,
+                project_root.display()
+            );
+            fs::write(build_dir.join("CMakeCache.txt"), cmake_cache_content).unwrap();
+            
+            build_dirs.push((config_name.to_string(), build_dir));
+        }
+
+        (temp_dir, project_root, build_dirs)
+    }
+
+    /// Create a temporary file with given content for testing
+    pub fn create_test_file(
+        parent_dir: &std::path::Path,
+        filename: &str,
+        content: &str,
+    ) -> PathBuf {
+        let file_path = parent_dir.join(filename);
+        fs::write(&file_path, content).unwrap();
+        file_path
+    }
+
+    /// Create a simple CMakeCache.txt file for testing project detection
+    pub fn create_cmake_cache(
+        build_dir: &std::path::Path,
+        project_root: &std::path::Path,
+        build_type: &str,
+        generator: &str,
+    ) {
+        let cmake_cache_content = format!(
+            "CMAKE_BUILD_TYPE:STRING={}\n\
+            CMAKE_SOURCE_DIR:INTERNAL={}\n\
+            CMAKE_GENERATOR:INTERNAL={}\n\
+            CMAKE_COMMAND:INTERNAL=/usr/bin/cmake\n\
+            CMAKE_MAKE_PROGRAM:FILEPATH=/usr/bin/make\n",
+            build_type,
+            project_root.display(),
+            generator
+        );
+        fs::write(build_dir.join("CMakeCache.txt"), cmake_cache_content).unwrap();
+    }
+}
+
+
+/// File content utilities for testing
+pub mod content {
+    /// Common C++ file content patterns for testing
+    pub struct TestContent;
+    
+    impl TestContent {
+        /// Simple C++ main function
+        pub const SIMPLE_MAIN: &'static str = "int main() { return 0; }";
+        
+        /// C++ class definition
+        pub const SIMPLE_CLASS: &'static str = r#"
+class TestClass {
+public:
+    TestClass();
+    ~TestClass();
+    void method();
+private:
+    int value_;
+};
+"#;
+
+        /// C++ header with include guards
+        pub const HEADER_WITH_GUARDS: &'static str = r#"
+#ifndef TEST_HEADER_H
+#define TEST_HEADER_H
+
+namespace test {
+    void function();
+}
+
+#endif // TEST_HEADER_H
+"#;
+    }
+}
+
+// ============================================================================
+// Additional Tests for New Functionality
+// ============================================================================
+
+#[cfg(test)]
+mod additional_tests {
+    use super::*;
+
+    #[test]
+    fn test_create_mock_build_folder() {
+        let (_temp_dir, project_root, build_dir) = project::create_mock_build_folder();
+        
+        assert!(project_root.exists());
+        assert!(build_dir.exists());
+        assert!(build_dir.join("compile_commands.json").exists());
+        
+        // Verify the compile_commands.json is valid JSON array
+        let content = std::fs::read_to_string(build_dir.join("compile_commands.json")).unwrap();
+        assert_eq!(content, "[]");
+    }
+
+    #[test] 
+    fn test_create_multi_build_folders() {
+        let (_temp_dir, project_root, build_dirs) = project::create_multi_build_folders();
+        
+        assert!(project_root.exists());
+        assert_eq!(build_dirs.len(), 3);
+        
+        for (config_name, build_dir) in &build_dirs {
+            assert!(build_dir.exists());
+            assert!(build_dir.join("compile_commands.json").exists());
+            assert!(build_dir.join("CMakeCache.txt").exists());
+            
+            let cache_content = std::fs::read_to_string(build_dir.join("CMakeCache.txt")).unwrap();
+            assert!(cache_content.contains(&format!("CMAKE_BUILD_TYPE:STRING={}", config_name)));
+        }
+    }
+
+    #[test]
+    fn test_create_test_file() {
+        let (_temp_dir, project_root, _build_dir) = project::create_mock_build_folder();
+        
+        let test_file = project::create_test_file(
+            &project_root,
+            "test.cpp",
+            content::TestContent::SIMPLE_MAIN,
+        );
+        
+        assert!(test_file.exists());
+        let content = std::fs::read_to_string(&test_file).unwrap();
+        assert_eq!(content, content::TestContent::SIMPLE_MAIN);
+    }
+
+    #[test]
+    fn test_create_cmake_cache() {
+        let (_temp_dir, project_root, build_dir) = project::create_mock_build_folder();
+        
+        project::create_cmake_cache(&build_dir, &project_root, "Debug", "Unix Makefiles");
+        
+        let cache_file = build_dir.join("CMakeCache.txt");
+        assert!(cache_file.exists());
+        
+        let content = std::fs::read_to_string(&cache_file).unwrap();
+        assert!(content.contains("CMAKE_BUILD_TYPE:STRING=Debug"));
+        assert!(content.contains("CMAKE_GENERATOR:INTERNAL=Unix Makefiles"));
+    }
+
+    #[test]
+    fn test_content_constants() {
+        assert!(!content::TestContent::SIMPLE_MAIN.is_empty());
+        assert!(content::TestContent::SIMPLE_CLASS.contains("class TestClass"));
+        assert!(content::TestContent::HEADER_WITH_GUARDS.contains("#ifndef"));
+    }
+
+}

@@ -16,6 +16,11 @@ use crate::clangd::index::IndexMonitor;
 use crate::io::{ChildProcessManager, ProcessManager, StderrMonitor, StdioTransport, StopMode};
 use crate::lsp_v2::{LspClient, traits::LspClientTrait};
 
+/// Type alias for testing sessions with mock dependencies
+#[cfg(test)]
+type TestSession =
+    ClangdSession<crate::io::process::MockProcessManager, crate::lsp_v2::testing::MockLspClient>;
+
 // ============================================================================
 // Clangd Session Trait
 // ============================================================================
@@ -61,16 +66,20 @@ pub trait ClangdSessionTrait: Send + Sync {
 // Clangd Session Implementation
 // ============================================================================
 
-/// Clangd session implementation
-pub struct ClangdSession {
+/// Clangd session implementation with dependency injection support
+pub struct ClangdSession<P = ChildProcessManager, C = LspClient<StdioTransport>>
+where
+    P: ProcessManager + 'static,
+    C: LspClientTrait + 'static,
+{
     /// Session configuration
     config: ClangdConfig,
 
-    /// Process manager for clangd (always running)
-    process_manager: ChildProcessManager,
+    /// Process manager for clangd (injected dependency)
+    process_manager: Box<P>,
 
-    /// LSP client (always present and initialized)
-    lsp_client: LspClient<StdioTransport>,
+    /// LSP client (injected dependency)
+    lsp_client: Box<C>,
 
     /// File manager for tracking open files
     file_manager: ClangdFileManager,
@@ -85,8 +94,63 @@ pub struct ClangdSession {
     stderr_handler: Option<Arc<dyn Fn(String) + Send + Sync>>,
 }
 
+impl<P, C> ClangdSession<P, C>
+where
+    P: ProcessManager + 'static,
+    C: LspClientTrait + 'static,
+{
+    /// Create a new clangd session with injected dependencies (for testing)
+    ///
+    /// This constructor enables dependency injection of both ProcessManager and LspClient,
+    /// making the session fully unit testable without external processes.
+    pub fn with_dependencies(
+        config: ClangdConfig,
+        process_manager: P,
+        lsp_client: C,
+        file_manager: ClangdFileManager,
+        index_monitor: IndexMonitor,
+    ) -> Self {
+        let started_at = Instant::now();
+        let stderr_handler = config.stderr_handler.clone();
+
+        Self {
+            config,
+            process_manager: Box::new(process_manager),
+            lsp_client: Box::new(lsp_client),
+            file_manager,
+            index_monitor,
+            started_at,
+            stderr_handler,
+        }
+    }
+}
+
+/// Create a new clangd session with mock dependencies for testing
+///
+/// This is a convenience factory for unit tests that need a session with
+/// injected mock dependencies instead of real process and LSP client.
+#[cfg(test)]
+pub fn create_test_session(config: ClangdConfig) -> TestSession {
+    use crate::io::process::MockProcessManager;
+    use crate::lsp_v2::testing::MockLspClient;
+
+    let process_manager = MockProcessManager::new();
+    let mut lsp_client = MockLspClient::new();
+    lsp_client.set_initialized(true); // Mock is pre-initialized
+    let file_manager = ClangdFileManager::new();
+    let index_monitor = IndexMonitor::new();
+
+    ClangdSession::with_dependencies(
+        config,
+        process_manager,
+        lsp_client,
+        file_manager,
+        index_monitor,
+    )
+}
+
 impl ClangdSession {
-    /// Create a new clangd session
+    /// Create a new clangd session with real dependencies
     ///
     /// Performs complete initialization: process start, LSP setup, and connection.
     /// If this method succeeds, the session is fully operational.
@@ -188,25 +252,27 @@ impl ClangdSession {
 
         debug!("IndexMonitor and request handler wired successfully");
 
-        let started_at = Instant::now();
         info!("Clangd session started successfully");
 
         // Step 6: Create file manager
         let file_manager = ClangdFileManager::new();
 
-        // Step 7: Return fully initialized session
-        let stderr_handler = config.stderr_handler.clone();
-        Ok(Self {
+        // Step 7: Return fully initialized session using dependency injection constructor
+        Ok(ClangdSession::with_dependencies(
             config,
             process_manager,
             lsp_client,
             file_manager,
             index_monitor,
-            started_at,
-            stderr_handler,
-        })
+        ))
     }
+}
 
+impl<P, C> ClangdSession<P, C>
+where
+    P: ProcessManager + 'static,
+    C: LspClientTrait + 'static,
+{
     /// Graceful async cleanup - consumes self to prevent further use
     ///
     /// Performs orderly shutdown: LSP client shutdown, then process termination.
@@ -233,7 +299,12 @@ impl ClangdSession {
 
         // Step 2: Stop the clangd process gracefully
         debug!("Stopping clangd process");
-        self.process_manager.stop(StopMode::Graceful).await?;
+        self.process_manager
+            .stop(StopMode::Graceful)
+            .await
+            .map_err(|e| {
+                ClangdSessionError::unexpected_failure(format!("Process stop failed: {}", e))
+            })?;
 
         info!("Clangd session shutdown completed");
         Ok(())
@@ -258,7 +329,7 @@ impl ClangdSession {
         path: &std::path::Path,
     ) -> Result<(), ClangdSessionError> {
         self.file_manager
-            .ensure_file_ready(path, &mut self.lsp_client)
+            .ensure_file_ready(path, self.lsp_client.as_mut())
             .await
             .map_err(|e| {
                 ClangdSessionError::unexpected_failure(format!("File management failed: {}", e))
@@ -280,7 +351,11 @@ impl ClangdSession {
 ///
 /// This provides a sync fallback if close() wasn't called explicitly.
 /// Issues a warning and performs immediate process cleanup.
-impl Drop for ClangdSession {
+impl<P, C> Drop for ClangdSession<P, C>
+where
+    P: ProcessManager + 'static,
+    C: LspClientTrait + 'static,
+{
     fn drop(&mut self) {
         // Check if process is still running
         if self.process_manager.is_running() {
@@ -295,9 +370,13 @@ impl Drop for ClangdSession {
 }
 
 #[async_trait]
-impl ClangdSessionTrait for ClangdSession {
+impl<P, C> ClangdSessionTrait for ClangdSession<P, C>
+where
+    P: ProcessManager + 'static,
+    C: LspClientTrait + 'static,
+{
     type Error = ClangdSessionError;
-    type Client = LspClient<StdioTransport>;
+    type Client = C;
 
     /// Graceful async cleanup (consumes self)
     async fn close(self) -> Result<(), Self::Error> {
@@ -343,8 +422,6 @@ impl ClangdSessionTrait for ClangdSession {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::clangd::config::ClangdConfigBuilder;
-    use tempfile::tempdir;
 
     // Auto-initialize logging for all tests in this module
     #[cfg(feature = "test-logging")]
@@ -353,22 +430,14 @@ mod tests {
         crate::test_utils::logging::init();
     }
 
-    // Sessions are either successfully constructed or construction fails
 
     #[tokio::test]
     async fn test_session_construction_failure() {
+        use crate::clangd::testing::test_helpers::*;
+        
         // Test constructor failure with invalid clangd path
-        let temp_dir = tempdir().unwrap();
-        let build_dir = temp_dir.path().join("build");
-        std::fs::create_dir(&build_dir).unwrap();
-        std::fs::write(build_dir.join("compile_commands.json"), "[]").unwrap();
-
-        let config = ClangdConfigBuilder::new()
-            .working_directory(temp_dir.path())
-            .build_directory(&build_dir)
-            .clangd_path("nonexistent-clangd-binary") // This should cause process start to fail
-            .build()
-            .unwrap();
+        let (_temp_dir, project_root, build_dir) = crate::test_utils::project::create_mock_build_folder();
+        let config = create_test_config(&project_root, &build_dir, TestConfigType::Failing).unwrap();
 
         // Constructor should fail due to invalid clangd path
         let result = ClangdSession::new(config).await;
@@ -378,23 +447,16 @@ mod tests {
     #[cfg(feature = "clangd-integration-tests")]
     #[tokio::test]
     async fn test_session_ready_when_constructed() {
-        let temp_dir = tempdir().unwrap();
-        let build_dir = temp_dir.path().join("build");
-        std::fs::create_dir(&build_dir).unwrap();
-        std::fs::write(build_dir.join("compile_commands.json"), "[]").unwrap();
-
-        let config = ClangdConfigBuilder::new()
-            .working_directory(temp_dir.path())
-            .build_directory(&build_dir)
-            .clangd_path(crate::test_utils::get_test_clangd_path()) // Use configured clangd path
-            .build()
-            .unwrap();
+        use crate::clangd::testing::test_helpers::*;
+        
+        let (_temp_dir, project_root, build_dir) = crate::test_utils::project::create_mock_build_folder();
+        let config = create_test_config(&project_root, &build_dir, TestConfigType::Integration).unwrap();
 
         // Constructor should succeed and return ready session
         let session = ClangdSession::new(config).await.unwrap();
 
         // Session should be immediately ready to use
-        assert_eq!(session.working_directory(), temp_dir.path());
+        assert_eq!(session.working_directory(), &project_root);
         assert_eq!(session.build_directory(), &build_dir);
         assert!(session.uptime().as_nanos() > 0);
 
@@ -404,18 +466,10 @@ mod tests {
     #[cfg(feature = "clangd-integration-tests")]
     #[tokio::test]
     async fn test_session_close() {
-        let temp_dir = tempdir().unwrap();
-        let build_dir = temp_dir.path().join("build");
-        std::fs::create_dir(&build_dir).unwrap();
-        std::fs::write(build_dir.join("compile_commands.json"), "[]").unwrap();
-
-        let config = ClangdConfigBuilder::new()
-            .working_directory(temp_dir.path())
-            .build_directory(&build_dir)
-            .clangd_path(crate::test_utils::get_test_clangd_path()) // Use configured clangd path
-            .build()
-            .unwrap();
-
+        use crate::clangd::testing::test_helpers::*;
+        
+        let (_temp_dir, project_root, build_dir) = crate::test_utils::project::create_mock_build_folder();
+        let config = create_test_config(&project_root, &build_dir, TestConfigType::Integration).unwrap();
         let session = ClangdSession::new(config).await.unwrap();
 
         // Close should succeed and consume the session
@@ -429,10 +483,10 @@ mod tests {
     async fn test_trait_polymorphism_with_mocks() {
         use crate::clangd::testing::test_helpers::*;
 
-        let (_temp_dir, project_root, build_dir) = create_mock_test_project();
+        let (_temp_dir, project_root, build_dir) = crate::test_utils::project::create_mock_build_folder();
         let session = create_mock_session(&project_root, &build_dir).unwrap();
 
-        // This should NOT panic - demonstrates the fix
+        // Verify client access works correctly with mock dependencies
         let client = session.client();
         assert!(client.is_initialized());
 
@@ -452,31 +506,98 @@ mod tests {
             Ok(format!("Session ran for {uptime:?}"))
         }
 
-        let (_temp_dir, project_root, build_dir) = create_mock_test_project();
+        let (_temp_dir, project_root, build_dir) = crate::test_utils::project::create_mock_build_folder();
         let mock_session = create_mock_session(&project_root, &build_dir).unwrap();
 
-        // This demonstrates proper polymorphic usage without panics
+        // Test polymorphic trait usage with proper cleanup
         let result = use_session_polymorphically(mock_session).await;
         assert!(result.is_ok());
         assert!(result.unwrap().contains("Session ran for"));
     }
 
+    #[tokio::test]
+    async fn test_dependency_injection_with_mocks() {
+        use crate::clangd::testing::test_helpers::*;
+
+        let (_temp_dir, project_root, build_dir) = crate::test_utils::project::create_mock_build_folder();
+        let config = create_test_config(&project_root, &build_dir, TestConfigType::Mock).unwrap();
+
+        // Create session with dependency injection using helper
+        let session = create_session_with_mock_dependencies(config);
+
+        // Verify session is properly configured
+        assert_eq!(session.working_directory(), &project_root);
+        assert_eq!(session.build_directory(), &build_dir);
+        assert!(session.uptime().as_nanos() > 0);
+
+        // Verify client is accessible and initialized (mocked)
+        let client = session.client();
+        assert!(client.is_initialized());
+
+        // Clean shutdown should work with mocks
+        session.close().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_session_factory_for_testing() {
+        use crate::clangd::testing::test_helpers::*;
+
+        let (_temp_dir, project_root, build_dir) = crate::test_utils::project::create_mock_build_folder();
+        let config = create_test_config(&project_root, &build_dir, TestConfigType::Mock).unwrap();
+
+        // Use test factory for easy mock session creation
+        let session = create_test_session(config);
+
+        // Session should be immediately ready with mock dependencies
+        assert_eq!(session.working_directory(), &project_root);
+        assert_eq!(session.build_directory(), &build_dir);
+        assert!(session.uptime().as_nanos() > 0);
+
+        // Mock client should be pre-initialized
+        let client = session.client();
+        assert!(client.is_initialized());
+
+        // File operations should work with mocks
+        assert_eq!(session.get_open_files_count(), 0);
+
+        session.close().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_unit_testing_without_external_processes() {
+        use crate::clangd::testing::test_helpers::*;
+
+        let (temp_dir, project_root, build_dir) = crate::test_utils::project::create_mock_build_folder();
+        let config = create_test_config(&project_root, &build_dir, TestConfigType::Mock).unwrap();
+
+        // Demonstrate comprehensive unit testing with mock dependencies
+        let mut session = create_test_session(config);
+
+        // Test session behavior with mocked dependencies
+        assert!(session.client().is_initialized());
+        assert!(!session.process_manager.is_running()); // Mock starts not running
+
+        // File management operations work with mocks
+        let fake_file_path = temp_dir.path().join("fake.cpp");
+        std::fs::write(&fake_file_path, "// test content").unwrap();
+
+        // File operations work with mock LSP client
+        session.ensure_file_ready(&fake_file_path).await.unwrap();
+        assert_eq!(session.get_open_files_count(), 1);
+        assert!(session.is_file_open(&fake_file_path));
+
+        // Graceful shutdown works with mock dependencies
+        session.close().await.unwrap();
+
+        // Test validates isolated unit testing without external dependencies
+    }
+
     #[cfg(all(test, feature = "clangd-integration-tests"))]
     #[tokio::test]
     async fn test_clangd_session_with_real_project() {
-        use crate::test_utils::integration::TestProject;
+        use crate::clangd::testing::test_helpers::*;
 
-        let test_project = TestProject::new().await.unwrap();
-        test_project.cmake_configure().await.unwrap();
-
-        let config = ClangdConfigBuilder::new()
-            .working_directory(&test_project.project_root)
-            .build_directory(&test_project.build_dir)
-            .clangd_path(crate::test_utils::get_test_clangd_path())
-            .build()
-            .unwrap();
-
-        let session = ClangdSession::new(config).await.unwrap();
+        let (test_project, session) = create_integration_test_session().await.unwrap();
 
         assert!(session.uptime().as_nanos() > 0);
         assert_eq!(session.working_directory(), &test_project.project_root);
@@ -491,19 +612,9 @@ mod tests {
     #[cfg(all(test, feature = "clangd-integration-tests"))]
     #[tokio::test]
     async fn test_clangd_session_file_operations() {
-        use crate::test_utils::integration::TestProject;
+        use crate::clangd::testing::test_helpers::*;
 
-        let test_project = TestProject::new().await.unwrap();
-        test_project.cmake_configure().await.unwrap();
-
-        let config = ClangdConfigBuilder::new()
-            .working_directory(&test_project.project_root)
-            .build_directory(&test_project.build_dir)
-            .clangd_path(crate::test_utils::get_test_clangd_path())
-            .build()
-            .unwrap();
-
-        let mut session = ClangdSession::new(config).await.unwrap();
+        let (test_project, mut session) = create_integration_test_session().await.unwrap();
 
         let file_path = test_project.project_root.join("src/Math.cpp");
         let file_content = std::fs::read_to_string(&file_path).unwrap();
@@ -528,25 +639,19 @@ mod tests {
     #[cfg(all(test, feature = "clangd-integration-tests"))]
     #[tokio::test]
     async fn test_file_change_detection() {
-        use crate::test_utils::integration::TestProject;
+        use crate::clangd::testing::test_helpers::*;
         use std::fs;
 
-        let test_project = TestProject::new().await.unwrap();
-        test_project.cmake_configure().await.unwrap();
+        let test_project = create_integration_test_project().await.unwrap();
 
         // Create a test file
         let test_file = test_project.project_root.join("test_change.cpp");
         let initial_content = "// Initial content\nint main() { return 0; }";
         fs::write(&test_file, initial_content).unwrap();
 
-        let config = ClangdConfigBuilder::new()
-            .working_directory(&test_project.project_root)
-            .build_directory(&test_project.build_dir)
-            .clangd_path(crate::test_utils::get_test_clangd_path())
-            .build()
+        let mut session = create_integration_test_session_from_project(&test_project)
+            .await
             .unwrap();
-
-        let mut session = ClangdSession::new(config).await.unwrap();
 
         // Open the file initially
         session.ensure_file_ready(&test_file).await.unwrap();
@@ -567,19 +672,9 @@ mod tests {
     #[cfg(all(test, feature = "clangd-integration-tests"))]
     #[tokio::test]
     async fn test_non_existent_file_error() {
-        use crate::test_utils::integration::TestProject;
+        use crate::clangd::testing::test_helpers::*;
 
-        let test_project = TestProject::new().await.unwrap();
-        test_project.cmake_configure().await.unwrap();
-
-        let config = ClangdConfigBuilder::new()
-            .working_directory(&test_project.project_root)
-            .build_directory(&test_project.build_dir)
-            .clangd_path(crate::test_utils::get_test_clangd_path())
-            .build()
-            .unwrap();
-
-        let mut session = ClangdSession::new(config).await.unwrap();
+        let (test_project, mut session) = create_integration_test_session().await.unwrap();
 
         let non_existent = test_project.project_root.join("does_not_exist.cpp");
 
