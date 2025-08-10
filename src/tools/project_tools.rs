@@ -5,7 +5,7 @@ use rust_mcp_sdk::schema::{CallToolResult, TextContent, schema_utils::CallToolEr
 use tracing::{info, instrument};
 
 use super::utils::serialize_result;
-use crate::project::MetaProject;
+use crate::project::ProjectWorkspace;
 
 #[mcp_tool(
     name = "get_project_details",
@@ -51,7 +51,7 @@ use crate::project::MetaProject;
 
                    INPUT REQUIREMENTS:
                    • No parameters required - returns complete project analysis
-                   • Uses MetaProject workspace scanning results
+                   • Uses ProjectWorkspace scanning results
                    • Returns all discovered components and global configuration"
 )]
 #[derive(Debug, ::serde::Deserialize, ::serde::Serialize, JsonSchema)]
@@ -80,7 +80,10 @@ pub struct GetProjectDetailsTool {
 
 impl GetProjectDetailsTool {
     #[instrument(name = "get_project_details", skip(self, meta_project))]
-    pub fn call_tool(&self, meta_project: &MetaProject) -> Result<CallToolResult, CallToolError> {
+    pub fn call_tool(
+        &self,
+        meta_project: &ProjectWorkspace,
+    ) -> Result<CallToolResult, CallToolError> {
         // Determine if we need to re-scan based on different parameters
         let requested_path = self.path.as_ref().map(std::path::PathBuf::from);
         let requested_depth = self.depth.unwrap_or(meta_project.scan_depth as u32) as usize;
@@ -104,22 +107,22 @@ impl GetProjectDetailsTool {
 
             Some(self.perform_fresh_scan(scan_root, requested_depth)?)
         } else {
-            // Use cached MetaProject
-            info!("Using cached MetaProject scan results");
+            // Use cached ProjectWorkspace
+            info!("Using cached ProjectWorkspace scan results");
             None
         };
 
         let effective_meta_project = fresh_scan.as_ref().unwrap_or(meta_project);
         let rescanned_fresh = fresh_scan.is_some();
 
-        // Serialize MetaProject directly
+        // Serialize ProjectWorkspace directly
         let mut content = serde_json::to_value(effective_meta_project).map_err(|e| {
             CallToolError::new(std::io::Error::other(format!(
                 "Failed to serialize project details: {e}"
             )))
         })?;
 
-        // Add the rescanned flag which isn't part of the core MetaProject
+        // Add the rescanned flag which isn't part of the core ProjectWorkspace
         if let Some(obj) = content.as_object_mut() {
             obj.insert(
                 "rescanned".to_string(),
@@ -144,7 +147,7 @@ impl GetProjectDetailsTool {
         &self,
         scan_root: &std::path::Path,
         depth: usize,
-    ) -> Result<crate::project::MetaProject, CallToolError> {
+    ) -> Result<crate::project::ProjectWorkspace, CallToolError> {
         use crate::project::ProjectScanner;
 
         // Create project scanner with default providers

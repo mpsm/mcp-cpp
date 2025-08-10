@@ -19,7 +19,7 @@ mod test_utils;
 
 use clap::Parser;
 use logging::{LogConfig, init_logging};
-use project::{MetaProject, ProjectScanner};
+use project::{ProjectScanner, ProjectWorkspace};
 use rust_mcp_sdk::schema::{
     Implementation, InitializeResult, LATEST_PROTOCOL_VERSION, ServerCapabilities,
     ServerCapabilitiesTools,
@@ -82,11 +82,11 @@ fn detect_global_compilation_database_from_args(
     }
 }
 
-/// Create MetaProject with all project setup logic centralized
-fn create_meta_project(
+/// Create ProjectWorkspace with all project setup logic centralized
+fn create_project_workspace(
     project_root: PathBuf,
     global_compilation_db: Option<PathBuf>,
-) -> MetaProject {
+) -> ProjectWorkspace {
     info!(
         "Scanning project root for build configurations: {} (depth: 3)",
         project_root.display()
@@ -96,15 +96,15 @@ fn create_meta_project(
     let scanner = ProjectScanner::with_default_providers();
 
     // Scan the project root with depth 3
-    let mut meta_project = match scanner.scan_project(&project_root, 3, None) {
-        Ok(meta_project) => {
+    let mut project_workspace = match scanner.scan_project(&project_root, 3, None) {
+        Ok(project_workspace) => {
             info!(
                 "Successfully discovered {} components across {} providers: {:?}",
-                meta_project.component_count(),
-                meta_project.get_provider_types().len(),
-                meta_project.get_provider_types()
+                project_workspace.component_count(),
+                project_workspace.get_provider_types().len(),
+                project_workspace.get_provider_types()
             );
-            meta_project
+            project_workspace
         }
         Err(e) => {
             eprintln!(
@@ -112,8 +112,8 @@ fn create_meta_project(
                 project_root.display(),
                 e
             );
-            // Create empty MetaProject as fallback
-            MetaProject::new(project_root, Vec::new(), 3)
+            // Create empty ProjectWorkspace as fallback
+            ProjectWorkspace::new(project_root, Vec::new(), 3)
         }
     };
 
@@ -123,13 +123,13 @@ fn create_meta_project(
             "Using global compilation database: {}",
             global_path.display()
         );
-        meta_project.global_compilation_database = Some(
+        project_workspace.global_compilation_database = Some(
             crate::project::CompilationDatabase::new(global_path)
                 .expect("Failed to load global compilation database"),
         );
     }
 
-    meta_project
+    project_workspace
 }
 
 #[tokio::main]
@@ -162,12 +162,12 @@ async fn main() -> SdkResult<()> {
     let global_compilation_db =
         detect_global_compilation_database_from_args(&project_root, &compilation_database_arg);
 
-    // Create MetaProject with all project setup
-    let meta_project = create_meta_project(project_root, global_compilation_db);
+    // Create ProjectWorkspace with all project setup
+    let project_workspace = create_project_workspace(project_root, global_compilation_db);
 
     info!(
         "Starting C++ MCP Server with project root: {}",
-        meta_project.project_root_path.display()
+        project_workspace.project_root_path.display()
     );
 
     // Define server details and capabilities
@@ -189,8 +189,8 @@ async fn main() -> SdkResult<()> {
     // Create stdio transport
     let transport = StdioTransport::new(TransportOptions::default())?;
 
-    // Create custom handler with MetaProject
-    let handler = CppServerHandler::new(meta_project);
+    // Create custom handler with ProjectWorkspace
+    let handler = CppServerHandler::new(project_workspace);
 
     // Create MCP server
     let server: ServerRuntime = server_runtime::create_server(server_details, transport, handler);

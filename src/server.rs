@@ -7,7 +7,7 @@ use rust_mcp_sdk::{McpServer, mcp_server::ServerHandler};
 use tracing::{Level, info};
 
 use crate::legacy_lsp::manager::ClangdManager;
-use crate::project::MetaProject;
+use crate::project::ProjectWorkspace;
 use crate::register_tools;
 use crate::tools::analyze_symbols::AnalyzeSymbolContextTool;
 use crate::tools::project_tools::GetProjectDetailsTool;
@@ -20,14 +20,14 @@ use tokio::sync::Mutex;
 
 pub struct CppServerHandler {
     clangd_manager: Arc<Mutex<ClangdManager>>,
-    meta_project: MetaProject,
+    project_workspace: ProjectWorkspace,
 }
 
 impl CppServerHandler {
-    pub fn new(meta_project: MetaProject) -> Self {
+    pub fn new(project_workspace: ProjectWorkspace) -> Self {
         Self {
             clangd_manager: Arc::new(Mutex::new(ClangdManager::new())),
-            meta_project,
+            project_workspace,
         }
     }
 }
@@ -37,7 +37,7 @@ impl McpToolHandler<GetProjectDetailsTool> for CppServerHandler {
     const TOOL_NAME: &'static str = "get_project_details";
 
     fn call_tool_sync(&self, tool: GetProjectDetailsTool) -> Result<CallToolResult, CallToolError> {
-        tool.call_tool(&self.meta_project)
+        tool.call_tool(&self.project_workspace)
     }
 }
 

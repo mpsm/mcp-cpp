@@ -9,9 +9,9 @@ pub mod compilation_database;
 pub mod component;
 pub mod error;
 pub mod meson_provider;
-pub mod meta_project;
 pub mod provider;
 pub mod scanner;
+pub mod workspace;
 
 #[allow(unused_imports)]
 pub use cmake_provider::CmakeProvider;
@@ -24,11 +24,11 @@ pub use error::ProjectError;
 #[allow(unused_imports)]
 pub use meson_provider::MesonProvider;
 #[allow(unused_imports)]
-pub use meta_project::MetaProject;
-#[allow(unused_imports)]
 pub use provider::{ProjectComponentProvider, ProjectProviderRegistry};
 #[allow(unused_imports)]
 pub use scanner::{ProjectScanner, ScanOptions};
+#[allow(unused_imports)]
+pub use workspace::ProjectWorkspace;
 
 // Suppress unused warnings since this module is not integrated yet
 #[allow(unused_imports)]
@@ -36,8 +36,8 @@ use cmake_provider::CmakeProvider as _UnusedCmakeProvider;
 #[allow(unused_imports)]
 use meson_provider::MesonProvider as _UnusedMesonProvider;
 #[allow(unused_imports)]
-use meta_project::MetaProject as _UnusedMetaProject;
-#[allow(unused_imports)]
 use provider::ProjectProviderRegistry as _UnusedRegistry;
 #[allow(unused_imports)]
 use scanner::{ProjectScanner as _UnusedScanner, ScanOptions as _UnusedScanOptions};
+#[allow(unused_imports)]
+use workspace::ProjectWorkspace as _UnusedProjectWorkspace;

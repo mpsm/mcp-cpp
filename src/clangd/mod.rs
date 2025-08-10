@@ -58,4 +58,4 @@ pub use version::{ClangdVersion, ClangdVersionError};
 // Re-export testing utilities when in test mode
 #[cfg(test)]
 #[allow(unused_imports)]
-pub use testing::{MockClangdSession, MockMetaProject};
+pub use testing::{MockClangdSession, MockProjectWorkspace};

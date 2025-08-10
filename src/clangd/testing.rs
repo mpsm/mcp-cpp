@@ -11,7 +11,7 @@ use std::time::Instant;
 use crate::clangd::config::ClangdConfig;
 use crate::clangd::error::ClangdSessionError;
 use crate::clangd::session::ClangdSessionTrait;
-use crate::project::{MetaProject, ProjectComponent, ProjectError};
+use crate::project::{ProjectComponent, ProjectError, ProjectWorkspace};
 
 // ============================================================================
 // Mock Session Implementation
@@ -147,17 +147,17 @@ impl MockLspClient {
 }
 
 // ============================================================================
-// Mock MetaProject for Testing
+// Mock ProjectWorkspace for Testing
 // ============================================================================
 
-/// Mock MetaProject for testing project detection
-pub struct MockMetaProject {
+/// Mock ProjectWorkspace for testing project detection
+pub struct MockProjectWorkspace {
     project_root: PathBuf,
     components: Vec<ProjectComponent>,
 }
 
-impl MockMetaProject {
-    /// Create a new mock meta project
+impl MockProjectWorkspace {
+    /// Create a new mock project workspace
     pub fn new(project_root: PathBuf) -> Self {
         Self {
             project_root,
@@ -198,9 +198,9 @@ impl MockMetaProject {
         Ok(())
     }
 
-    /// Convert to a real MetaProject
-    pub fn into_meta_project(self) -> MetaProject {
-        MetaProject::new(self.project_root, self.components, 1)
+    /// Convert to a real ProjectWorkspace
+    pub fn into_project_workspace(self) -> ProjectWorkspace {
+        ProjectWorkspace::new(self.project_root, self.components, 1)
     }
 
     /// Get components for a specific provider
@@ -368,7 +368,7 @@ mod tests {
     #[test]
     fn test_mock_meta_project() {
         let project_root = PathBuf::from("/test/project");
-        let mock_meta = MockMetaProject::new(project_root.clone());
+        let mock_meta = MockProjectWorkspace::new(project_root.clone());
 
         // Note: This test requires creating actual files for ProjectComponent validation
         // In a real test, you'd need to create the compile_commands.json file

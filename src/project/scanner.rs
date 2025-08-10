@@ -1,7 +1,7 @@
 use std::path::Path;
 use walkdir::WalkDir;
 
-use crate::project::{MetaProject, ProjectError, ProjectProviderRegistry};
+use crate::project::{ProjectError, ProjectProviderRegistry, ProjectWorkspace};
 
 /// Options for configuring project scanning behavior
 #[derive(Debug, Clone)]
@@ -29,7 +29,7 @@ impl Default for ScanOptions {
 /// Project scanner for discovering multiple build configurations in a workspace
 ///
 /// The scanner uses a provider registry to detect different build systems
-/// and creates a MetaProject containing all discovered components.
+/// and creates a ProjectWorkspace containing all discovered components.
 #[allow(dead_code)]
 pub struct ProjectScanner {
     provider_registry: ProjectProviderRegistry,
@@ -61,13 +61,13 @@ impl ProjectScanner {
     /// * `options` - Optional scanning configuration
     ///
     /// # Returns
-    /// A MetaProject containing all discovered components
+    /// A ProjectWorkspace containing all discovered components
     pub fn scan_project(
         &self,
         root_path: &Path,
         depth: usize,
         options: Option<ScanOptions>,
-    ) -> Result<MetaProject, ProjectError> {
+    ) -> Result<ProjectWorkspace, ProjectError> {
         let options = options.unwrap_or_default();
 
         // Validate root path
@@ -146,7 +146,11 @@ impl ProjectScanner {
             }
         }
 
-        Ok(MetaProject::new(root_path.to_path_buf(), components, depth))
+        Ok(ProjectWorkspace::new(
+            root_path.to_path_buf(),
+            components,
+            depth,
+        ))
     }
 
     /// Get the names of all registered providers

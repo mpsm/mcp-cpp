@@ -5,13 +5,13 @@ use std::path::PathBuf;
 
 use crate::project::{CompilationDatabase, ProjectComponent};
 
-/// Meta project representing a workspace with multiple build configurations
+/// Project workspace representing a workspace with multiple build configurations
 ///
-/// A MetaProject contains the root directory that was scanned and all discovered
+/// A ProjectWorkspace contains the root directory that was scanned and all discovered
 /// ProjectComponents within that workspace. This allows managing complex projects
 /// that may have multiple build systems or configurations.
 #[derive(Debug, Serialize, Deserialize)]
-pub struct MetaProject {
+pub struct ProjectWorkspace {
     /// Root directory that was scanned to discover components
     pub project_root_path: PathBuf,
 
@@ -21,7 +21,7 @@ pub struct MetaProject {
     /// Depth used during the scan that discovered these components
     pub scan_depth: usize,
 
-    /// Timestamp when this meta project was discovered
+    /// Timestamp when this project workspace was discovered
     pub discovered_at: DateTime<Utc>,
 
     /// Optional global compilation database that overrides component-specific databases
@@ -33,8 +33,8 @@ pub struct MetaProject {
 }
 
 #[allow(dead_code)]
-impl MetaProject {
-    /// Create a new meta project
+impl ProjectWorkspace {
+    /// Create a new project workspace
     pub fn new(
         project_root_path: PathBuf,
         components: Vec<ProjectComponent>,
@@ -49,7 +49,7 @@ impl MetaProject {
         }
     }
 
-    /// Create a new meta project with optional global compilation database
+    /// Create a new project workspace with optional global compilation database
     pub fn with_global_compilation_database(
         project_root_path: PathBuf,
         components: Vec<ProjectComponent>,
@@ -129,7 +129,7 @@ impl MetaProject {
             .to_string()
     }
 
-    /// Get all provider types present in this meta project
+    /// Get all provider types present in this project workspace
     pub fn get_provider_types(&self) -> Vec<String> {
         let mut types: Vec<String> = self
             .components
@@ -142,7 +142,7 @@ impl MetaProject {
         types
     }
 
-    /// Validate all components in this meta project
+    /// Validate all components in this project workspace
     ///
     /// Note: Since ProjectComponent constructor already validates paths,
     /// this mainly serves as a health check for existing components.
