@@ -13,7 +13,8 @@ use crate::clangd::config::ClangdConfig;
 use crate::clangd::error::ClangdSessionError;
 use crate::clangd::file_manager::ClangdFileManager;
 use crate::clangd::index::IndexMonitor;
-use crate::io::{ChildProcessManager, ProcessManager, StderrMonitor, StdioTransport, StopMode};
+use crate::clangd::session_builder::ClangdSessionBuilder;
+use crate::io::{ChildProcessManager, ProcessManager, StdioTransport, StopMode};
 use crate::lsp_v2::{LspClient, traits::LspClientTrait};
 
 /// Type alias for testing sessions with mock dependencies
@@ -125,146 +126,16 @@ where
     }
 }
 
-/// Create a new clangd session with mock dependencies for testing
-///
-/// This is a convenience factory for unit tests that need a session with
-/// injected mock dependencies instead of real process and LSP client.
-#[cfg(test)]
-pub fn create_test_session(config: ClangdConfig) -> TestSession {
-    use crate::io::process::MockProcessManager;
-    use crate::lsp_v2::testing::MockLspClient;
-
-    let process_manager = MockProcessManager::new();
-    let mut lsp_client = MockLspClient::new();
-    lsp_client.set_initialized(true); // Mock is pre-initialized
-    let file_manager = ClangdFileManager::new();
-    let index_monitor = IndexMonitor::new();
-
-    ClangdSession::with_dependencies(
-        config,
-        process_manager,
-        lsp_client,
-        file_manager,
-        index_monitor,
-    )
-}
-
 impl ClangdSession {
-    /// Create a new clangd session with real dependencies
+    /// Create a new clangd session with real dependencies using the builder
     ///
     /// Performs complete initialization: process start, LSP setup, and connection.
     /// If this method succeeds, the session is fully operational.
     pub async fn new(config: ClangdConfig) -> Result<Self, ClangdSessionError> {
-        info!("Starting clangd session");
-        debug!("Working directory: {:?}", config.working_directory);
-        debug!("Build directory: {:?}", config.build_directory);
-        debug!("Clangd path: {}", config.clangd_path);
-
-        // Step 1: Create and start the clangd process with working directory
-        let args = config.get_clangd_args();
-        let mut process_manager = ChildProcessManager::new(
-            config.clangd_path.clone(),
-            args,
-            Some(config.working_directory.clone()),
-        );
-
-        // Install stderr handler before starting process
-        if let Some(handler) = &config.stderr_handler {
-            let handler_clone = Arc::clone(handler);
-            process_manager.on_stderr_line(move |line| {
-                handler_clone(line);
-            });
-        }
-
-        debug!("Starting clangd process");
-        process_manager.start().await?;
-
-        // Step 2: Create stdio transport from process
-        debug!("Creating stdio transport");
-        let transport = process_manager.create_stdio_transport()?;
-
-        // Step 3: Create LSP client with transport
-        debug!("Creating LSP client");
-        let mut lsp_client = LspClient::new(transport);
-
-        // Step 4: Initialize the LSP connection
-        debug!("Initializing LSP connection");
-        let root_uri = config.get_root_uri();
-
-        // Use the configured timeout for initialization
-        let init_result = tokio::time::timeout(
-            config.lsp_config.initialization_timeout,
-            lsp_client.initialize(root_uri),
-        )
-        .await
-        .map_err(|_| {
-            ClangdSessionError::operation_timeout(
-                "LSP initialization",
-                config.lsp_config.initialization_timeout,
-            )
-        })??;
-
-        debug!(
-            "LSP initialization completed: {:?}",
-            init_result.capabilities
-        );
-
-        // Step 5: Create and wire IndexMonitor
-        debug!("Creating and wiring IndexMonitor");
-        let index_monitor = IndexMonitor::new();
-        let notification_handler = index_monitor.create_handler();
-        lsp_client
-            .register_notification_handler(notification_handler)
-            .await;
-
-        // Wire request handler for window/workDoneProgress/create
-        lsp_client
-            .register_request_handler(move |request| {
-                use crate::lsp_v2::protocol::{JsonRpcErrorObject, JsonRpcResponse};
-
-                if request.method == "window/workDoneProgress/create" {
-                    debug!(
-                        "Accepting workDoneProgress/create request: {:?}",
-                        request.id
-                    );
-                    // Accept the progress token by sending success response
-                    JsonRpcResponse {
-                        jsonrpc: "2.0".to_string(),
-                        id: request.id,
-                        result: Some(serde_json::Value::Null),
-                        error: None,
-                    }
-                } else {
-                    // Unsupported request - return method not found error
-                    JsonRpcResponse {
-                        jsonrpc: "2.0".to_string(),
-                        id: request.id,
-                        result: None,
-                        error: Some(JsonRpcErrorObject {
-                            code: -32601,
-                            message: format!("Method not found: {}", request.method),
-                            data: None,
-                        }),
-                    }
-                }
-            })
-            .await;
-
-        debug!("IndexMonitor and request handler wired successfully");
-
-        info!("Clangd session started successfully");
-
-        // Step 6: Create file manager
-        let file_manager = ClangdFileManager::new();
-
-        // Step 7: Return fully initialized session using dependency injection constructor
-        Ok(ClangdSession::with_dependencies(
-            config,
-            process_manager,
-            lsp_client,
-            file_manager,
-            index_monitor,
-        ))
+        ClangdSessionBuilder::new()
+            .with_config(config)
+            .build()
+            .await
     }
 }
 
@@ -554,8 +425,21 @@ mod tests {
             crate::test_utils::project::create_mock_build_folder();
         let config = create_test_config(&project_root, &build_dir, TestConfigType::Mock).unwrap();
 
-        // Use test factory for easy mock session creation
-        let session = create_test_session(config);
+        // Use proper fluent builder API with mock dependencies
+        use crate::io::process::MockProcessManager;
+        use crate::lsp_v2::testing::MockLspClient;
+
+        let process_manager = MockProcessManager::new();
+        let mut lsp_client = MockLspClient::new();
+        lsp_client.set_initialized(true); // Mock is pre-initialized
+
+        let session = ClangdSessionBuilder::new()
+            .with_config(config)
+            .with_process_manager(process_manager)
+            .with_lsp_client(lsp_client)
+            .build()
+            .await
+            .unwrap();
 
         // Session should be immediately ready with mock dependencies
         assert_eq!(session.working_directory(), &project_root);
@@ -580,8 +464,21 @@ mod tests {
             crate::test_utils::project::create_mock_build_folder();
         let config = create_test_config(&project_root, &build_dir, TestConfigType::Mock).unwrap();
 
-        // Demonstrate comprehensive unit testing with mock dependencies
-        let mut session = create_test_session(config);
+        // Demonstrate comprehensive unit testing with mock dependencies using fluent API
+        use crate::io::process::MockProcessManager;
+        use crate::lsp_v2::testing::MockLspClient;
+
+        let process_manager = MockProcessManager::new();
+        let mut lsp_client = MockLspClient::new();
+        lsp_client.set_initialized(true); // Mock is pre-initialized
+
+        let mut session = ClangdSessionBuilder::new()
+            .with_config(config)
+            .with_process_manager(process_manager)
+            .with_lsp_client(lsp_client)
+            .build()
+            .await
+            .unwrap();
 
         // Test session behavior with mocked dependencies
         assert!(session.client().is_initialized());

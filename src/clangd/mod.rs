@@ -38,6 +38,7 @@ pub mod error;
 pub mod file_manager;
 pub mod index;
 pub mod session;
+pub mod session_builder;
 pub mod testing;
 pub mod version;
 
@@ -52,6 +53,8 @@ pub use file_manager::ClangdFileManager;
 pub use index::ProjectIndex;
 #[allow(unused_imports)]
 pub use session::{ClangdSession, ClangdSessionTrait};
+#[allow(unused_imports)]
+pub use session_builder::ClangdSessionBuilder;
 #[allow(unused_imports)]
 pub use version::{ClangdVersion, ClangdVersionError};
 
