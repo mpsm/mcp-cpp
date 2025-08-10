@@ -223,15 +223,14 @@ pub mod test_helpers {
 
     /// Common clangd path constants for test scenarios
     pub struct TestClangdPaths;
-    
+
     impl TestClangdPaths {
         /// Mock clangd path for unit tests (no real process)
         pub const MOCK: &'static str = "mock-clangd";
-        
+
         /// Invalid clangd path for failure testing
         pub const INVALID: &'static str = "nonexistent-clangd-binary";
     }
-
 
     /// Test configuration type for different testing scenarios
     pub enum TestConfigType<'a> {
@@ -255,7 +254,16 @@ pub mod test_helpers {
         let clangd_path = match config_type {
             TestConfigType::Mock => TestClangdPaths::MOCK,
             #[cfg(feature = "clangd-integration-tests")]
-            TestConfigType::Integration => &crate::test_utils::get_test_clangd_path(),
+            TestConfigType::Integration => {
+                #[cfg(test)]
+                {
+                    &crate::test_utils::get_test_clangd_path()
+                }
+                #[cfg(not(test))]
+                {
+                    "/usr/bin/clangd" // fallback for non-test builds
+                }
+            }
             TestConfigType::Custom(path) => path,
             TestConfigType::Failing => TestClangdPaths::INVALID,
         };
@@ -266,7 +274,6 @@ pub mod test_helpers {
             .clangd_path(clangd_path)
             .build()
     }
-
 
     /// Create a MockClangdSession for trait-level testing
     pub fn create_mock_session(
@@ -289,7 +296,7 @@ pub mod test_helpers {
         use crate::clangd::index::IndexMonitor;
         use crate::io::process::MockProcessManager;
         use crate::lsp_v2::testing::MockLspClient;
-        
+
         let mock_process = MockProcessManager::new();
         let mut mock_lsp = MockLspClient::new();
         mock_lsp.set_initialized(true);
@@ -307,18 +314,23 @@ pub mod test_helpers {
 
     /// Create a configured TestProject and ClangdSession for integration tests
     #[cfg(all(test, feature = "clangd-integration-tests"))]
-    pub async fn create_integration_test_session(
-    ) -> Result<(crate::test_utils::integration::TestProject, crate::clangd::session::ClangdSession), Box<dyn std::error::Error>> {
+    pub async fn create_integration_test_session() -> Result<
+        (
+            crate::test_utils::integration::TestProject,
+            crate::clangd::session::ClangdSession,
+        ),
+        Box<dyn std::error::Error>,
+    > {
         let test_project = crate::test_utils::integration::TestProject::new().await?;
         test_project.cmake_configure().await?;
-        
+
         let config = create_test_config(
             &test_project.project_root,
             &test_project.build_dir,
             TestConfigType::Integration,
         )?;
         let session = crate::clangd::session::ClangdSession::new(config).await?;
-        
+
         Ok((test_project, session))
     }
 }
@@ -335,7 +347,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_mock_session_lifecycle() {
-        let (_temp_dir, project_root, build_dir) = crate::test_utils::project::create_mock_build_folder();
+        let (_temp_dir, project_root, build_dir) =
+            crate::test_utils::project::create_mock_build_folder();
         let session = create_mock_session(&project_root, &build_dir).unwrap();
 
         // Session is immediately ready when constructed
@@ -352,7 +365,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_mock_session_construction_failure() {
-        let (_temp_dir, project_root, build_dir) = crate::test_utils::project::create_mock_build_folder();
+        let (_temp_dir, project_root, build_dir) =
+            crate::test_utils::project::create_mock_build_folder();
         let config = create_test_config(&project_root, &build_dir, TestConfigType::Mock).unwrap();
 
         // Constructor failure means no session object exists
@@ -364,7 +378,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_mock_session_close_failure() {
-        let (_temp_dir, project_root, build_dir) = crate::test_utils::project::create_mock_build_folder();
+        let (_temp_dir, project_root, build_dir) =
+            crate::test_utils::project::create_mock_build_folder();
         let mut session = create_mock_session(&project_root, &build_dir).unwrap();
 
         // Configure the session to fail on close
@@ -377,7 +392,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_mock_session_stderr_handling() {
-        let (_temp_dir, project_root, build_dir) = crate::test_utils::project::create_mock_build_folder();
+        let (_temp_dir, project_root, build_dir) =
+            crate::test_utils::project::create_mock_build_folder();
         let mut session = create_mock_session(&project_root, &build_dir).unwrap();
 
         let stderr_lines = Arc::new(Mutex::new(Vec::<String>::new()));
@@ -403,7 +419,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_resource_cleanup_on_construction_failure() {
-        let (_temp_dir, project_root, build_dir) = crate::test_utils::project::create_mock_build_folder();
+        let (_temp_dir, project_root, build_dir) =
+            crate::test_utils::project::create_mock_build_folder();
         let config = create_test_config(&project_root, &build_dir, TestConfigType::Mock).unwrap();
 
         // Constructor failure means no session object exists
@@ -416,7 +433,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_session_drop_behavior() {
-        let (_temp_dir, project_root, build_dir) = crate::test_utils::project::create_mock_build_folder();
+        let (_temp_dir, project_root, build_dir) =
+            crate::test_utils::project::create_mock_build_folder();
         let session = create_mock_session(&project_root, &build_dir).unwrap();
 
         // Session is immediately ready when constructed
@@ -443,7 +461,8 @@ mod tests {
     async fn test_trait_design_violation_fix() {
         // This test demonstrates the fix for the critical trait design violation
         // Previously, calling client() on MockClangdSession would panic
-        let (_temp_dir, project_root, build_dir) = crate::test_utils::project::create_mock_build_folder();
+        let (_temp_dir, project_root, build_dir) =
+            crate::test_utils::project::create_mock_build_folder();
         let session = create_mock_session(&project_root, &build_dir).unwrap();
 
         // This should NOT panic - demonstrates the fix ✅
@@ -461,7 +480,8 @@ mod tests {
     #[tokio::test]
     async fn test_polymorphic_session_usage() {
         // Test that we can use sessions polymorphically through the trait
-        let (_temp_dir, project_root, build_dir) = crate::test_utils::project::create_mock_build_folder();
+        let (_temp_dir, project_root, build_dir) =
+            crate::test_utils::project::create_mock_build_folder();
         let session = create_mock_session(&project_root, &build_dir).unwrap();
 
         // This function accepts any session implementing ClangdSessionTrait
