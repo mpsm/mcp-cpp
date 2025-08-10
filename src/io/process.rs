@@ -159,6 +159,12 @@ pub trait ProcessManager: Send + Sync {
     fn on_process_exit<H>(&mut self, handler: H)
     where
         H: ProcessExitHandler + 'static;
+
+    /// Synchronous force kill for Drop trait implementations
+    ///
+    /// This is a simplified version of stop() that skips async transport cleanup
+    /// and directly kills the process. Intended for use in Drop implementations.
+    fn kill_sync(&mut self);
 }
 
 /// Manages child processes spawned via Command
@@ -517,15 +523,8 @@ impl ProcessManager for ChildProcessManager {
     {
         self.exit_handler = Some(Arc::new(handler));
     }
-}
 
-// Additional methods for ChildProcessManager (not part of ProcessManager trait)
-impl ChildProcessManager {
-    /// Synchronous force kill for Drop trait implementations
-    ///
-    /// This is a simplified version of stop() that skips async transport cleanup
-    /// and directly kills the process. Intended for use in Drop implementations.
-    pub fn kill_sync(&mut self) {
+    fn kill_sync(&mut self) {
         let pid = match self.get_state().pid() {
             Some(pid) => pid,
             None => return, // Already stopped
@@ -567,6 +566,85 @@ impl StderrMonitor for ChildProcessManager {
         F: Fn(String) + Send + Sync + 'static,
     {
         self.stderr_handler = Some(Arc::new(handler));
+    }
+}
+
+// ============================================================================
+// Mock Process Manager (for testing)
+// ============================================================================
+
+/// Mock process manager for testing
+#[cfg(test)]
+#[allow(dead_code)]
+pub struct MockProcessManager {
+    running: bool,
+    process_id: Option<u32>,
+}
+
+#[cfg(test)]
+impl MockProcessManager {
+    /// Create a new mock process manager
+    #[allow(dead_code)]
+    pub fn new() -> Self {
+        Self {
+            running: false,
+            process_id: None,
+        }
+    }
+}
+
+#[cfg(test)]
+impl Default for MockProcessManager {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+#[cfg(test)]
+#[async_trait]
+impl ProcessManager for MockProcessManager {
+    type Error = ProcessError;
+
+    async fn start(&mut self) -> Result<(), Self::Error> {
+        if self.running {
+            return Err(ProcessError::AlreadyStarted);
+        }
+        self.running = true;
+        self.process_id = Some(12345); // Mock PID
+        Ok(())
+    }
+
+    async fn stop(&mut self, _mode: StopMode) -> Result<(), Self::Error> {
+        self.running = false;
+        self.process_id = None;
+        Ok(())
+    }
+
+    fn is_running(&self) -> bool {
+        self.running
+    }
+
+    fn process_id(&self) -> Option<u32> {
+        self.process_id
+    }
+
+    fn create_stdio_transport(&mut self) -> Result<StdioTransport, Self::Error> {
+        // For testing purposes, we can't create a real StdioTransport
+        // In practice, tests would use MockTransport directly
+        Err(ProcessError::NotStarted)
+    }
+
+    fn on_process_exit<H>(&mut self, _handler: H)
+    where
+        H: ProcessExitHandler + 'static,
+    {
+        // Mock implementation - no-op for testing
+    }
+
+    fn kill_sync(&mut self) {
+        // Mock implementation - simply reset state like stop()
+        self.running = false;
+        self.process_id = None;
     }
 }
 

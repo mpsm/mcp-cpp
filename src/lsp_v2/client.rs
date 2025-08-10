@@ -1,10 +1,12 @@
-//! High-level LSP client
+//! LSP client implementation
 //!
-//! Provides a typed, high-level API for Language Server Protocol
-//! communication using the lsp-types crate for full type safety.
+//! Provides LSP client functionality accessed through the LspClientTrait.
+//! All LSP operations are implemented in the trait to avoid method duplication.
 
 use crate::io::transport::Transport;
-use crate::lsp_v2::protocol::{JsonRpcClient, JsonRpcError};
+use crate::lsp_v2::protocol::{
+    JsonRpcClient, JsonRpcError, JsonRpcNotification, JsonRpcRequest, JsonRpcResponse,
+};
 use lsp_types::{
     ClientCapabilities, DidChangeTextDocumentParams, DidCloseTextDocumentParams,
     DidOpenTextDocumentParams, InitializeParams, InitializeResult, InitializedParams,
@@ -41,10 +43,10 @@ pub enum LspError {
 }
 
 // ============================================================================
-// High-level LSP Client
+// LSP Client Structure
 // ============================================================================
 
-/// High-level LSP client that handles LSP protocol over any transport
+/// LSP client structure - functionality accessed through LspClientTrait
 #[allow(dead_code)]
 pub struct LspClient<T: Transport> {
     /// JSON-RPC client for communication
@@ -57,7 +59,6 @@ pub struct LspClient<T: Transport> {
     server_capabilities: Option<lsp_types::ServerCapabilities>,
 }
 
-#[allow(dead_code)]
 impl<T: Transport + 'static> LspClient<T> {
     /// Create a new LSP client with a transport
     pub fn new(transport: T) -> Self {
@@ -67,19 +68,43 @@ impl<T: Transport + 'static> LspClient<T> {
             server_capabilities: None,
         }
     }
+}
 
-    /// Initialize the LSP connection
-    pub async fn initialize(
+// ============================================================================
+// LspClientTrait Implementation
+// ============================================================================
+
+use crate::lsp_v2::traits::LspClientTrait;
+
+#[async_trait::async_trait]
+impl<T: Transport + 'static> LspClientTrait for LspClient<T> {
+    fn is_initialized(&self) -> bool {
+        self.initialized
+    }
+
+    async fn is_connected(&self) -> bool {
+        self.rpc_client.is_connected().await
+    }
+
+    fn server_capabilities(&self) -> Option<&lsp_types::ServerCapabilities> {
+        self.server_capabilities.as_ref()
+    }
+
+    // ========================================================================
+    // Lifecycle Management
+    // ========================================================================
+
+    async fn initialize(
         &mut self,
         root_uri: Option<String>,
-    ) -> Result<InitializeResult, LspError> {
+    ) -> Result<lsp_types::InitializeResult, LspError> {
         if self.initialized {
             return Err(LspError::Protocol("Client already initialized".to_string()));
         }
 
         info!("Initializing LSP client");
 
-        // Create initialization parameters
+        // Build LSP initialize request
         let params = InitializeParams {
             process_id: Some(std::process::id()),
             #[allow(deprecated)]
@@ -147,7 +172,7 @@ impl<T: Transport + 'static> LspClient<T> {
         debug!("LSP server capabilities: {:?}", result.capabilities);
         self.server_capabilities = Some(result.capabilities.clone());
 
-        // Send initialized notification
+        // Complete initialization
         let initialized_params = InitializedParams {};
         self.rpc_client
             .notify("initialized", Some(initialized_params))
@@ -159,15 +184,12 @@ impl<T: Transport + 'static> LspClient<T> {
         Ok(result)
     }
 
-    /// Shutdown the LSP connection
-    pub async fn shutdown(&mut self) -> Result<(), LspError> {
+    async fn shutdown(&mut self) -> Result<(), LspError> {
         if !self.initialized {
             return Ok(());
         }
 
         info!("Shutting down LSP client");
-
-        // Send shutdown request
         let _: () = match self.rpc_client.request("shutdown", None::<Value>).await {
             Ok(result) => result,
             Err(JsonRpcError::Timeout) => {
@@ -178,7 +200,6 @@ impl<T: Transport + 'static> LspClient<T> {
             Err(e) => return Err(LspError::JsonRpc(e)),
         };
 
-        // Send exit notification
         self.rpc_client.notify("exit", None::<Value>).await?;
 
         self.initialized = false;
@@ -187,23 +208,7 @@ impl<T: Transport + 'static> LspClient<T> {
         Ok(())
     }
 
-    /// Check if the client is initialized
-    pub fn is_initialized(&self) -> bool {
-        self.initialized
-    }
-
-    /// Get server capabilities
-    pub fn server_capabilities(&self) -> Option<&lsp_types::ServerCapabilities> {
-        self.server_capabilities.as_ref()
-    }
-
-    /// Check if the connection is active
-    pub async fn is_connected(&self) -> bool {
-        self.rpc_client.is_connected().await
-    }
-
-    /// Close the connection (does not stop external process)
-    pub async fn close(&mut self) -> Result<(), LspError> {
+    async fn close(&mut self) -> Result<(), LspError> {
         if self.initialized {
             self.shutdown().await?;
         }
@@ -211,25 +216,21 @@ impl<T: Transport + 'static> LspClient<T> {
         Ok(())
     }
 
-    /// Get reference to the JSON-RPC client for advanced usage
-    pub fn rpc_client(&self) -> &JsonRpcClient<T> {
-        &self.rpc_client
+    async fn register_notification_handler<F>(&self, handler: F)
+    where
+        F: Fn(JsonRpcNotification) + Send + Sync + 'static,
+    {
+        self.rpc_client.on_notification(handler).await
     }
 
-    /// Get mutable reference to the JSON-RPC client for advanced usage
-    pub fn rpc_client_mut(&mut self) -> &mut JsonRpcClient<T> {
-        &mut self.rpc_client
+    async fn register_request_handler<F>(&self, handler: F)
+    where
+        F: Fn(JsonRpcRequest) -> JsonRpcResponse + Send + Sync + 'static,
+    {
+        self.rpc_client.on_request(handler).await
     }
 
-    // ========================================================================
-    // Document Synchronization Methods
-    // ========================================================================
-
-    /// Open a text document in the language server
-    ///
-    /// Sends a textDocument/didOpen notification to inform the server
-    /// that a document has been opened by the client.
-    pub async fn open_text_document(
+    async fn open_text_document(
         &mut self,
         uri: String,
         language_id: String,
@@ -259,11 +260,7 @@ impl<T: Transport + 'static> LspClient<T> {
         Ok(())
     }
 
-    /// Close a text document in the language server
-    ///
-    /// Sends a textDocument/didClose notification to inform the server
-    /// that a document has been closed by the client.
-    pub async fn close_text_document(&mut self, uri: String) -> Result<(), LspError> {
+    async fn close_text_document(&mut self, uri: String) -> Result<(), LspError> {
         if !self.initialized {
             return Err(LspError::NotInitialized);
         }
@@ -284,11 +281,7 @@ impl<T: Transport + 'static> LspClient<T> {
         Ok(())
     }
 
-    /// Notify the server that a text document has changed
-    ///
-    /// Sends a textDocument/didChange notification with the full new content
-    /// of the document.
-    pub async fn change_text_document(
+    async fn change_text_document(
         &mut self,
         uri: String,
         version: i32,
@@ -306,7 +299,7 @@ impl<T: Transport + 'static> LspClient<T> {
                 version,
             },
             content_changes: vec![TextDocumentContentChangeEvent {
-                range: None, // Full document sync
+                range: None,
                 range_length: None,
                 text,
             }],

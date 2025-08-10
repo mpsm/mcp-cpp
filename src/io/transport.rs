@@ -59,6 +59,7 @@ pub enum StdioTransportError {
 }
 
 /// Transport implementation using stdin/stdout streams
+#[derive(Debug)]
 pub struct StdioTransport {
     /// Channel for sending messages to stdin
     stdin_sender: Option<mpsc::UnboundedSender<String>>,

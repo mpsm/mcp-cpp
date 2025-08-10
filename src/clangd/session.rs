@@ -14,7 +14,7 @@ use crate::clangd::error::ClangdSessionError;
 use crate::clangd::file_manager::ClangdFileManager;
 use crate::clangd::index::IndexMonitor;
 use crate::io::{ChildProcessManager, ProcessManager, StderrMonitor, StdioTransport, StopMode};
-use crate::lsp_v2::LspClient;
+use crate::lsp_v2::{LspClient, traits::LspClientTrait};
 
 // ============================================================================
 // Clangd Session Trait
@@ -150,14 +150,12 @@ impl ClangdSession {
         let index_monitor = IndexMonitor::new();
         let notification_handler = index_monitor.create_handler();
         lsp_client
-            .rpc_client()
-            .on_notification(notification_handler)
+            .register_notification_handler(notification_handler)
             .await;
 
         // Wire request handler for window/workDoneProgress/create
         lsp_client
-            .rpc_client()
-            .on_request(move |request| {
+            .register_request_handler(move |request| {
                 use crate::lsp_v2::protocol::{JsonRpcErrorObject, JsonRpcResponse};
 
                 if request.method == "window/workDoneProgress/create" {

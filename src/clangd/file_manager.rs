@@ -7,8 +7,7 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use tracing::{debug, info, warn};
 
-use crate::io::StdioTransport;
-use crate::lsp_v2::LspClient;
+use crate::lsp_v2::traits::LspClientTrait;
 
 // ============================================================================
 // File Manager Errors
@@ -75,8 +74,15 @@ impl ClangdFileManager {
     pub async fn ensure_file_ready(
         &mut self,
         path: &Path,
-        client: &mut LspClient<StdioTransport>,
+        client: &mut impl LspClientTrait,
     ) -> Result<(), FileManagerError> {
+        // Check if client is ready for operations
+        if !client.is_initialized() {
+            return Err(FileManagerError::LspError(
+                crate::lsp_v2::client::LspError::NotInitialized,
+            ));
+        }
+
         // Convert to absolute path for consistency
         let abs_path = path
             .canonicalize()
@@ -151,7 +157,7 @@ impl ClangdFileManager {
     pub async fn close_file(
         &mut self,
         path: &Path,
-        client: &mut LspClient<StdioTransport>,
+        client: &mut impl LspClientTrait,
     ) -> Result<(), FileManagerError> {
         // Convert to absolute path
         let abs_path = path
@@ -185,7 +191,7 @@ impl ClangdFileManager {
     /// Close all open files
     pub async fn close_all_files(
         &mut self,
-        client: &mut LspClient<StdioTransport>,
+        client: &mut impl LspClientTrait,
     ) -> Result<(), FileManagerError> {
         let files: Vec<PathBuf> = self.opened_files.keys().cloned().collect();
 
