@@ -88,4 +88,72 @@ pub trait LspClientTrait: Send + Sync {
         version: i32,
         text: String,
     ) -> Result<(), LspError>;
+
+    // ========================================================================
+    // Symbol and Navigation Methods
+    // ========================================================================
+
+    /// Search for symbols across the entire workspace
+    async fn workspace_symbols(
+        &mut self,
+        query: String,
+    ) -> Result<Vec<lsp_types::WorkspaceSymbol>, LspError>;
+
+    /// Get the definition(s) of a symbol at the given position
+    async fn text_document_definition(
+        &mut self,
+        uri: String,
+        position: lsp_types::Position,
+    ) -> Result<lsp_types::GotoDefinitionResponse, LspError>;
+
+    /// Get the declaration(s) of a symbol at the given position
+    async fn text_document_declaration(
+        &mut self,
+        uri: String,
+        position: lsp_types::Position,
+    ) -> Result<lsp_types::request::GotoDeclarationResponse, LspError>;
+
+    /// Find all references to a symbol at the given position
+    async fn text_document_references(
+        &mut self,
+        uri: String,
+        position: lsp_types::Position,
+        include_declaration: bool,
+    ) -> Result<Vec<lsp_types::Location>, LspError>;
+
+    /// Get hover information for a symbol at the given position
+    async fn text_document_hover(
+        &mut self,
+        uri: String,
+        position: lsp_types::Position,
+    ) -> Result<Option<lsp_types::Hover>, LspError>;
+
+    /// Get all symbols in a text document
+    async fn text_document_document_symbol(
+        &mut self,
+        uri: String,
+    ) -> Result<lsp_types::DocumentSymbolResponse, LspError>;
+
+    // ========================================================================
+    // Call Hierarchy Methods
+    // ========================================================================
+
+    /// Prepare call hierarchy for the symbol at the given position
+    async fn text_document_prepare_call_hierarchy(
+        &mut self,
+        uri: String,
+        position: lsp_types::Position,
+    ) -> Result<Vec<lsp_types::CallHierarchyItem>, LspError>;
+
+    /// Get incoming calls for a call hierarchy item
+    async fn call_hierarchy_incoming_calls(
+        &mut self,
+        item: lsp_types::CallHierarchyItem,
+    ) -> Result<Vec<lsp_types::CallHierarchyIncomingCall>, LspError>;
+
+    /// Get outgoing calls for a call hierarchy item
+    async fn call_hierarchy_outgoing_calls(
+        &mut self,
+        item: lsp_types::CallHierarchyItem,
+    ) -> Result<Vec<lsp_types::CallHierarchyOutgoingCall>, LspError>;
 }

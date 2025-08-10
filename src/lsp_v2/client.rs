@@ -8,10 +8,15 @@ use crate::lsp_v2::protocol::{
     JsonRpcClient, JsonRpcError, JsonRpcNotification, JsonRpcRequest, JsonRpcResponse,
 };
 use lsp_types::{
+    CallHierarchyIncomingCall, CallHierarchyIncomingCallsParams, CallHierarchyItem,
+    CallHierarchyOutgoingCall, CallHierarchyOutgoingCallsParams, CallHierarchyPrepareParams,
     ClientCapabilities, DidChangeTextDocumentParams, DidCloseTextDocumentParams,
-    DidOpenTextDocumentParams, InitializeParams, InitializeResult, InitializedParams,
-    TextDocumentClientCapabilities, TextDocumentContentChangeEvent, TextDocumentIdentifier,
-    TextDocumentItem, VersionedTextDocumentIdentifier, WorkspaceClientCapabilities,
+    DidOpenTextDocumentParams, DocumentSymbolParams, DocumentSymbolResponse, GotoDefinitionParams,
+    GotoDefinitionResponse, HoverParams, InitializeParams, InitializeResult, InitializedParams,
+    Location, Position, ReferenceContext, ReferenceParams, TextDocumentClientCapabilities,
+    TextDocumentContentChangeEvent, TextDocumentIdentifier, TextDocumentItem,
+    TextDocumentPositionParams, VersionedTextDocumentIdentifier, WorkspaceClientCapabilities,
+    WorkspaceSymbol, WorkspaceSymbolParams,
 };
 use serde_json::Value;
 use tracing::{debug, info};
@@ -314,5 +319,692 @@ impl<T: Transport + 'static> LspClientTrait for LspClient<T> {
             .await?;
 
         Ok(())
+    }
+
+    // ========================================================================
+    // Symbol and Navigation Methods
+    // ========================================================================
+
+    async fn workspace_symbols(&mut self, query: String) -> Result<Vec<WorkspaceSymbol>, LspError> {
+        if !self.initialized {
+            return Err(LspError::NotInitialized);
+        }
+
+        let params = WorkspaceSymbolParams {
+            query,
+            work_done_progress_params: Default::default(),
+            partial_result_params: Default::default(),
+        };
+
+        debug!(
+            "Requesting workspace symbols with query: {:?}",
+            params.query
+        );
+        let result: Vec<WorkspaceSymbol> = match self
+            .rpc_client
+            .request("workspace/symbol", Some(params))
+            .await
+        {
+            Ok(result) => result,
+            Err(JsonRpcError::Timeout) => {
+                return Err(LspError::RequestTimeout {
+                    method: "workspace/symbol".to_string(),
+                });
+            }
+            Err(e) => return Err(LspError::JsonRpc(e)),
+        };
+
+        Ok(result)
+    }
+
+    async fn text_document_definition(
+        &mut self,
+        uri: String,
+        position: Position,
+    ) -> Result<GotoDefinitionResponse, LspError> {
+        if !self.initialized {
+            return Err(LspError::NotInitialized);
+        }
+
+        let params = GotoDefinitionParams {
+            text_document_position_params: TextDocumentPositionParams {
+                text_document: TextDocumentIdentifier {
+                    uri: uri
+                        .parse()
+                        .map_err(|e| LspError::Protocol(format!("Invalid URI: {}", e)))?,
+                },
+                position,
+            },
+            work_done_progress_params: Default::default(),
+            partial_result_params: Default::default(),
+        };
+
+        debug!(
+            "Requesting definition at {:?}:{:?}",
+            params.text_document_position_params.text_document.uri,
+            params.text_document_position_params.position
+        );
+        let result: GotoDefinitionResponse = match self
+            .rpc_client
+            .request("textDocument/definition", Some(params))
+            .await
+        {
+            Ok(result) => result,
+            Err(JsonRpcError::Timeout) => {
+                return Err(LspError::RequestTimeout {
+                    method: "textDocument/definition".to_string(),
+                });
+            }
+            Err(e) => return Err(LspError::JsonRpc(e)),
+        };
+
+        Ok(result)
+    }
+
+    async fn text_document_declaration(
+        &mut self,
+        uri: String,
+        position: Position,
+    ) -> Result<lsp_types::request::GotoDeclarationResponse, LspError> {
+        if !self.initialized {
+            return Err(LspError::NotInitialized);
+        }
+
+        let params = lsp_types::request::GotoDeclarationParams {
+            text_document_position_params: TextDocumentPositionParams {
+                text_document: TextDocumentIdentifier {
+                    uri: uri
+                        .parse()
+                        .map_err(|e| LspError::Protocol(format!("Invalid URI: {}", e)))?,
+                },
+                position,
+            },
+            work_done_progress_params: Default::default(),
+            partial_result_params: Default::default(),
+        };
+
+        debug!(
+            "Requesting declaration at {:?}:{:?}",
+            params.text_document_position_params.text_document.uri,
+            params.text_document_position_params.position
+        );
+        let result: lsp_types::request::GotoDeclarationResponse = match self
+            .rpc_client
+            .request("textDocument/declaration", Some(params))
+            .await
+        {
+            Ok(result) => result,
+            Err(JsonRpcError::Timeout) => {
+                return Err(LspError::RequestTimeout {
+                    method: "textDocument/declaration".to_string(),
+                });
+            }
+            Err(e) => return Err(LspError::JsonRpc(e)),
+        };
+
+        Ok(result)
+    }
+
+    async fn text_document_references(
+        &mut self,
+        uri: String,
+        position: Position,
+        include_declaration: bool,
+    ) -> Result<Vec<Location>, LspError> {
+        if !self.initialized {
+            return Err(LspError::NotInitialized);
+        }
+
+        let params = ReferenceParams {
+            text_document_position: TextDocumentPositionParams {
+                text_document: TextDocumentIdentifier {
+                    uri: uri
+                        .parse()
+                        .map_err(|e| LspError::Protocol(format!("Invalid URI: {}", e)))?,
+                },
+                position,
+            },
+            context: ReferenceContext {
+                include_declaration,
+            },
+            work_done_progress_params: Default::default(),
+            partial_result_params: Default::default(),
+        };
+
+        debug!(
+            "Requesting references at {:?}:{:?} (include_declaration: {})",
+            params.text_document_position.text_document.uri,
+            params.text_document_position.position,
+            include_declaration
+        );
+        let result: Vec<Location> = match self
+            .rpc_client
+            .request("textDocument/references", Some(params))
+            .await
+        {
+            Ok(result) => result,
+            Err(JsonRpcError::Timeout) => {
+                return Err(LspError::RequestTimeout {
+                    method: "textDocument/references".to_string(),
+                });
+            }
+            Err(e) => return Err(LspError::JsonRpc(e)),
+        };
+
+        Ok(result)
+    }
+
+    async fn text_document_hover(
+        &mut self,
+        uri: String,
+        position: Position,
+    ) -> Result<Option<lsp_types::Hover>, LspError> {
+        if !self.initialized {
+            return Err(LspError::NotInitialized);
+        }
+
+        let params = HoverParams {
+            text_document_position_params: TextDocumentPositionParams {
+                text_document: TextDocumentIdentifier {
+                    uri: uri
+                        .parse()
+                        .map_err(|e| LspError::Protocol(format!("Invalid URI: {}", e)))?,
+                },
+                position,
+            },
+            work_done_progress_params: Default::default(),
+        };
+
+        debug!(
+            "Requesting hover at {:?}:{:?}",
+            params.text_document_position_params.text_document.uri,
+            params.text_document_position_params.position
+        );
+        let result: Option<lsp_types::Hover> = match self
+            .rpc_client
+            .request("textDocument/hover", Some(params))
+            .await
+        {
+            Ok(result) => result,
+            Err(JsonRpcError::Timeout) => {
+                return Err(LspError::RequestTimeout {
+                    method: "textDocument/hover".to_string(),
+                });
+            }
+            Err(e) => return Err(LspError::JsonRpc(e)),
+        };
+
+        Ok(result)
+    }
+
+    async fn text_document_document_symbol(
+        &mut self,
+        uri: String,
+    ) -> Result<DocumentSymbolResponse, LspError> {
+        if !self.initialized {
+            return Err(LspError::NotInitialized);
+        }
+
+        let params = DocumentSymbolParams {
+            text_document: TextDocumentIdentifier {
+                uri: uri
+                    .parse()
+                    .map_err(|e| LspError::Protocol(format!("Invalid URI: {}", e)))?,
+            },
+            work_done_progress_params: Default::default(),
+            partial_result_params: Default::default(),
+        };
+
+        debug!(
+            "Requesting document symbols for: {:?}",
+            params.text_document.uri
+        );
+        let result: DocumentSymbolResponse = match self
+            .rpc_client
+            .request("textDocument/documentSymbol", Some(params))
+            .await
+        {
+            Ok(result) => result,
+            Err(JsonRpcError::Timeout) => {
+                return Err(LspError::RequestTimeout {
+                    method: "textDocument/documentSymbol".to_string(),
+                });
+            }
+            Err(e) => return Err(LspError::JsonRpc(e)),
+        };
+
+        Ok(result)
+    }
+
+    // ========================================================================
+    // Call Hierarchy Methods
+    // ========================================================================
+
+    async fn text_document_prepare_call_hierarchy(
+        &mut self,
+        uri: String,
+        position: Position,
+    ) -> Result<Vec<CallHierarchyItem>, LspError> {
+        if !self.initialized {
+            return Err(LspError::NotInitialized);
+        }
+
+        let params = CallHierarchyPrepareParams {
+            text_document_position_params: TextDocumentPositionParams {
+                text_document: TextDocumentIdentifier {
+                    uri: uri
+                        .parse()
+                        .map_err(|e| LspError::Protocol(format!("Invalid URI: {}", e)))?,
+                },
+                position,
+            },
+            work_done_progress_params: Default::default(),
+        };
+
+        debug!(
+            "Preparing call hierarchy at {:?}:{:?}",
+            params.text_document_position_params.text_document.uri,
+            params.text_document_position_params.position
+        );
+        let result: Vec<CallHierarchyItem> = match self
+            .rpc_client
+            .request("textDocument/prepareCallHierarchy", Some(params))
+            .await
+        {
+            Ok(result) => result,
+            Err(JsonRpcError::Timeout) => {
+                return Err(LspError::RequestTimeout {
+                    method: "textDocument/prepareCallHierarchy".to_string(),
+                });
+            }
+            Err(e) => return Err(LspError::JsonRpc(e)),
+        };
+
+        Ok(result)
+    }
+
+    async fn call_hierarchy_incoming_calls(
+        &mut self,
+        item: CallHierarchyItem,
+    ) -> Result<Vec<CallHierarchyIncomingCall>, LspError> {
+        if !self.initialized {
+            return Err(LspError::NotInitialized);
+        }
+
+        let params = CallHierarchyIncomingCallsParams {
+            item,
+            work_done_progress_params: Default::default(),
+            partial_result_params: Default::default(),
+        };
+
+        debug!("Requesting incoming calls for: {:?}", params.item.name);
+        let result: Vec<CallHierarchyIncomingCall> = match self
+            .rpc_client
+            .request("callHierarchy/incomingCalls", Some(params))
+            .await
+        {
+            Ok(result) => result,
+            Err(JsonRpcError::Timeout) => {
+                return Err(LspError::RequestTimeout {
+                    method: "callHierarchy/incomingCalls".to_string(),
+                });
+            }
+            Err(e) => return Err(LspError::JsonRpc(e)),
+        };
+
+        Ok(result)
+    }
+
+    async fn call_hierarchy_outgoing_calls(
+        &mut self,
+        item: CallHierarchyItem,
+    ) -> Result<Vec<CallHierarchyOutgoingCall>, LspError> {
+        if !self.initialized {
+            return Err(LspError::NotInitialized);
+        }
+
+        let params = CallHierarchyOutgoingCallsParams {
+            item,
+            work_done_progress_params: Default::default(),
+            partial_result_params: Default::default(),
+        };
+
+        debug!("Requesting outgoing calls for: {:?}", params.item.name);
+        let result: Vec<CallHierarchyOutgoingCall> = match self
+            .rpc_client
+            .request("callHierarchy/outgoingCalls", Some(params))
+            .await
+        {
+            Ok(result) => result,
+            Err(JsonRpcError::Timeout) => {
+                return Err(LspError::RequestTimeout {
+                    method: "callHierarchy/outgoingCalls".to_string(),
+                });
+            }
+            Err(e) => return Err(LspError::JsonRpc(e)),
+        };
+
+        Ok(result)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::lsp_v2::testing::MockLspClient;
+    use lsp_types::{Position, Range, SymbolKind};
+
+    #[tokio::test]
+    async fn test_mock_client_workspace_symbols_success() {
+        let mut client = MockLspClient::new();
+        client.set_initialized(true);
+
+        let result = client.workspace_symbols("test".to_string()).await;
+        assert!(result.is_ok());
+
+        let symbols = result.unwrap();
+        assert_eq!(symbols.len(), 2);
+        assert_eq!(symbols[0].name, "MockFunction");
+        assert_eq!(symbols[1].name, "MockClass");
+    }
+
+    #[tokio::test]
+    async fn test_mock_client_workspace_symbols_not_initialized() {
+        let mut client = MockLspClient::new();
+        // Client not initialized
+
+        let result = client.workspace_symbols("test".to_string()).await;
+        assert!(matches!(result, Err(LspError::NotInitialized)));
+    }
+
+    #[tokio::test]
+    async fn test_mock_client_definition_success() {
+        let mut client = MockLspClient::new();
+        client.set_initialized(true);
+
+        let position = Position {
+            line: 10,
+            character: 5,
+        };
+        let result = client
+            .text_document_definition("file:///test.cpp".to_string(), position)
+            .await;
+
+        assert!(result.is_ok());
+        match result.unwrap() {
+            GotoDefinitionResponse::Scalar(location) => {
+                assert_eq!(location.uri.to_string(), "file:///mock/definition.cpp");
+                assert_eq!(location.range.start.line, 42);
+            }
+            _ => panic!("Expected scalar location response"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_mock_client_references_success() {
+        let mut client = MockLspClient::new();
+        client.set_initialized(true);
+
+        let position = Position {
+            line: 10,
+            character: 5,
+        };
+        let result = client
+            .text_document_references("file:///test.cpp".to_string(), position, true)
+            .await;
+
+        assert!(result.is_ok());
+        let references = result.unwrap();
+        assert_eq!(references.len(), 2);
+        assert_eq!(references[0].uri.to_string(), "file:///mock/usage1.cpp");
+        assert_eq!(references[1].uri.to_string(), "file:///mock/usage2.cpp");
+    }
+
+    #[tokio::test]
+    async fn test_mock_client_hover_success() {
+        let mut client = MockLspClient::new();
+        client.set_initialized(true);
+
+        let position = Position {
+            line: 10,
+            character: 5,
+        };
+        let result = client
+            .text_document_hover("file:///test.cpp".to_string(), position)
+            .await;
+
+        assert!(result.is_ok());
+        let hover = result.unwrap();
+        assert!(hover.is_some());
+
+        match &hover.unwrap().contents {
+            lsp_types::HoverContents::Scalar(lsp_types::MarkedString::String(content)) => {
+                assert!(content.contains("Mock hover information"));
+            }
+            _ => panic!("Expected string content in hover"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_mock_client_document_symbols_success() {
+        let mut client = MockLspClient::new();
+        client.set_initialized(true);
+
+        let result = client
+            .text_document_document_symbol("file:///test.cpp".to_string())
+            .await;
+
+        assert!(result.is_ok());
+        match result.unwrap() {
+            DocumentSymbolResponse::Flat(symbols) => {
+                assert_eq!(symbols.len(), 1);
+                assert_eq!(symbols[0].name, "MockSymbol");
+                assert_eq!(symbols[0].kind, SymbolKind::FUNCTION);
+            }
+            _ => panic!("Expected flat symbol response"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_mock_client_prepare_call_hierarchy_success() {
+        let mut client = MockLspClient::new();
+        client.set_initialized(true);
+
+        let position = Position {
+            line: 10,
+            character: 5,
+        };
+        let result = client
+            .text_document_prepare_call_hierarchy("file:///test.cpp".to_string(), position)
+            .await;
+
+        assert!(result.is_ok());
+        let items = result.unwrap();
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].name, "mockFunction");
+        assert_eq!(items[0].kind, SymbolKind::FUNCTION);
+    }
+
+    #[tokio::test]
+    async fn test_mock_client_incoming_calls_success() {
+        let mut client = MockLspClient::new();
+        client.set_initialized(true);
+
+        let item = CallHierarchyItem {
+            name: "test".to_string(),
+            kind: SymbolKind::FUNCTION,
+            tags: None,
+            detail: None,
+            uri: "file:///test.cpp".parse().unwrap(),
+            range: Range {
+                start: Position {
+                    line: 0,
+                    character: 0,
+                },
+                end: Position {
+                    line: 1,
+                    character: 0,
+                },
+            },
+            selection_range: Range {
+                start: Position {
+                    line: 0,
+                    character: 0,
+                },
+                end: Position {
+                    line: 0,
+                    character: 4,
+                },
+            },
+            data: None,
+        };
+
+        let result = client.call_hierarchy_incoming_calls(item).await;
+        assert!(result.is_ok());
+
+        let calls = result.unwrap();
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].from.name, "callerFunction");
+    }
+
+    #[tokio::test]
+    async fn test_mock_client_outgoing_calls_success() {
+        let mut client = MockLspClient::new();
+        client.set_initialized(true);
+
+        let item = CallHierarchyItem {
+            name: "test".to_string(),
+            kind: SymbolKind::FUNCTION,
+            tags: None,
+            detail: None,
+            uri: "file:///test.cpp".parse().unwrap(),
+            range: Range {
+                start: Position {
+                    line: 0,
+                    character: 0,
+                },
+                end: Position {
+                    line: 1,
+                    character: 0,
+                },
+            },
+            selection_range: Range {
+                start: Position {
+                    line: 0,
+                    character: 0,
+                },
+                end: Position {
+                    line: 0,
+                    character: 4,
+                },
+            },
+            data: None,
+        };
+
+        let result = client.call_hierarchy_outgoing_calls(item).await;
+        assert!(result.is_ok());
+
+        let calls = result.unwrap();
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].to.name, "calleeFunction");
+    }
+
+    #[tokio::test]
+    async fn test_mock_client_all_methods_require_initialization() {
+        let mut client = MockLspClient::new();
+        // Client not initialized
+        let position = Position {
+            line: 0,
+            character: 0,
+        };
+
+        // Test that all new methods return NotInitialized error
+        assert!(matches!(
+            client.workspace_symbols("test".to_string()).await,
+            Err(LspError::NotInitialized)
+        ));
+
+        assert!(matches!(
+            client
+                .text_document_definition("file:///test.cpp".to_string(), position)
+                .await,
+            Err(LspError::NotInitialized)
+        ));
+
+        assert!(matches!(
+            client
+                .text_document_declaration("file:///test.cpp".to_string(), position)
+                .await,
+            Err(LspError::NotInitialized)
+        ));
+
+        assert!(matches!(
+            client
+                .text_document_references("file:///test.cpp".to_string(), position, true)
+                .await,
+            Err(LspError::NotInitialized)
+        ));
+
+        assert!(matches!(
+            client
+                .text_document_hover("file:///test.cpp".to_string(), position)
+                .await,
+            Err(LspError::NotInitialized)
+        ));
+
+        assert!(matches!(
+            client
+                .text_document_document_symbol("file:///test.cpp".to_string())
+                .await,
+            Err(LspError::NotInitialized)
+        ));
+
+        assert!(matches!(
+            client
+                .text_document_prepare_call_hierarchy("file:///test.cpp".to_string(), position)
+                .await,
+            Err(LspError::NotInitialized)
+        ));
+
+        let dummy_item = CallHierarchyItem {
+            name: "test".to_string(),
+            kind: SymbolKind::FUNCTION,
+            tags: None,
+            detail: None,
+            uri: "file:///test.cpp".parse().unwrap(),
+            range: Range {
+                start: Position {
+                    line: 0,
+                    character: 0,
+                },
+                end: Position {
+                    line: 1,
+                    character: 0,
+                },
+            },
+            selection_range: Range {
+                start: Position {
+                    line: 0,
+                    character: 0,
+                },
+                end: Position {
+                    line: 0,
+                    character: 4,
+                },
+            },
+            data: None,
+        };
+
+        assert!(matches!(
+            client
+                .call_hierarchy_incoming_calls(dummy_item.clone())
+                .await,
+            Err(LspError::NotInitialized)
+        ));
+
+        assert!(matches!(
+            client.call_hierarchy_outgoing_calls(dummy_item).await,
+            Err(LspError::NotInitialized)
+        ));
     }
 }

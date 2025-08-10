@@ -7,6 +7,11 @@ use std::collections::HashMap;
 
 use crate::lsp_v2::client::LspError;
 use crate::lsp_v2::traits::LspClientTrait;
+use lsp_types::{
+    CallHierarchyIncomingCall, CallHierarchyItem, CallHierarchyOutgoingCall,
+    DocumentSymbolResponse, GotoDefinitionResponse, Location, Position, Range, SymbolInformation,
+    SymbolKind, WorkspaceSymbol,
+};
 
 // Re-export MockTransport from transport module for convenience
 #[allow(unused_imports)]
@@ -188,5 +193,360 @@ impl LspClientTrait for MockLspClient {
             + 'static,
     {
         // Mock implementation - just ignore handlers
+    }
+
+    // ========================================================================
+    // Symbol and Navigation Methods
+    // ========================================================================
+
+    async fn workspace_symbols(
+        &mut self,
+        _query: String,
+    ) -> Result<Vec<WorkspaceSymbol>, LspError> {
+        if !self.initialized {
+            return Err(LspError::NotInitialized);
+        }
+
+        // Return mock workspace symbols
+        Ok(vec![
+            WorkspaceSymbol {
+                name: "MockFunction".to_string(),
+                kind: SymbolKind::FUNCTION,
+                tags: None,
+                container_name: Some("MockClass".to_string()),
+                location: lsp_types::OneOf::Left(Location {
+                    uri: "file:///mock/file.cpp".parse().unwrap(),
+                    range: Range {
+                        start: Position {
+                            line: 10,
+                            character: 0,
+                        },
+                        end: Position {
+                            line: 15,
+                            character: 0,
+                        },
+                    },
+                }),
+                data: None,
+            },
+            WorkspaceSymbol {
+                name: "MockClass".to_string(),
+                kind: SymbolKind::CLASS,
+                tags: None,
+                container_name: None,
+                location: lsp_types::OneOf::Left(Location {
+                    uri: "file:///mock/file.cpp".parse().unwrap(),
+                    range: Range {
+                        start: Position {
+                            line: 5,
+                            character: 0,
+                        },
+                        end: Position {
+                            line: 20,
+                            character: 0,
+                        },
+                    },
+                }),
+                data: None,
+            },
+        ])
+    }
+
+    async fn text_document_definition(
+        &mut self,
+        _uri: String,
+        _position: Position,
+    ) -> Result<GotoDefinitionResponse, LspError> {
+        if !self.initialized {
+            return Err(LspError::NotInitialized);
+        }
+
+        // Return mock definition location
+        Ok(GotoDefinitionResponse::Scalar(Location {
+            uri: "file:///mock/definition.cpp".parse().unwrap(),
+            range: Range {
+                start: Position {
+                    line: 42,
+                    character: 8,
+                },
+                end: Position {
+                    line: 42,
+                    character: 20,
+                },
+            },
+        }))
+    }
+
+    async fn text_document_declaration(
+        &mut self,
+        _uri: String,
+        _position: Position,
+    ) -> Result<lsp_types::request::GotoDeclarationResponse, LspError> {
+        if !self.initialized {
+            return Err(LspError::NotInitialized);
+        }
+
+        // Return mock declaration location
+        Ok(lsp_types::request::GotoDeclarationResponse::Scalar(
+            Location {
+                uri: "file:///mock/declaration.h".parse().unwrap(),
+                range: Range {
+                    start: Position {
+                        line: 15,
+                        character: 0,
+                    },
+                    end: Position {
+                        line: 15,
+                        character: 12,
+                    },
+                },
+            },
+        ))
+    }
+
+    async fn text_document_references(
+        &mut self,
+        _uri: String,
+        _position: Position,
+        _include_declaration: bool,
+    ) -> Result<Vec<Location>, LspError> {
+        if !self.initialized {
+            return Err(LspError::NotInitialized);
+        }
+
+        // Return mock references
+        Ok(vec![
+            Location {
+                uri: "file:///mock/usage1.cpp".parse().unwrap(),
+                range: Range {
+                    start: Position {
+                        line: 25,
+                        character: 4,
+                    },
+                    end: Position {
+                        line: 25,
+                        character: 16,
+                    },
+                },
+            },
+            Location {
+                uri: "file:///mock/usage2.cpp".parse().unwrap(),
+                range: Range {
+                    start: Position {
+                        line: 30,
+                        character: 8,
+                    },
+                    end: Position {
+                        line: 30,
+                        character: 20,
+                    },
+                },
+            },
+        ])
+    }
+
+    async fn text_document_hover(
+        &mut self,
+        _uri: String,
+        _position: Position,
+    ) -> Result<Option<lsp_types::Hover>, LspError> {
+        if !self.initialized {
+            return Err(LspError::NotInitialized);
+        }
+
+        // Return mock hover information
+        Ok(Some(lsp_types::Hover {
+            contents: lsp_types::HoverContents::Scalar(lsp_types::MarkedString::String(
+                "Mock hover information: int mockFunction(const std::string& param)".to_string(),
+            )),
+            range: Some(Range {
+                start: Position {
+                    line: 10,
+                    character: 0,
+                },
+                end: Position {
+                    line: 10,
+                    character: 12,
+                },
+            }),
+        }))
+    }
+
+    async fn text_document_document_symbol(
+        &mut self,
+        _uri: String,
+    ) -> Result<DocumentSymbolResponse, LspError> {
+        if !self.initialized {
+            return Err(LspError::NotInitialized);
+        }
+
+        // Return mock document symbols
+        Ok(DocumentSymbolResponse::Flat(vec![SymbolInformation {
+            name: "MockSymbol".to_string(),
+            kind: SymbolKind::FUNCTION,
+            tags: None,
+            #[allow(deprecated)]
+            deprecated: None,
+            location: Location {
+                uri: "file:///mock/file.cpp".parse().unwrap(),
+                range: Range {
+                    start: Position {
+                        line: 5,
+                        character: 0,
+                    },
+                    end: Position {
+                        line: 10,
+                        character: 0,
+                    },
+                },
+            },
+            container_name: Some("MockContainer".to_string()),
+        }]))
+    }
+
+    // ========================================================================
+    // Call Hierarchy Methods
+    // ========================================================================
+
+    async fn text_document_prepare_call_hierarchy(
+        &mut self,
+        _uri: String,
+        _position: Position,
+    ) -> Result<Vec<CallHierarchyItem>, LspError> {
+        if !self.initialized {
+            return Err(LspError::NotInitialized);
+        }
+
+        // Return mock call hierarchy items
+        Ok(vec![CallHierarchyItem {
+            name: "mockFunction".to_string(),
+            kind: SymbolKind::FUNCTION,
+            tags: None,
+            detail: Some("Mock function detail".to_string()),
+            uri: "file:///mock/file.cpp".parse().unwrap(),
+            range: Range {
+                start: Position {
+                    line: 10,
+                    character: 0,
+                },
+                end: Position {
+                    line: 15,
+                    character: 0,
+                },
+            },
+            selection_range: Range {
+                start: Position {
+                    line: 10,
+                    character: 4,
+                },
+                end: Position {
+                    line: 10,
+                    character: 16,
+                },
+            },
+            data: None,
+        }])
+    }
+
+    async fn call_hierarchy_incoming_calls(
+        &mut self,
+        _item: CallHierarchyItem,
+    ) -> Result<Vec<CallHierarchyIncomingCall>, LspError> {
+        if !self.initialized {
+            return Err(LspError::NotInitialized);
+        }
+
+        // Return mock incoming calls
+        Ok(vec![CallHierarchyIncomingCall {
+            from: CallHierarchyItem {
+                name: "callerFunction".to_string(),
+                kind: SymbolKind::FUNCTION,
+                tags: None,
+                detail: Some("Caller function".to_string()),
+                uri: "file:///mock/caller.cpp".parse().unwrap(),
+                range: Range {
+                    start: Position {
+                        line: 20,
+                        character: 0,
+                    },
+                    end: Position {
+                        line: 25,
+                        character: 0,
+                    },
+                },
+                selection_range: Range {
+                    start: Position {
+                        line: 20,
+                        character: 4,
+                    },
+                    end: Position {
+                        line: 20,
+                        character: 18,
+                    },
+                },
+                data: None,
+            },
+            from_ranges: vec![Range {
+                start: Position {
+                    line: 22,
+                    character: 4,
+                },
+                end: Position {
+                    line: 22,
+                    character: 16,
+                },
+            }],
+        }])
+    }
+
+    async fn call_hierarchy_outgoing_calls(
+        &mut self,
+        _item: CallHierarchyItem,
+    ) -> Result<Vec<CallHierarchyOutgoingCall>, LspError> {
+        if !self.initialized {
+            return Err(LspError::NotInitialized);
+        }
+
+        // Return mock outgoing calls
+        Ok(vec![CallHierarchyOutgoingCall {
+            to: CallHierarchyItem {
+                name: "calleeFunction".to_string(),
+                kind: SymbolKind::FUNCTION,
+                tags: None,
+                detail: Some("Called function".to_string()),
+                uri: "file:///mock/callee.cpp".parse().unwrap(),
+                range: Range {
+                    start: Position {
+                        line: 30,
+                        character: 0,
+                    },
+                    end: Position {
+                        line: 35,
+                        character: 0,
+                    },
+                },
+                selection_range: Range {
+                    start: Position {
+                        line: 30,
+                        character: 4,
+                    },
+                    end: Position {
+                        line: 30,
+                        character: 18,
+                    },
+                },
+                data: None,
+            },
+            from_ranges: vec![Range {
+                start: Position {
+                    line: 12,
+                    character: 8,
+                },
+                end: Position {
+                    line: 12,
+                    character: 22,
+                },
+            }],
+        }])
     }
 }
