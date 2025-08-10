@@ -1,5 +1,6 @@
 mod clangd;
 mod cmake;
+mod io;
 mod legacy_lsp;
 mod logging;
 mod lsp_v2;

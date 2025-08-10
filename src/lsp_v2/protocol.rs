@@ -3,8 +3,8 @@
 //! Implements JSON-RPC 2.0 protocol with request/response matching,
 //! notification handling, and proper error management.
 
+use crate::io::transport::Transport;
 use crate::lsp_v2::framing::LspFraming;
-use crate::lsp_v2::transport::Transport;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::HashMap;

@@ -3,26 +3,25 @@
 //! This module provides a clean, testable, and extensible LSP client implementation
 //! with proper separation of concerns:
 //!
-//! - **Transport**: Pure I/O layer for sending/receiving messages
 //! - **Framing**: LSP message framing (Content-Length headers)  
-//! - **Process**: External process lifecycle management
 //! - **Protocol**: JSON-RPC 2.0 protocol implementation
 //! - **Client**: High-level typed LSP API using lsp-types
 //! - **Testing**: Mock implementations for comprehensive testing
+//!
+//! This module uses the generic I/O layer (`crate::io`) for transport and process management.
 
 pub mod client;
 pub mod framing;
-pub mod process;
 pub mod protocol;
 pub mod testing;
 pub mod traits;
-pub mod transport;
 
 //
 // Example usage with direct component coordination:
 //
 // ```rust
-// use mcp_cpp::lsp_v2::{ChildProcessManager, LspClient, StdioTransport};
+// use mcp_cpp::io::{ChildProcessManager, StdioTransport};
+// use mcp_cpp::lsp_v2::LspClient;
 //
 // // Start process
 // let mut process = ChildProcessManager::new("clangd".to_string(), args, Some(working_dir));
@@ -46,11 +45,11 @@ pub mod transport;
 #[allow(unused_imports)]
 pub use client::{LspClient, LspError};
 #[allow(unused_imports)]
-pub use process::{
-    ChildProcessManager, ProcessExitEvent, ProcessExitHandler, ProcessManager, ProcessState,
-    StderrMonitor, StopMode,
-};
-#[allow(unused_imports)]
 pub use traits::LspClientTrait;
+
+// Re-export I/O types for convenience (these are now in crate::io)
 #[allow(unused_imports)]
-pub use transport::{MockTransport, StdioTransport, Transport};
+pub use crate::io::{
+    ChildProcessManager, MockTransport, ProcessExitEvent, ProcessExitHandler, ProcessManager,
+    ProcessState, StderrMonitor, StdioTransport, StopMode, Transport,
+};

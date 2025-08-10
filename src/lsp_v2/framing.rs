@@ -6,7 +6,7 @@
 //! LSP message framing format:
 //! Content-Length: <length>\r\n\r\n<content>
 
-use crate::lsp_v2::transport::Transport;
+use crate::io::transport::Transport;
 use async_trait::async_trait;
 use std::collections::VecDeque;
 use tracing::trace;
@@ -220,7 +220,7 @@ impl<T: Transport> Transport for LspFraming<T> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::lsp_v2::transport::MockTransport;
+    use crate::io::transport::MockTransport;
 
     #[tokio::test]
     async fn test_lsp_framing_send() {

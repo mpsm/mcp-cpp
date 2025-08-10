@@ -3,8 +3,8 @@
 //! Provides a typed, high-level API for Language Server Protocol
 //! communication using the lsp-types crate for full type safety.
 
+use crate::io::transport::Transport;
 use crate::lsp_v2::protocol::{JsonRpcClient, JsonRpcError};
-use crate::lsp_v2::transport::Transport;
 use lsp_types::{
     ClientCapabilities, DidChangeTextDocumentParams, DidCloseTextDocumentParams,
     DidOpenTextDocumentParams, InitializeParams, InitializeResult, InitializedParams,

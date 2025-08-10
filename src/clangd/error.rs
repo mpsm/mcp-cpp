@@ -6,8 +6,8 @@
 use std::path::PathBuf;
 use std::time::Duration;
 
+use crate::io::process::ProcessError;
 use crate::lsp_v2::LspError;
-use crate::lsp_v2::process::ProcessError;
 use crate::project::ProjectError;
 
 // ============================================================================

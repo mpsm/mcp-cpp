@@ -3,7 +3,7 @@
 //! Handles external process lifecycle and stderr monitoring,
 //! completely separate from transport concerns.
 
-use crate::lsp_v2::transport::{StdioTransport, Transport};
+use crate::io::transport::{StdioTransport, Transport};
 use async_trait::async_trait;
 use std::io;
 use std::path::PathBuf;

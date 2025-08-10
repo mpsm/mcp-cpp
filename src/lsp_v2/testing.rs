@@ -3,12 +3,12 @@
 //! Provides mock implementations of all traits for comprehensive
 //! testing of LSP client functionality.
 
-use crate::lsp_v2::process::{ProcessError, ProcessManager};
-use crate::lsp_v2::transport::StdioTransport;
+use crate::io::process::{ProcessError, ProcessManager};
+use crate::io::transport::StdioTransport;
 
 // Re-export MockTransport from transport module for convenience
 #[allow(unused_imports)]
-pub use crate::lsp_v2::transport::MockTransport;
+pub use crate::io::transport::MockTransport;
 
 /// Mock process manager for testing
 #[allow(dead_code)]
@@ -47,7 +47,7 @@ impl ProcessManager for MockProcessManager {
         Ok(())
     }
 
-    async fn stop(&mut self, _mode: crate::lsp_v2::process::StopMode) -> Result<(), Self::Error> {
+    async fn stop(&mut self, _mode: crate::io::process::StopMode) -> Result<(), Self::Error> {
         self.running = false;
         self.process_id = None;
         Ok(())
@@ -69,7 +69,7 @@ impl ProcessManager for MockProcessManager {
 
     fn on_process_exit<H>(&mut self, _handler: H)
     where
-        H: crate::lsp_v2::process::ProcessExitHandler + 'static,
+        H: crate::io::process::ProcessExitHandler + 'static,
     {
         // Mock implementation - no-op for testing
     }

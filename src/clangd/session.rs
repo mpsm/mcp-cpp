@@ -13,9 +13,8 @@ use crate::clangd::config::ClangdConfig;
 use crate::clangd::error::ClangdSessionError;
 use crate::clangd::file_manager::ClangdFileManager;
 use crate::clangd::index::IndexMonitor;
-use crate::lsp_v2::{
-    ChildProcessManager, LspClient, ProcessManager, StderrMonitor, StdioTransport, StopMode,
-};
+use crate::io::{ChildProcessManager, ProcessManager, StderrMonitor, StdioTransport, StopMode};
+use crate::lsp_v2::LspClient;
 
 // ============================================================================
 // Clangd Session Trait

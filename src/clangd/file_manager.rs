@@ -7,7 +7,8 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use tracing::{debug, info, warn};
 
-use crate::lsp_v2::{LspClient, StdioTransport};
+use crate::io::StdioTransport;
+use crate::lsp_v2::LspClient;
 
 // ============================================================================
 // File Manager Errors
