@@ -350,7 +350,7 @@ impl<T: Transport + 'static> JsonRpcClient<T> {
 
                 if let Some(handler) = request_handler {
                     let request = JsonRpcRequest {
-                        jsonrpc: "2.0".to_string(),
+                        jsonrpc: crate::lsp_v2::jsonrpc_utils::JSONRPC_VERSION.to_string(),
                         method,
                         id: id.clone(),
                         params,
@@ -384,7 +384,7 @@ impl<T: Transport + 'static> JsonRpcClient<T> {
 
                 if let Some(handler) = notification_handler {
                     let notification = JsonRpcNotification {
-                        jsonrpc: "2.0".to_string(),
+                        jsonrpc: crate::lsp_v2::jsonrpc_utils::JSONRPC_VERSION.to_string(),
                         method,
                         params,
                     };
@@ -398,7 +398,7 @@ impl<T: Transport + 'static> JsonRpcClient<T> {
                     let mut state = state.lock().await;
                     if let Some(sender) = state.pending_requests.remove(&id_u64) {
                         let response = JsonRpcResponse {
-                            jsonrpc: "2.0".to_string(),
+                            jsonrpc: crate::lsp_v2::jsonrpc_utils::JSONRPC_VERSION.to_string(),
                             id,
                             result,
                             error,
@@ -455,7 +455,7 @@ impl<T: Transport + 'static> JsonRpcClient<T> {
 
         // Create request
         let request = JsonRpcRequest {
-            jsonrpc: "2.0".to_string(),
+            jsonrpc: crate::lsp_v2::jsonrpc_utils::JSONRPC_VERSION.to_string(),
             id: serde_json::Value::Number(serde_json::Number::from(id)),
             method: method.to_string(),
             params: params
@@ -524,7 +524,7 @@ impl<T: Transport + 'static> JsonRpcClient<T> {
 
         // Create request
         let request = JsonRpcRequest {
-            jsonrpc: "2.0".to_string(),
+            jsonrpc: crate::lsp_v2::jsonrpc_utils::JSONRPC_VERSION.to_string(),
             id: Value::Number(serde_json::Number::from(id)),
             method: method.to_string(),
             params: params
@@ -586,7 +586,7 @@ impl<T: Transport + 'static> JsonRpcClient<T> {
         P: serde::Serialize,
     {
         let notification = JsonRpcNotification {
-            jsonrpc: "2.0".to_string(),
+            jsonrpc: crate::lsp_v2::jsonrpc_utils::JSONRPC_VERSION.to_string(),
             method: method.to_string(),
             params: params
                 .map(|p| serde_json::to_value(p).map_err(JsonRpcError::Serialization))
@@ -618,7 +618,7 @@ impl<T: Transport + 'static> JsonRpcClient<T> {
             debug!("JsonRpcClient: Cleaning up pending request ID {}", id);
             // Try to send a cancellation, but don't wait if the receiver is gone
             let _ = sender.send(JsonRpcResponse {
-                jsonrpc: "2.0".to_string(),
+                jsonrpc: crate::lsp_v2::jsonrpc_utils::JSONRPC_VERSION.to_string(),
                 id: Value::Number(serde_json::Number::from(id)),
                 result: None,
                 error: Some(JsonRpcErrorObject {

@@ -4,6 +4,7 @@
 //! to LSP progress notifications and enabling code to wait for indexing completion.
 
 use crate::lsp_v2::protocol::JsonRpcNotification;
+use lsp_types::{notification::Notification, request::Request};
 use serde_json::Value;
 use std::sync::Arc;
 use tokio::sync::{Mutex, oneshot};
@@ -152,10 +153,10 @@ impl IndexMonitor {
         );
 
         match notification.method.as_str() {
-            "window/workDoneProgress/create" => {
+            lsp_types::request::WorkDoneProgressCreate::METHOD => {
                 Self::handle_progress_create(notification.params, state).await;
             }
-            "$/progress" => {
+            lsp_types::notification::Progress::METHOD => {
                 Self::handle_progress_update(notification.params, state).await;
             }
             _ => {
@@ -330,7 +331,7 @@ mod tests {
 
         // Handler should be callable
         let notification = JsonRpcNotification {
-            jsonrpc: "2.0".to_string(),
+            jsonrpc: crate::lsp_v2::jsonrpc_utils::JSONRPC_VERSION.to_string(),
             method: "test".to_string(),
             params: None,
         };

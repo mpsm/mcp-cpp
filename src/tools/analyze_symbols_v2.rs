@@ -15,6 +15,7 @@ use tracing::{debug, info, instrument};
 
 // V2 Architecture imports
 use crate::clangd::{ClangdSession, ClangdSessionTrait};
+// SymbolKind functionality now comes directly from lsp-types
 use crate::lsp_v2::traits::LspClientTrait;
 use crate::project::ProjectWorkspace;
 
@@ -268,15 +269,44 @@ impl AnalyzeSymbolContextTool {
         &self,
         session: &mut ClangdSession,
     ) -> Result<CallToolResult, CallToolError> {
+        // Wait for clangd indexing to complete before analyzing
+        crate::tools::utils::wait_for_indexing(session.index_monitor(), None).await;
+
+        // Find symbol location first
+        let symbol_location = {
+            let client = session.client_mut();
+            self.find_symbol(client).await?
+        };
+
+        // Trigger clangd file opening to enable AST-dependent LSP operations.
+        // clangd requires textDocument/didOpen before serving hover, definition,
+        // or reference requests. This prevents "-32602: trying to get AST for non-added document" errors.
+        let uri = symbol_location["uri"]
+            .as_str()
+            .ok_or_else(|| CallToolError::unknown_tool("Invalid location URI".to_string()))?;
+
+        // Convert LSP file URI to filesystem path for session management.
+        // Handles both standard file:// URIs and bare path strings for compatibility.
+        let file_path = if let Some(path_str) = uri.strip_prefix("file://") {
+            std::path::PathBuf::from(path_str)
+        } else {
+            std::path::PathBuf::from(uri)
+        };
+
+        debug!(
+            "Opening file {} in clangd for AST operations",
+            file_path.display()
+        );
+        session.ensure_file_ready(&file_path).await.map_err(|e| {
+            CallToolError::new(std::io::Error::other(format!(
+                "Failed to open file {} in clangd: {}",
+                file_path.display(),
+                e
+            )))
+        })?;
+
+        // Now get a fresh client reference for the rest of the operations
         let client = session.client_mut();
-
-        // Wait for indexing to complete
-        info!("Waiting for clangd indexing to complete...");
-        // TODO: Use session's index monitor when available
-        tokio::time::sleep(std::time::Duration::from_secs(2)).await;
-
-        // Find symbol location
-        let symbol_location = self.find_symbol(client).await?;
 
         // Gather all requested information
         let mut result = json!({
@@ -325,7 +355,6 @@ impl AnalyzeSymbolContextTool {
 
         // Add metadata
         result["metadata"] = json!({
-            "implementation": "v2",
             "build_directory": session.build_directory().display().to_string(),
             "working_directory": session.working_directory().display().to_string(),
         });
@@ -614,7 +643,7 @@ impl AnalyzeSymbolContextTool {
                             .map(|child| {
                                 json!({
                                     "name": child.name,
-                                    "kind": format!("{:?}", child.kind),
+                                    "kind": format!("{:?}", child.kind).to_lowercase(),
                                     "range": child.range,
                                     "detail": child.detail
                                 })

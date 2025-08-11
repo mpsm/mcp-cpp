@@ -6,13 +6,18 @@ mod logging;
 mod lsp_v2;
 mod project;
 mod server;
+mod server_helpers;
 mod tools {
     #[cfg(not(feature = "tools-v2"))]
     pub mod analyze_symbols;
     #[cfg(feature = "tools-v2")]
     pub mod analyze_symbols_v2;
     pub mod project_tools;
+    #[cfg(not(feature = "tools-v2"))]
     pub mod search_symbols;
+    #[cfg(feature = "tools-v2")]
+    pub mod search_symbols_v2;
+    #[cfg(not(feature = "tools-v2"))]
     pub mod symbol_filtering;
     pub mod utils;
 }

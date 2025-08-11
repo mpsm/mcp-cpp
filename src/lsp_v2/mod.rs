@@ -12,6 +12,7 @@
 
 pub mod client;
 pub mod framing;
+pub mod jsonrpc_utils;
 pub mod protocol;
 pub mod testing;
 pub mod traits;
@@ -46,6 +47,11 @@ pub mod traits;
 pub use client::{LspClient, LspError};
 #[allow(unused_imports)]
 pub use traits::LspClientTrait;
+
+// Re-export SymbolKind from lsp-types (replaces the deleted kind.rs)
+// lsp-types already provides Debug, TryFrom<&str>, and all necessary functionality
+#[allow(unused_imports)]
+pub use lsp_types::SymbolKind;
 
 // Re-export I/O types for convenience (these are now in crate::io)
 #[allow(unused_imports)]

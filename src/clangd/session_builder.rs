@@ -1,5 +1,6 @@
 //! Session builder for ClangdSession creation
 
+use lsp_types::request::Request;
 use std::marker::PhantomData;
 use std::sync::Arc;
 use tracing::{debug, info};
@@ -234,31 +235,18 @@ impl ClangdSessionBuilder<HasConfig, NoProcessManager, NoLspClient> {
     + Sync
     + 'static {
         move |request| {
-            use crate::lsp_v2::protocol::{JsonRpcErrorObject, JsonRpcResponse};
+            use crate::lsp_v2::jsonrpc_utils;
 
             match request.method.as_str() {
-                "window/workDoneProgress/create" => {
+                lsp_types::request::WorkDoneProgressCreate::METHOD => {
                     debug!(
-                        "Accepting workDoneProgress/create request: {:?}",
+                        "Accepting {} request: {:?}",
+                        lsp_types::request::WorkDoneProgressCreate::METHOD,
                         request.id
                     );
-                    JsonRpcResponse {
-                        jsonrpc: "2.0".to_string(),
-                        id: request.id,
-                        result: Some(serde_json::Value::Null),
-                        error: None,
-                    }
+                    jsonrpc_utils::null_success_response(request.id)
                 }
-                _ => JsonRpcResponse {
-                    jsonrpc: "2.0".to_string(),
-                    id: request.id,
-                    result: None,
-                    error: Some(JsonRpcErrorObject {
-                        code: -32601,
-                        message: format!("Method not found: {}", request.method),
-                        data: None,
-                    }),
-                },
+                _ => jsonrpc_utils::method_not_found_response(request.id, &request.method),
             }
         }
     }

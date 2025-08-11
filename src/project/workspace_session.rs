@@ -8,7 +8,7 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::Mutex;
-use tracing::{info, instrument};
+use tracing::{debug, info, instrument, warn};
 
 use crate::clangd::{ClangdConfigBuilder, ClangdSession, ClangdSessionBuilder};
 use crate::project::{ProjectError, ProjectWorkspace};
@@ -96,6 +96,33 @@ impl WorkspaceSession {
 
         // Wrap in Arc<Mutex> for sharing
         let session_arc = Arc::new(Mutex::new(session));
+
+        // Trigger clangd indexing by opening a representative source file.
+        // clangd requires at least one textDocument/didOpen to initiate background indexing.
+        // Without this, clangd remains idle and subsequent symbol queries return empty results.
+        let component = self
+            .workspace
+            .get_component_by_build_dir(&build_dir)
+            .ok_or_else(|| {
+                ProjectError::SessionCreation("Component not found for build directory".to_string())
+            })?;
+
+        let source_files = component.compilation_database.source_files();
+        if let Some(&first_file) = source_files.first() {
+            debug!(
+                "Triggering indexing by opening first source file: {:?}",
+                first_file
+            );
+            let mut session_guard = session_arc.lock().await;
+            if let Err(e) = session_guard.ensure_file_ready(first_file).await {
+                warn!(
+                    "Failed to open first source file to trigger indexing: {}",
+                    e
+                );
+            }
+        } else {
+            warn!("No source files found in compilation database - indexing may not start");
+        }
 
         // Store the session for future reuse
         sessions.insert(build_dir.clone(), Arc::clone(&session_arc));

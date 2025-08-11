@@ -6,26 +6,35 @@ use rust_mcp_sdk::schema::{
 use rust_mcp_sdk::{McpServer, mcp_server::ServerHandler};
 use tracing::{Level, info};
 
+#[cfg(not(feature = "tools-v2"))]
 use crate::legacy_lsp::manager::ClangdManager;
 use crate::project::ProjectWorkspace;
 #[cfg(feature = "tools-v2")]
 use crate::project::WorkspaceSession;
 use crate::register_tools;
+#[cfg(feature = "tools-v2")]
+use crate::server_helpers;
 #[cfg(not(feature = "tools-v2"))]
 use crate::tools::analyze_symbols::AnalyzeSymbolContextTool;
 #[cfg(feature = "tools-v2")]
 use crate::tools::analyze_symbols_v2::AnalyzeSymbolContextTool;
 use crate::tools::project_tools::GetProjectDetailsTool;
+#[cfg(not(feature = "tools-v2"))]
 use crate::tools::search_symbols::SearchSymbolsTool;
+#[cfg(feature = "tools-v2")]
+use crate::tools::search_symbols_v2::SearchSymbolsTool;
 use crate::tools::utils::McpToolHandler;
 use crate::{log_mcp_message, log_timing};
 #[cfg(feature = "tools-v2")]
 use std::path::PathBuf;
+#[cfg(not(feature = "tools-v2"))]
 use std::sync::Arc;
 use std::time::Instant;
+#[cfg(not(feature = "tools-v2"))]
 use tokio::sync::Mutex;
 
 pub struct CppServerHandler {
+    #[cfg(not(feature = "tools-v2"))]
     clangd_manager: Arc<Mutex<ClangdManager>>,
     project_workspace: ProjectWorkspace,
     #[cfg(feature = "tools-v2")]
@@ -37,6 +46,7 @@ impl CppServerHandler {
         #[cfg(feature = "tools-v2")]
         let workspace_session = WorkspaceSession::new(project_workspace.clone());
         Self {
+            #[cfg(not(feature = "tools-v2"))]
             clangd_manager: Arc::new(Mutex::new(ClangdManager::new())),
             project_workspace,
             #[cfg(feature = "tools-v2")]
@@ -44,53 +54,13 @@ impl CppServerHandler {
         }
     }
 
-    /// Resolves build directory from optional parameter.
-    /// Returns error if specified directory doesn't exist in workspace or if
-    /// auto-detection fails due to zero or multiple build directories.
+    /// Resolves build directory from optional parameter using the helper function.
     #[cfg(feature = "tools-v2")]
     fn resolve_build_directory(
         &self,
         requested_build_dir: Option<&str>,
     ) -> Result<PathBuf, CallToolError> {
-        match requested_build_dir {
-            Some(build_dir_str) => {
-                let requested_path = PathBuf::from(build_dir_str);
-
-                if self
-                    .project_workspace
-                    .get_component_by_build_dir(&requested_path)
-                    .is_some()
-                {
-                    Ok(requested_path)
-                } else {
-                    let available = self.project_workspace.get_build_dirs();
-                    Err(CallToolError::new(std::io::Error::new(
-                        std::io::ErrorKind::InvalidInput,
-                        format!(
-                            "Build directory '{}' not found in project workspace. Available: {:?}",
-                            build_dir_str, available
-                        ),
-                    )))
-                }
-            }
-            None => {
-                let build_dirs = self.project_workspace.get_build_dirs();
-                match build_dirs.len() {
-                    0 => Err(CallToolError::new(std::io::Error::new(
-                        std::io::ErrorKind::NotFound,
-                        "No build directories found in project. Run cmake to generate build configuration.",
-                    ))),
-                    1 => Ok(build_dirs[0].clone()),
-                    _ => Err(CallToolError::new(std::io::Error::new(
-                        std::io::ErrorKind::InvalidInput,
-                        format!(
-                            "Multiple build directories found. Please specify build_directory parameter. Available: {:?}",
-                            build_dirs
-                        ),
-                    ))),
-                }
-            }
-        }
+        server_helpers::resolve_build_directory(&self.project_workspace, requested_build_dir)
     }
 }
 
@@ -103,6 +73,7 @@ impl McpToolHandler<GetProjectDetailsTool> for CppServerHandler {
     }
 }
 
+#[cfg(not(feature = "tools-v2"))]
 impl McpToolHandler<SearchSymbolsTool> for CppServerHandler {
     const TOOL_NAME: &'static str = "search_symbols";
 
@@ -111,6 +82,32 @@ impl McpToolHandler<SearchSymbolsTool> for CppServerHandler {
         tool: SearchSymbolsTool,
     ) -> Result<CallToolResult, CallToolError> {
         tool.call_tool(&self.clangd_manager).await
+    }
+}
+
+#[cfg(feature = "tools-v2")]
+impl McpToolHandler<SearchSymbolsTool> for CppServerHandler {
+    const TOOL_NAME: &'static str = "search_symbols";
+
+    async fn call_tool_async(
+        &self,
+        tool: SearchSymbolsTool,
+    ) -> Result<CallToolResult, CallToolError> {
+        let build_dir = self.resolve_build_directory(tool.build_directory.as_deref())?;
+
+        let clangd_session = self
+            .workspace_session
+            .get_or_create_session(build_dir)
+            .await
+            .map_err(|e| {
+                CallToolError::new(std::io::Error::other(format!(
+                    "Session creation failed: {}",
+                    e
+                )))
+            })?;
+
+        tool.call_tool_v2(clangd_session, &self.project_workspace)
+            .await
     }
 }
 

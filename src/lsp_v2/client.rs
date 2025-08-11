@@ -12,13 +12,12 @@ use lsp_types::{
     CallHierarchyOutgoingCall, CallHierarchyOutgoingCallsParams, CallHierarchyPrepareParams,
     ClientCapabilities, DidChangeTextDocumentParams, DidCloseTextDocumentParams,
     DidOpenTextDocumentParams, DocumentSymbolParams, DocumentSymbolResponse, GotoDefinitionParams,
-    GotoDefinitionResponse, HoverParams, InitializeParams, InitializeResult, InitializedParams,
-    Location, Position, ReferenceContext, ReferenceParams, TextDocumentClientCapabilities,
+    GotoDefinitionResponse, HoverParams, InitializeParams, InitializedParams, Location, Position,
+    ReferenceContext, ReferenceParams, TextDocumentClientCapabilities,
     TextDocumentContentChangeEvent, TextDocumentIdentifier, TextDocumentItem,
     TextDocumentPositionParams, VersionedTextDocumentIdentifier, WorkspaceClientCapabilities,
     WorkspaceSymbol, WorkspaceSymbolParams,
 };
-use serde_json::Value;
 use tracing::{debug, info};
 
 // ============================================================================
@@ -72,6 +71,37 @@ impl<T: Transport + 'static> LspClient<T> {
             initialized: false,
             server_capabilities: None,
         }
+    }
+    /// Executes typed LSP requests using the lsp-types Request trait.
+    /// Provides compile-time method validation and eliminates hardcoded strings,
+    /// reducing protocol violation risks and improving maintainability.
+    async fn request<R>(&mut self, params: R::Params) -> Result<R::Result, LspError>
+    where
+        R: lsp_types::request::Request,
+        R::Params: serde::Serialize,
+        R::Result: serde::de::DeserializeOwned,
+    {
+        match self.rpc_client.request(R::METHOD, Some(params)).await {
+            Ok(result) => Ok(result),
+            Err(JsonRpcError::Timeout) => Err(LspError::RequestTimeout {
+                method: R::METHOD.to_string(),
+            }),
+            Err(e) => Err(LspError::JsonRpc(e)),
+        }
+    }
+
+    /// Sends typed LSP notifications using the lsp-types Notification trait.
+    /// Provides compile-time method validation and eliminates hardcoded strings,
+    /// ensuring LSP specification compliance and reducing communication errors.
+    async fn notify<N>(&mut self, params: N::Params) -> Result<(), LspError>
+    where
+        N: lsp_types::notification::Notification,
+        N::Params: serde::Serialize,
+    {
+        self.rpc_client
+            .notify(N::METHOD, Some(params))
+            .await
+            .map_err(LspError::JsonRpc)
     }
 }
 
@@ -163,24 +193,16 @@ impl<T: Transport + 'static> LspClientTrait for LspClient<T> {
         };
 
         // Send initialize request
-        let result: InitializeResult =
-            match self.rpc_client.request("initialize", Some(params)).await {
-                Ok(result) => result,
-                Err(JsonRpcError::Timeout) => {
-                    return Err(LspError::RequestTimeout {
-                        method: "initialize".to_string(),
-                    });
-                }
-                Err(e) => return Err(LspError::JsonRpc(e)),
-            };
+        let result = self
+            .request::<lsp_types::request::Initialize>(params)
+            .await?;
 
         debug!("LSP server capabilities: {:?}", result.capabilities);
         self.server_capabilities = Some(result.capabilities.clone());
 
         // Complete initialization
         let initialized_params = InitializedParams {};
-        self.rpc_client
-            .notify("initialized", Some(initialized_params))
+        self.notify::<lsp_types::notification::Initialized>(initialized_params)
             .await?;
 
         self.initialized = true;
@@ -195,17 +217,9 @@ impl<T: Transport + 'static> LspClientTrait for LspClient<T> {
         }
 
         info!("Shutting down LSP client");
-        let _: () = match self.rpc_client.request("shutdown", None::<Value>).await {
-            Ok(result) => result,
-            Err(JsonRpcError::Timeout) => {
-                return Err(LspError::RequestTimeout {
-                    method: "shutdown".to_string(),
-                });
-            }
-            Err(e) => return Err(LspError::JsonRpc(e)),
-        };
+        let _: () = self.request::<lsp_types::request::Shutdown>(()).await?;
 
-        self.rpc_client.notify("exit", None::<Value>).await?;
+        self.notify::<lsp_types::notification::Exit>(()).await?;
 
         self.initialized = false;
         info!("LSP client shutdown complete");
@@ -258,8 +272,7 @@ impl<T: Transport + 'static> LspClientTrait for LspClient<T> {
         };
 
         debug!("Opening text document: {:?}", params.text_document.uri);
-        self.rpc_client
-            .notify("textDocument/didOpen", Some(params))
+        self.notify::<lsp_types::notification::DidOpenTextDocument>(params)
             .await?;
 
         Ok(())
@@ -279,8 +292,7 @@ impl<T: Transport + 'static> LspClientTrait for LspClient<T> {
         };
 
         debug!("Closing text document: {:?}", params.text_document.uri);
-        self.rpc_client
-            .notify("textDocument/didClose", Some(params))
+        self.notify::<lsp_types::notification::DidCloseTextDocument>(params)
             .await?;
 
         Ok(())
@@ -314,8 +326,7 @@ impl<T: Transport + 'static> LspClientTrait for LspClient<T> {
             "Changing text document: {:?} (version {})",
             params.text_document.uri, params.text_document.version
         );
-        self.rpc_client
-            .notify("textDocument/didChange", Some(params))
+        self.notify::<lsp_types::notification::DidChangeTextDocument>(params)
             .await?;
 
         Ok(())
@@ -340,21 +351,31 @@ impl<T: Transport + 'static> LspClientTrait for LspClient<T> {
             "Requesting workspace symbols with query: {:?}",
             params.query
         );
-        let result: Vec<WorkspaceSymbol> = match self
-            .rpc_client
-            .request("workspace/symbol", Some(params))
-            .await
-        {
-            Ok(result) => result,
-            Err(JsonRpcError::Timeout) => {
-                return Err(LspError::RequestTimeout {
-                    method: "workspace/symbol".to_string(),
-                });
-            }
-            Err(e) => return Err(LspError::JsonRpc(e)),
-        };
+        let result = self
+            .request::<lsp_types::request::WorkspaceSymbolRequest>(params)
+            .await?;
 
-        Ok(result)
+        match result {
+            Some(lsp_types::WorkspaceSymbolResponse::Flat(symbol_infos)) => {
+                // Convert SymbolInformation to WorkspaceSymbol
+                let workspace_symbols = symbol_infos
+                    .into_iter()
+                    .map(|si| lsp_types::WorkspaceSymbol {
+                        name: si.name,
+                        kind: si.kind,
+                        tags: si.tags,
+                        container_name: si.container_name,
+                        location: lsp_types::OneOf::Left(si.location),
+                        data: None,
+                    })
+                    .collect();
+                Ok(workspace_symbols)
+            }
+            Some(lsp_types::WorkspaceSymbolResponse::Nested(workspace_symbols)) => {
+                Ok(workspace_symbols)
+            }
+            None => Ok(vec![]),
+        }
     }
 
     async fn text_document_definition(
@@ -384,21 +405,11 @@ impl<T: Transport + 'static> LspClientTrait for LspClient<T> {
             params.text_document_position_params.text_document.uri,
             params.text_document_position_params.position
         );
-        let result: GotoDefinitionResponse = match self
-            .rpc_client
-            .request("textDocument/definition", Some(params))
-            .await
-        {
-            Ok(result) => result,
-            Err(JsonRpcError::Timeout) => {
-                return Err(LspError::RequestTimeout {
-                    method: "textDocument/definition".to_string(),
-                });
-            }
-            Err(e) => return Err(LspError::JsonRpc(e)),
-        };
+        let result = self
+            .request::<lsp_types::request::GotoDefinition>(params)
+            .await?;
 
-        Ok(result)
+        Ok(result.unwrap_or(lsp_types::GotoDefinitionResponse::Array(vec![])))
     }
 
     async fn text_document_declaration(
@@ -428,21 +439,11 @@ impl<T: Transport + 'static> LspClientTrait for LspClient<T> {
             params.text_document_position_params.text_document.uri,
             params.text_document_position_params.position
         );
-        let result: lsp_types::request::GotoDeclarationResponse = match self
-            .rpc_client
-            .request("textDocument/declaration", Some(params))
-            .await
-        {
-            Ok(result) => result,
-            Err(JsonRpcError::Timeout) => {
-                return Err(LspError::RequestTimeout {
-                    method: "textDocument/declaration".to_string(),
-                });
-            }
-            Err(e) => return Err(LspError::JsonRpc(e)),
-        };
+        let result = self
+            .request::<lsp_types::request::GotoDeclaration>(params)
+            .await?;
 
-        Ok(result)
+        Ok(result.unwrap_or(lsp_types::request::GotoDeclarationResponse::Array(vec![])))
     }
 
     async fn text_document_references(
@@ -477,21 +478,11 @@ impl<T: Transport + 'static> LspClientTrait for LspClient<T> {
             params.text_document_position.position,
             include_declaration
         );
-        let result: Vec<Location> = match self
-            .rpc_client
-            .request("textDocument/references", Some(params))
-            .await
-        {
-            Ok(result) => result,
-            Err(JsonRpcError::Timeout) => {
-                return Err(LspError::RequestTimeout {
-                    method: "textDocument/references".to_string(),
-                });
-            }
-            Err(e) => return Err(LspError::JsonRpc(e)),
-        };
+        let result = self
+            .request::<lsp_types::request::References>(params)
+            .await?;
 
-        Ok(result)
+        Ok(result.unwrap_or_default())
     }
 
     async fn text_document_hover(
@@ -520,19 +511,9 @@ impl<T: Transport + 'static> LspClientTrait for LspClient<T> {
             params.text_document_position_params.text_document.uri,
             params.text_document_position_params.position
         );
-        let result: Option<lsp_types::Hover> = match self
-            .rpc_client
-            .request("textDocument/hover", Some(params))
-            .await
-        {
-            Ok(result) => result,
-            Err(JsonRpcError::Timeout) => {
-                return Err(LspError::RequestTimeout {
-                    method: "textDocument/hover".to_string(),
-                });
-            }
-            Err(e) => return Err(LspError::JsonRpc(e)),
-        };
+        let result = self
+            .request::<lsp_types::request::HoverRequest>(params)
+            .await?;
 
         Ok(result)
     }
@@ -559,21 +540,11 @@ impl<T: Transport + 'static> LspClientTrait for LspClient<T> {
             "Requesting document symbols for: {:?}",
             params.text_document.uri
         );
-        let result: DocumentSymbolResponse = match self
-            .rpc_client
-            .request("textDocument/documentSymbol", Some(params))
-            .await
-        {
-            Ok(result) => result,
-            Err(JsonRpcError::Timeout) => {
-                return Err(LspError::RequestTimeout {
-                    method: "textDocument/documentSymbol".to_string(),
-                });
-            }
-            Err(e) => return Err(LspError::JsonRpc(e)),
-        };
+        let result = self
+            .request::<lsp_types::request::DocumentSymbolRequest>(params)
+            .await?;
 
-        Ok(result)
+        Ok(result.unwrap_or(lsp_types::DocumentSymbolResponse::Flat(vec![])))
     }
 
     // ========================================================================
@@ -606,21 +577,11 @@ impl<T: Transport + 'static> LspClientTrait for LspClient<T> {
             params.text_document_position_params.text_document.uri,
             params.text_document_position_params.position
         );
-        let result: Vec<CallHierarchyItem> = match self
-            .rpc_client
-            .request("textDocument/prepareCallHierarchy", Some(params))
-            .await
-        {
-            Ok(result) => result,
-            Err(JsonRpcError::Timeout) => {
-                return Err(LspError::RequestTimeout {
-                    method: "textDocument/prepareCallHierarchy".to_string(),
-                });
-            }
-            Err(e) => return Err(LspError::JsonRpc(e)),
-        };
+        let result = self
+            .request::<lsp_types::request::CallHierarchyPrepare>(params)
+            .await?;
 
-        Ok(result)
+        Ok(result.unwrap_or_default())
     }
 
     async fn call_hierarchy_incoming_calls(
@@ -638,21 +599,11 @@ impl<T: Transport + 'static> LspClientTrait for LspClient<T> {
         };
 
         debug!("Requesting incoming calls for: {:?}", params.item.name);
-        let result: Vec<CallHierarchyIncomingCall> = match self
-            .rpc_client
-            .request("callHierarchy/incomingCalls", Some(params))
-            .await
-        {
-            Ok(result) => result,
-            Err(JsonRpcError::Timeout) => {
-                return Err(LspError::RequestTimeout {
-                    method: "callHierarchy/incomingCalls".to_string(),
-                });
-            }
-            Err(e) => return Err(LspError::JsonRpc(e)),
-        };
+        let result = self
+            .request::<lsp_types::request::CallHierarchyIncomingCalls>(params)
+            .await?;
 
-        Ok(result)
+        Ok(result.unwrap_or_default())
     }
 
     async fn call_hierarchy_outgoing_calls(
@@ -670,21 +621,11 @@ impl<T: Transport + 'static> LspClientTrait for LspClient<T> {
         };
 
         debug!("Requesting outgoing calls for: {:?}", params.item.name);
-        let result: Vec<CallHierarchyOutgoingCall> = match self
-            .rpc_client
-            .request("callHierarchy/outgoingCalls", Some(params))
-            .await
-        {
-            Ok(result) => result,
-            Err(JsonRpcError::Timeout) => {
-                return Err(LspError::RequestTimeout {
-                    method: "callHierarchy/outgoingCalls".to_string(),
-                });
-            }
-            Err(e) => return Err(LspError::JsonRpc(e)),
-        };
+        let result = self
+            .request::<lsp_types::request::CallHierarchyOutgoingCalls>(params)
+            .await?;
 
-        Ok(result)
+        Ok(result.unwrap_or_default())
     }
 }
 
