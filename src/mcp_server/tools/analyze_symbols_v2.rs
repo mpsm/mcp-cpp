@@ -272,11 +272,15 @@ impl AnalyzeSymbolContextTool {
         // Wait for clangd indexing to complete before analyzing
         super::utils::wait_for_indexing(session.index_monitor(), None).await;
 
-        // Find symbol location first
-        let symbol_location = {
+        // Find symbol information (location and kind)
+        let symbol_info = {
             let client = session.client_mut();
             self.find_symbol(client).await?
         };
+
+        // Extract location and kind from the symbol info
+        let symbol_location = &symbol_info["location"];
+        let symbol_kind = symbol_info["kind"].as_str().unwrap_or("unknown");
 
         // Trigger clangd file opening to enable AST-dependent LSP operations.
         // clangd requires textDocument/didOpen before serving hover, definition,
@@ -314,6 +318,7 @@ impl AnalyzeSymbolContextTool {
             "symbol": {
                 "name": self.symbol,
                 "location": symbol_location,
+                "kind": symbol_kind,
             }
         });
 
@@ -373,20 +378,14 @@ impl AnalyzeSymbolContextTool {
 
     /// Find symbol using workspace/symbol request
     async fn find_symbol(&self, client: &mut impl LspClientTrait) -> Result<Value, CallToolError> {
-        // If location is provided, use it directly
+        // If location is provided, use it directly (but without kind information)
         if let Some(ref location) = self.location {
             return Ok(json!({
-                "uri": location.file_uri,
-                "range": {
-                    "start": {
-                        "line": location.position.line,
-                        "character": location.position.character
-                    },
-                    "end": {
-                        "line": location.position.line,
-                        "character": location.position.character
-                    }
-                }
+                "location": {
+                    "uri": location.file_uri,
+                    "range": super::utils::point_range(location.position.line, location.position.character)
+                },
+                "kind": "unknown" // No kind info when location is manually provided
             }));
         }
 
@@ -408,23 +407,28 @@ impl AnalyzeSymbolContextTool {
             .or_else(|| symbols.first());
 
         if let Some(symbol) = best_match {
+            // Convert LSP SymbolKind enum to string representation
+            let kind_str = format!("{:?}", symbol.kind).to_lowercase();
+            
             // Handle OneOf<Location, WorkspaceLocation>
-            match &symbol.location {
-                lsp_types::OneOf::Left(location) => Ok(json!({
+            let location = match &symbol.location {
+                lsp_types::OneOf::Left(location) => json!({
                     "uri": location.uri.to_string(),
                     "range": location.range
-                })),
+                }),
                 lsp_types::OneOf::Right(workspace_location) => {
                     // WorkspaceLocation only has uri, no range - use a default range
-                    Ok(json!({
+                    json!({
                         "uri": workspace_location.uri.to_string(),
-                        "range": {
-                            "start": {"line": 0, "character": 0},
-                            "end": {"line": 0, "character": 0}
-                        }
-                    }))
+                        "range": super::utils::zero_range()
+                    })
                 }
-            }
+            };
+            
+            Ok(json!({
+                "location": location,
+                "kind": kind_str
+            }))
         } else {
             Err(CallToolError::unknown_tool(format!(
                 "Symbol '{}' not found in workspace",
@@ -449,7 +453,7 @@ impl AnalyzeSymbolContextTool {
 
         // Use the clean trait method
         let hover = client
-            .text_document_hover(uri.to_string(), lsp_types::Position { line, character })
+            .text_document_hover(uri.to_string(), super::utils::position(line, character))
             .await;
 
         match hover {
@@ -478,7 +482,7 @@ impl AnalyzeSymbolContextTool {
 
         // Use the clean trait method
         let definition = client
-            .text_document_definition(uri.to_string(), lsp_types::Position { line, character })
+            .text_document_definition(uri.to_string(), super::utils::position(line, character))
             .await;
 
         match definition {
@@ -508,7 +512,7 @@ impl AnalyzeSymbolContextTool {
         let refs = client
             .text_document_references(
                 uri.to_string(),
-                lsp_types::Position { line, character },
+                super::utils::position(line, character),
                 false, // include_declaration
             )
             .await;
@@ -584,7 +588,7 @@ impl AnalyzeSymbolContextTool {
         let items = client
             .text_document_prepare_call_hierarchy(
                 uri.to_string(),
-                lsp_types::Position { line, character },
+                super::utils::position(line, character),
             )
             .await;
 
@@ -629,37 +633,52 @@ impl AnalyzeSymbolContextTool {
 
         match symbols {
             Ok(lsp_types::DocumentSymbolResponse::Nested(symbols)) => {
-                // Find the target class
-                for symbol in symbols {
-                    if symbol.name == self.symbol
-                        && (symbol.kind == lsp_types::SymbolKind::CLASS
-                            || symbol.kind == lsp_types::SymbolKind::STRUCT)
-                    {
-                        // Extract members
-                        let members: Vec<_> = symbol
-                            .children
-                            .unwrap_or_default()
-                            .into_iter()
-                            .map(|child| {
-                                json!({
-                                    "name": child.name,
-                                    "kind": format!("{:?}", child.kind).to_lowercase(),
-                                    "range": child.range,
-                                    "detail": child.detail
-                                })
+                // Recursively search for the target class
+                if let Some(class_symbol) = self.find_class_symbol_recursive(&symbols) {
+                    // Extract members
+                    let members: Vec<_> = class_symbol
+                        .children
+                        .unwrap_or_default()
+                        .into_iter()
+                        .map(|child| {
+                            json!({
+                                "name": child.name,
+                                "kind": format!("{:?}", child.kind).to_lowercase(),
+                                "range": child.range,
+                                "detail": child.detail
                             })
-                            .collect();
+                        })
+                        .collect();
 
-                        return Ok(Some(json!({
-                            "members": members,
-                            "total_count": members.len()
-                        })));
-                    }
+                    return Ok(Some(json!({
+                        "members": members,
+                        "total_count": members.len()
+                    })));
                 }
                 Ok(None)
             }
             _ => Ok(None),
         }
+    }
+
+    /// Recursively searches through nested document symbols to find a class with the target name
+    fn find_class_symbol_recursive(&self, symbols: &[lsp_types::DocumentSymbol]) -> Option<lsp_types::DocumentSymbol> {
+        for symbol in symbols {
+            // Check if this symbol is the target class
+            if symbol.name == self.symbol
+                && (symbol.kind == lsp_types::SymbolKind::CLASS || symbol.kind == lsp_types::SymbolKind::STRUCT)
+            {
+                return Some(symbol.clone());
+            }
+            
+            // Recursively search children (for namespaces, etc.)
+            if let Some(children) = &symbol.children {
+                if let Some(found) = self.find_class_symbol_recursive(children) {
+                    return Some(found);
+                }
+            }
+        }
+        None
     }
 }
 

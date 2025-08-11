@@ -159,7 +159,7 @@ impl SearchSymbolsTool {
 
         // Convert LSP numeric symbol kinds to string representations for MCP client compatibility.
         // This ensures consistent symbol type representation across different MCP client implementations.
-        let converted_symbols = Self::convert_symbol_kinds(symbols_json);
+        let converted_symbols = super::utils::convert_symbol_kinds(symbols_json);
 
         Ok(json!({
             "success": true,
@@ -209,7 +209,7 @@ impl SearchSymbolsTool {
 
         // Convert LSP numeric symbol kinds to string representations for MCP client compatibility.
         // This ensures consistent symbol type representation across different MCP client implementations.
-        let converted_symbols = Self::convert_symbol_kinds(limited_symbols);
+        let converted_symbols = super::utils::convert_symbol_kinds(limited_symbols);
 
         Ok(json!({
             "success": true,
@@ -434,26 +434,6 @@ impl SearchSymbolsTool {
         false
     }
 
-    /// Converts LSP numeric symbol kinds to string representations for MCP client compatibility.
-    /// Uses serde deserialization to maintain compatibility with LSP specification
-    /// while providing type safety for subsequent filtering operations.
-    fn convert_symbol_kinds(symbols: Vec<serde_json::Value>) -> Vec<serde_json::Value> {
-        symbols
-            .into_iter()
-            .map(|mut symbol| {
-                if let Some(kind_num) = symbol.get("kind").and_then(|k| k.as_u64()) {
-                    // Convert numeric kind to strongly-typed SymbolKind enum via serde
-                    if let Ok(kind_enum) = serde_json::from_value::<lsp_types::SymbolKind>(
-                        serde_json::Value::Number(serde_json::Number::from(kind_num)),
-                    ) {
-                        let kind_str = format!("{:?}", kind_enum).to_lowercase();
-                        symbol["kind"] = serde_json::Value::String(kind_str);
-                    }
-                }
-                symbol
-            })
-            .collect()
-    }
 }
 
 #[cfg(test)]

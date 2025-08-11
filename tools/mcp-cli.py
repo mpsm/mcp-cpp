@@ -635,28 +635,34 @@ def _format_symbol_analysis(console, data: Dict) -> None:
         
         # Location information
         if "definition" in symbol_data:
-            definition = symbol_data["definition"]
-            file_uri = definition.get("uri", "")
-            if file_uri.startswith("file://"):
-                file_path = file_uri[7:]
-            else:
-                file_path = file_uri
-            
-            if "range" in definition and "start" in definition["range"]:
-                line = definition["range"]["start"].get("line", 0) + 1
-                console.print(f"[bold]Definition:[/bold] {file_path}:{line}")
+            definition_list = symbol_data["definition"]
+            # Handle definition as a list (take first element)
+            if isinstance(definition_list, list) and definition_list:
+                definition = definition_list[0]
+                file_uri = definition.get("uri", "")
+                if file_uri.startswith("file://"):
+                    file_path = file_uri[7:]
+                else:
+                    file_path = file_uri
+                
+                if "range" in definition and "start" in definition["range"]:
+                    line = definition["range"]["start"].get("line", 0) + 1
+                    console.print(f"[bold]Definition:[/bold] {file_path}:{line}")
         
         if "declaration" in symbol_data:
-            declaration = symbol_data["declaration"]
-            file_uri = declaration.get("uri", "")
-            if file_uri.startswith("file://"):
-                file_path = file_uri[7:]
-            else:
-                file_path = file_uri
-                
-            if "range" in declaration and "start" in declaration["range"]:
-                line = declaration["range"]["start"].get("line", 0) + 1
-                console.print(f"[bold]Declaration:[/bold] {file_path}:{line}")
+            declaration_list = symbol_data["declaration"]
+            # Handle declaration as a list (take first element)
+            if isinstance(declaration_list, list) and declaration_list:
+                declaration = declaration_list[0]
+                file_uri = declaration.get("uri", "")
+                if file_uri.startswith("file://"):
+                    file_path = file_uri[7:]
+                else:
+                    file_path = file_uri
+                    
+                if "range" in declaration and "start" in declaration["range"]:
+                    line = declaration["range"]["start"].get("line", 0) + 1
+                    console.print(f"[bold]Declaration:[/bold] {file_path}:{line}")
         
         # Documentation
         if "documentation" in symbol_data:
