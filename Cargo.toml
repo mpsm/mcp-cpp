@@ -44,5 +44,3 @@ clangd-integration-tests = []
 test-logging = []
 # Enable integration tests for project scanning (requires cmake and meson)
 project-integration-tests = []
-# Enable v2 tools implementations (mutually exclusive with v1)
-tools-v2 = []

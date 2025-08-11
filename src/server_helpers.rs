@@ -1,13 +1,9 @@
 //! Server helper utilities for common operations
 
-#[cfg(feature = "tools-v2")]
 use rust_mcp_sdk::schema::schema_utils::CallToolError;
-#[cfg(feature = "tools-v2")]
 use std::path::PathBuf;
-#[cfg(feature = "tools-v2")]
 use tracing::debug;
 
-#[cfg(feature = "tools-v2")]
 use crate::project::ProjectWorkspace;
 
 /// Resolves build directory from optional parameter.
@@ -26,7 +22,6 @@ use crate::project::ProjectWorkspace;
 /// - If not provided, auto-detects single build directory
 /// - Fails if no build directories exist (suggests running cmake)
 /// - Fails if multiple build directories exist without explicit selection
-#[cfg(feature = "tools-v2")]
 pub fn resolve_build_directory(
     workspace: &ProjectWorkspace,
     requested_build_dir: Option<&str>,
@@ -87,7 +82,7 @@ pub fn resolve_build_directory(
     }
 }
 
-#[cfg(all(test, feature = "tools-v2"))]
+#[cfg(test)]
 mod tests {
     use super::*;
 

@@ -2,11 +2,9 @@
 
 use rust_mcp_sdk::schema::{CallToolResult, schema_utils::CallToolError};
 use serde::de::DeserializeOwned;
-#[cfg(feature = "tools-v2")]
 use tracing::{info, warn};
 
 /// Default timeout for waiting for clangd indexing to complete
-#[cfg(feature = "tools-v2")]
 pub const INDEXING_WAIT_TIMEOUT_SECS: u64 = 30;
 
 /// Wait for clangd indexing to complete with timeout
@@ -18,7 +16,6 @@ pub const INDEXING_WAIT_TIMEOUT_SECS: u64 = 30;
 /// # Arguments
 /// * `index_monitor` - The index monitor from a ClangdSession
 /// * `timeout_secs` - Optional timeout in seconds (defaults to INDEXING_WAIT_TIMEOUT_SECS)
-#[cfg(feature = "tools-v2")]
 pub async fn wait_for_indexing(
     index_monitor: &crate::clangd::index::IndexMonitor,
     timeout_secs: Option<u64>,
