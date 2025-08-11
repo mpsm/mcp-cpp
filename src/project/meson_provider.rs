@@ -7,7 +7,6 @@ use std::path::{Path, PathBuf};
 ///
 /// This provider detects and parses Meson build directories by looking for
 /// meson-info directory and extracting build configuration information.
-
 pub struct MesonProvider;
 
 impl MesonProvider {

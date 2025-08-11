@@ -83,7 +83,6 @@ pub trait ProcessExitHandler: Send + Sync {
 // ============================================================================
 
 /// Trait for monitoring stderr output from external processes
-
 pub trait StderrMonitor: Send + Sync {
     /// Install a handler for stderr lines
     ///
@@ -520,7 +519,6 @@ pub struct MockProcessManager {
 #[allow(dead_code)]
 impl MockProcessManager {
     /// Create a new mock process manager
-
     pub fn new() -> Self {
         Self {
             running: false,

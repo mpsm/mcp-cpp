@@ -15,7 +15,6 @@ pub const JSONRPC_VERSION: &str = "2.0";
 
 /// JSON-RPC 2.0 Error Codes (as per JSON-RPC specification)
 /// https://www.jsonrpc.org/specification#error_object
-
 pub mod error_codes {
     /// Method not found - The method does not exist / is not available.
     pub const METHOD_NOT_FOUND: i32 = -32601;

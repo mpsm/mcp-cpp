@@ -48,7 +48,6 @@ pub enum LspError {
 // ============================================================================
 
 /// LSP client structure - functionality accessed through LspClientTrait
-
 pub struct LspClient<T: Transport> {
     /// JSON-RPC client for communication
     rpc_client: JsonRpcClient<T>,

@@ -7,7 +7,6 @@ use std::path::{Path, PathBuf};
 ///
 /// This provider detects and parses CMake build directories by looking for
 /// CMakeCache.txt files and extracting build configuration information.
-
 pub struct CmakeProvider;
 
 impl CmakeProvider {

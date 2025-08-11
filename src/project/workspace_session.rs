@@ -27,7 +27,6 @@ pub struct WorkspaceSession {
 
 impl WorkspaceSession {
     /// Create a new WorkspaceSession for the given project workspace
-
     pub fn new(workspace: ProjectWorkspace) -> Self {
         Self {
             workspace,

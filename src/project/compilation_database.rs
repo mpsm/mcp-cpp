@@ -62,7 +62,6 @@ impl CompilationDatabase {
     }
 
     /// Get all compilation database entries
-
     pub fn entries(&self) -> &[Entry] {
         &self.entries
     }
@@ -73,7 +72,6 @@ impl CompilationDatabase {
     }
 
     /// Get all unique source files referenced in the compilation database
-
     pub fn source_files(&self) -> Vec<&Path> {
         let mut files: Vec<&Path> = self
             .entries

@@ -30,7 +30,6 @@ impl Default for ScanOptions {
 ///
 /// The scanner uses a provider registry to detect different build systems
 /// and creates a ProjectWorkspace containing all discovered components.
-
 pub struct ProjectScanner {
     provider_registry: ProjectProviderRegistry,
 }

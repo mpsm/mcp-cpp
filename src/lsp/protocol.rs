@@ -87,7 +87,6 @@ pub struct JsonRpcErrorObject {
 /// JSON-RPC error codes as defined in the specification
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(i32)]
-
 pub enum JsonRpcErrorCode {
     InternalError = -32603,
 }
@@ -212,7 +211,6 @@ struct ClientState {
 }
 
 /// JSON-RPC client with request/response correlation
-
 pub struct JsonRpcClient<T: Transport> {
     /// Channel for sending outbound messages (requests and notifications)
     outbound_sender: mpsc::UnboundedSender<String>,
