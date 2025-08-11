@@ -5,8 +5,8 @@
 
 use std::collections::HashMap;
 
-use crate::lsp_v2::client::LspError;
-use crate::lsp_v2::traits::LspClientTrait;
+use crate::lsp::client::LspError;
+use crate::lsp::traits::LspClientTrait;
 use lsp_types::{
     CallHierarchyIncomingCall, CallHierarchyItem, CallHierarchyOutgoingCall,
     DocumentSymbolResponse, GotoDefinitionResponse, Location, Position, Range, SymbolInformation,
@@ -180,14 +180,14 @@ impl LspClientTrait for MockLspClient {
 
     async fn register_notification_handler<F>(&self, _handler: F)
     where
-        F: Fn(crate::lsp_v2::protocol::JsonRpcNotification) + Send + Sync + 'static,
+        F: Fn(crate::lsp::protocol::JsonRpcNotification) + Send + Sync + 'static,
     {
         // Mock implementation - just ignore handlers
     }
 
     async fn register_request_handler<F>(&self, _handler: F)
     where
-        F: Fn(crate::lsp_v2::protocol::JsonRpcRequest) -> crate::lsp_v2::protocol::JsonRpcResponse
+        F: Fn(crate::lsp::protocol::JsonRpcRequest) -> crate::lsp::protocol::JsonRpcResponse
             + Send
             + Sync
             + 'static,

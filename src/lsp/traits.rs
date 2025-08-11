@@ -5,8 +5,8 @@
 
 use async_trait::async_trait;
 
-use crate::lsp_v2::client::LspError;
-use crate::lsp_v2::protocol::{JsonRpcNotification, JsonRpcRequest, JsonRpcResponse};
+use crate::lsp::client::LspError;
+use crate::lsp::protocol::{JsonRpcNotification, JsonRpcRequest, JsonRpcResponse};
 
 // ============================================================================
 // LSP Client Trait Abstraction

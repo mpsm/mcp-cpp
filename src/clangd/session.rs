@@ -1,7 +1,7 @@
 //! Clangd session management
 //!
 //! Provides ClangdSession trait and implementation for managing clangd process
-//! lifecycle with direct integration to lsp_v2 components (no orchestrator).
+//! lifecycle with direct integration to lsp components (no orchestrator).
 
 use async_trait::async_trait;
 use std::path::PathBuf;
@@ -15,12 +15,12 @@ use crate::clangd::file_manager::ClangdFileManager;
 use crate::clangd::index::IndexMonitor;
 use crate::clangd::session_builder::ClangdSessionBuilder;
 use crate::io::{ChildProcessManager, ProcessManager, StdioTransport, StopMode};
-use crate::lsp_v2::{LspClient, traits::LspClientTrait};
+use crate::lsp::{LspClient, traits::LspClientTrait};
 
 /// Type alias for testing sessions with mock dependencies
 #[cfg(test)]
 type TestSession =
-    ClangdSession<crate::io::process::MockProcessManager, crate::lsp_v2::testing::MockLspClient>;
+    ClangdSession<crate::io::process::MockProcessManager, crate::lsp::testing::MockLspClient>;
 
 // ============================================================================
 // Clangd Session Trait
@@ -427,7 +427,7 @@ mod tests {
 
         // Use proper fluent builder API with mock dependencies
         use crate::io::process::MockProcessManager;
-        use crate::lsp_v2::testing::MockLspClient;
+        use crate::lsp::testing::MockLspClient;
 
         let process_manager = MockProcessManager::new();
         let mut lsp_client = MockLspClient::new();
@@ -466,7 +466,7 @@ mod tests {
 
         // Demonstrate comprehensive unit testing with mock dependencies using fluent API
         use crate::io::process::MockProcessManager;
-        use crate::lsp_v2::testing::MockLspClient;
+        use crate::lsp::testing::MockLspClient;
 
         let process_manager = MockProcessManager::new();
         let mut lsp_client = MockLspClient::new();

@@ -9,7 +9,7 @@ use tracing::{info, instrument};
 
 use crate::clangd::session::{ClangdSession, ClangdSessionTrait};
 // SymbolKind functionality now comes directly from lsp-types
-use crate::lsp_v2::traits::LspClientTrait;
+use crate::lsp::traits::LspClientTrait;
 use crate::project::{ProjectComponent, ProjectWorkspace};
 
 #[mcp_tool(
@@ -89,7 +89,7 @@ impl SearchSymbolsTool {
         let mut session_guard = session.lock().await;
 
         // Wait for clangd indexing to complete before searching
-        crate::tools::utils::wait_for_indexing(session_guard.index_monitor(), None).await;
+        super::utils::wait_for_indexing(session_guard.index_monitor(), None).await;
 
         // Get the component for this session's build directory
         let build_dir = session_guard.build_directory();

@@ -3,7 +3,7 @@
 //! Provides async monitoring of clangd's background indexing process by listening
 //! to LSP progress notifications and enabling code to wait for indexing completion.
 
-use crate::lsp_v2::protocol::JsonRpcNotification;
+use crate::lsp::protocol::JsonRpcNotification;
 use lsp_types::{notification::Notification, request::Request};
 use serde_json::Value;
 use std::sync::Arc;
@@ -331,7 +331,7 @@ mod tests {
 
         // Handler should be callable
         let notification = JsonRpcNotification {
-            jsonrpc: crate::lsp_v2::jsonrpc_utils::JSONRPC_VERSION.to_string(),
+            jsonrpc: crate::lsp::jsonrpc_utils::JSONRPC_VERSION.to_string(),
             method: "test".to_string(),
             params: None,
         };

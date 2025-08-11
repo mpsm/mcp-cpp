@@ -1,8 +1,8 @@
 //! Symbol context analysis functionality - V2 ARCHITECTURE IMPLEMENTATION
 //!
-//! Complete rewrite using the superior v2 architecture modules:
+//! Complete rewrite using the v2 architecture modules:
 //! - clangd/: Session management with builder pattern
-//! - lsp_v2/: Modern LSP client with traits
+//! - lsp/: Modern LSP client with traits
 //! - project/: Extensible project/build system abstraction
 //! - io/: Process and transport management
 
@@ -16,7 +16,7 @@ use tracing::{debug, info, instrument};
 // V2 Architecture imports
 use crate::clangd::{ClangdSession, ClangdSessionTrait};
 // SymbolKind functionality now comes directly from lsp-types
-use crate::lsp_v2::traits::LspClientTrait;
+use crate::lsp::traits::LspClientTrait;
 use crate::project::ProjectWorkspace;
 
 // ============================================================================
@@ -270,7 +270,7 @@ impl AnalyzeSymbolContextTool {
         session: &mut ClangdSession,
     ) -> Result<CallToolResult, CallToolError> {
         // Wait for clangd indexing to complete before analyzing
-        crate::tools::utils::wait_for_indexing(session.index_monitor(), None).await;
+        super::utils::wait_for_indexing(session.index_monitor(), None).await;
 
         // Find symbol location first
         let symbol_location = {

@@ -3,7 +3,7 @@
 //! Provides constants, helper functions, and utilities for working with
 //! JSON-RPC 2.0 protocol as per https://www.jsonrpc.org/specification
 
-use crate::lsp_v2::protocol::{JsonRpcErrorObject, JsonRpcResponse};
+use crate::lsp::protocol::{JsonRpcErrorObject, JsonRpcResponse};
 use serde_json::Value;
 
 // ============================================================================

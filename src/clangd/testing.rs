@@ -290,12 +290,12 @@ pub mod test_helpers {
         config: ClangdConfig,
     ) -> super::super::session::ClangdSession<
         crate::io::process::MockProcessManager,
-        crate::lsp_v2::testing::MockLspClient,
+        crate::lsp::testing::MockLspClient,
     > {
         use crate::clangd::file_manager::ClangdFileManager;
         use crate::clangd::index::IndexMonitor;
         use crate::io::process::MockProcessManager;
-        use crate::lsp_v2::testing::MockLspClient;
+        use crate::lsp::testing::MockLspClient;
 
         let mock_process = MockProcessManager::new();
         let mut mock_lsp = MockLspClient::new();

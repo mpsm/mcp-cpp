@@ -6,14 +6,13 @@ use rust_mcp_sdk::schema::{
 use rust_mcp_sdk::{McpServer, mcp_server::ServerHandler};
 use tracing::{Level, info};
 
+use super::server_helpers::{self, McpToolHandler};
+use super::tools::analyze_symbols_v2::AnalyzeSymbolContextTool;
+use super::tools::project_tools::GetProjectDetailsTool;
+use super::tools::search_symbols_v2::SearchSymbolsTool;
 use crate::project::ProjectWorkspace;
 use crate::project::WorkspaceSession;
 use crate::register_tools;
-use crate::server_helpers;
-use crate::tools::analyze_symbols_v2::AnalyzeSymbolContextTool;
-use crate::tools::project_tools::GetProjectDetailsTool;
-use crate::tools::search_symbols_v2::SearchSymbolsTool;
-use crate::tools::utils::McpToolHandler;
 use crate::{log_mcp_message, log_timing};
 use std::path::PathBuf;
 use std::time::Instant;

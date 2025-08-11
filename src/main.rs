@@ -1,28 +1,21 @@
 mod clangd;
 mod io;
 mod logging;
-mod lsp_v2;
+mod lsp;
+mod mcp_server;
 mod project;
-mod server;
-mod server_helpers;
-mod tools {
-    pub mod analyze_symbols_v2;
-    pub mod project_tools;
-    pub mod search_symbols_v2;
-    pub mod utils;
-}
 
 #[cfg(test)]
 mod test_utils;
 
 use clap::Parser;
 use logging::{LogConfig, init_logging};
+use mcp_server::CppServerHandler;
 use project::{ProjectScanner, ProjectWorkspace};
 use rust_mcp_sdk::schema::{
     Implementation, InitializeResult, LATEST_PROTOCOL_VERSION, ServerCapabilities,
     ServerCapabilitiesTools,
 };
-use server::CppServerHandler;
 
 use rust_mcp_sdk::{
     McpServer, StdioTransport, TransportOptions,

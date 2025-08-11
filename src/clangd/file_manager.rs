@@ -7,7 +7,7 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use tracing::{debug, info, warn};
 
-use crate::lsp_v2::traits::LspClientTrait;
+use crate::lsp::traits::LspClientTrait;
 
 // ============================================================================
 // File Manager Errors
@@ -20,7 +20,7 @@ pub enum FileManagerError {
     FileReadError(#[from] std::io::Error),
 
     #[error("LSP error: {0}")]
-    LspError(#[from] crate::lsp_v2::client::LspError),
+    LspError(#[from] crate::lsp::client::LspError),
 
     #[error("Invalid file path: {0}")]
     InvalidPath(String),
@@ -79,7 +79,7 @@ impl ClangdFileManager {
         // Check if client is ready for operations
         if !client.is_initialized() {
             return Err(FileManagerError::LspError(
-                crate::lsp_v2::client::LspError::NotInitialized,
+                crate::lsp::client::LspError::NotInitialized,
             ));
         }
 

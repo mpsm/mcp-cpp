@@ -1,7 +1,7 @@
 //! Clangd Session Management Module
 //!
 //! This module provides clean session management for clangd processes with LSP clients.
-//! It uses lsp_v2 components directly for process management, transport, and LSP communication.
+//! It uses lsp components directly for process management, transport, and LSP communication.
 
 #![allow(dead_code)]
 //!

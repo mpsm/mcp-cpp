@@ -22,7 +22,7 @@ pub mod traits;
 //
 // ```rust
 // use mcp_cpp::io::{ChildProcessManager, StdioTransport};
-// use mcp_cpp::lsp_v2::LspClient;
+// use mcp_cpp::lsp::LspClient;
 //
 // // Start process
 // let mut process = ChildProcessManager::new("clangd".to_string(), args, Some(working_dir));

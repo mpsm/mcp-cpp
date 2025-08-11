@@ -4,7 +4,7 @@
 //! All LSP operations are implemented in the trait to avoid method duplication.
 
 use crate::io::transport::Transport;
-use crate::lsp_v2::protocol::{
+use crate::lsp::protocol::{
     JsonRpcClient, JsonRpcError, JsonRpcNotification, JsonRpcRequest, JsonRpcResponse,
 };
 use lsp_types::{
@@ -109,7 +109,7 @@ impl<T: Transport + 'static> LspClient<T> {
 // LspClientTrait Implementation
 // ============================================================================
 
-use crate::lsp_v2::traits::LspClientTrait;
+use crate::lsp::traits::LspClientTrait;
 
 #[async_trait::async_trait]
 impl<T: Transport + 'static> LspClientTrait for LspClient<T> {
@@ -632,7 +632,7 @@ impl<T: Transport + 'static> LspClientTrait for LspClient<T> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::lsp_v2::testing::MockLspClient;
+    use crate::lsp::testing::MockLspClient;
     use lsp_types::{Position, Range, SymbolKind};
 
     #[tokio::test]

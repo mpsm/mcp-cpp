@@ -11,7 +11,7 @@ use crate::clangd::file_manager::ClangdFileManager;
 use crate::clangd::index::IndexMonitor;
 use crate::clangd::session::ClangdSession;
 use crate::io::{ChildProcessManager, ProcessManager, StderrMonitor, StdioTransport};
-use crate::lsp_v2::{LspClient, traits::LspClientTrait};
+use crate::lsp::{LspClient, traits::LspClientTrait};
 
 /// Phantom type markers for builder state
 pub struct HasConfig;
@@ -230,12 +230,12 @@ impl ClangdSessionBuilder<HasConfig, NoProcessManager, NoLspClient> {
 
     /// Create the standard LSP request handler
     fn create_request_handler()
-    -> impl Fn(crate::lsp_v2::protocol::JsonRpcRequest) -> crate::lsp_v2::protocol::JsonRpcResponse
+    -> impl Fn(crate::lsp::protocol::JsonRpcRequest) -> crate::lsp::protocol::JsonRpcResponse
     + Send
     + Sync
     + 'static {
         move |request| {
-            use crate::lsp_v2::jsonrpc_utils;
+            use crate::lsp::jsonrpc_utils;
 
             match request.method.as_str() {
                 lsp_types::request::WorkDoneProgressCreate::METHOD => {
