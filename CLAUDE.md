@@ -43,38 +43,74 @@ This is a **C++ MCP (Model Context Protocol) server** implemented in Rust that b
 
 ```
 src/
-├── main.rs          // MCP server entry point with stdio transport
-├── handler.rs       // MCP request handler implementation
-├── logging.rs       // Structured logging and MCP message tracing
-├── cmake.rs         // CMake project analysis and build directory detection
-├── lsp/             // LSP client implementation
-│   ├── mod.rs       // Module exports
-│   ├── client.rs    // Clangd LSP client with connection management
-│   ├── manager.rs   // LSP lifecycle and file management
-│   ├── types.rs     // LSP types and indexing state tracking
-│   └── error.rs     // LSP error handling
-└── tools/           // MCP tool implementations
-    ├── mod.rs       // Tool registration and routing
-    ├── cmake_tools.rs        // Build directory analysis
-    ├── search_symbols.rs     // C++ symbol search with FIXED result limiting
-    ├── analyze_symbols.rs    // Deep symbol analysis
-    └── symbol_filtering.rs   // Project boundary and filtering logic with comprehensive tests
+├── main.rs              // MCP server entry point with stdio transport
+├── logging.rs           // Structured logging and MCP message tracing
+├── test_utils.rs        // Testing utilities and helpers
+├── clangd/              // Clangd LSP integration layer
+│   ├── mod.rs           // Module exports
+│   ├── session.rs       // Clangd session lifecycle management
+│   ├── session_builder.rs // Session configuration and builder pattern
+│   ├── file_manager.rs  // LSP document and file operations
+│   ├── config.rs        // Clangd configuration management
+│   ├── version.rs       // Clangd version detection and compatibility
+│   ├── testing.rs       // Testing utilities for clangd integration
+│   ├── error.rs         // Clangd-specific error handling
+│   └── index/           // Indexing and progress monitoring
+│       ├── mod.rs       // Index module exports
+│       ├── monitor.rs   // Real-time indexing progress tracking
+│       ├── hash.rs      // Index hash computation and validation
+│       └── project_index.rs // Project-specific index management
+├── lsp/                 // LSP protocol implementation
+│   ├── mod.rs           // Module exports
+│   ├── client.rs        // JSON-RPC LSP client communication
+│   ├── protocol.rs      // LSP types and protocol definitions
+│   ├── framing.rs       // JSON-RPC message framing
+│   ├── jsonrpc_utils.rs // JSON-RPC utilities and helpers
+│   ├── traits.rs        // LSP client traits and interfaces
+│   └── testing.rs       // LSP testing utilities
+├── io/                  // I/O and transport layer
+│   ├── mod.rs           // Module exports
+│   ├── process.rs       // Process management and lifecycle
+│   └── transport.rs     // Transport abstractions
+├── project/             // Multi-provider project analysis
+│   ├── mod.rs           // Module exports
+│   ├── workspace.rs     // Project workspace management
+│   ├── workspace_session.rs // Workspace session state management
+│   ├── scanner.rs       // Multi-provider project scanning
+│   ├── provider.rs      // Build system provider trait
+│   ├── component.rs     // Project component abstraction
+│   ├── cmake_provider.rs // CMake project provider
+│   ├── meson_provider.rs // Meson project provider
+│   ├── compilation_database.rs // Compilation database handling
+│   └── error.rs         // Project-specific error handling
+└── mcp_server/          // MCP server implementation
+    ├── mod.rs           // Module exports
+    ├── server.rs        // Core MCP server handler
+    ├── server_helpers.rs // Server utility functions
+    └── tools/           // MCP tool implementations
+        ├── analyze_symbols.rs  // Deep symbol analysis
+        ├── search_symbols.rs   // C++ symbol search with filtering
+        ├── project_tools.rs    // Project analysis and build configuration
+        └── utils.rs            // Tool utility functions
 
 tools/
-├── mcp-cli.py       // Standalone Python CLI for MCP server interaction
-├── requirements.txt // Python dependencies (rich>=13.0.0)
-└── generate-index.py // Symbol indexing tool
+├── mcp-cli.py           // Standalone Python CLI for MCP server interaction
+├── requirements.txt     // Python dependencies (rich>=13.0.0)
+├── generate-index.py    // Symbol indexing tool
+└── clangd-idx-viewer.py // Clangd index debugging utility
 ```
 
 ### 🎯 Current Capabilities
 
-1. **Build Management**: Automatic CMake build directory detection and configuration analysis
-2. **Symbol Search**: Fuzzy search across C++ codebases with project/external filtering
-3. **Symbol Analysis**: Deep analysis with inheritance hierarchies, call patterns, and usage examples
-4. **Project Intelligence**: Smart filtering between project code and external dependencies
-5. **Indexing Management**: Real-time clangd indexing progress tracking and completion detection
-6. **Command-Line Interface**: Complete Python CLI tool for easy terminal-based interaction
-7. **Proper Result Limiting**: Fixed clangd communication issue for predictable symbol counts
+1. **Multi-Provider Build Management**: Automatic detection and analysis of CMake and Meson projects with comprehensive configuration analysis
+2. **Advanced Symbol Search**: Fuzzy search across C++ codebases with intelligent project/external filtering and relevance ranking
+3. **Deep Symbol Analysis**: Comprehensive analysis with inheritance hierarchies, call patterns, usage examples, and contextual understanding
+4. **Project Intelligence**: Smart filtering between project code and external dependencies using compilation database analysis
+5. **Real-time Indexing Management**: Clangd indexing progress tracking with completion detection and hash-based validation
+6. **Session Management**: Advanced clangd session lifecycle with configuration builder patterns and automatic recovery
+7. **Command-Line Interface**: Complete Python CLI tool for easy terminal-based interaction with rich formatting
+8. **Global Compilation Database**: Override support for unified compilation databases across multi-component projects
+9. **Workspace Session Management**: Persistent workspace state with multi-provider project scanning and component tracking
 
 ## Python CLI Tool (`mcp-cli.py`)
 
@@ -108,8 +144,8 @@ python3 /path/to/mcp-cpp/tools/mcp-cli.py [COMMAND] [OPTIONS]
 1. **Project Analysis:**
 
    ```bash
-   # Analyze build environment and CMake configuration
-   python3 tools/mcp-cli.py list-build-dirs
+   # Get comprehensive project details including build configurations and components
+   python3 tools/mcp-cli.py get-project-details
    ```
 
 2. **Symbol Search:**
@@ -167,8 +203,8 @@ python3 /path/to/mcp-cpp/tools/mcp-cli.py [COMMAND] [OPTIONS]
 **Example Workflow:**
 
 ```bash
-# 1. Analyze project structure
-python3 tools/mcp-cli.py list-build-dirs
+# 1. Analyze project structure and build configurations
+python3 tools/mcp-cli.py get-project-details
 
 # 2. Find symbols of interest
 python3 tools/mcp-cli.py search-symbols "Calculator" --kinds class function
@@ -247,14 +283,17 @@ python3 mcp-cli.py list-tools
 
 ## Current Tools
 
-### `list_build_dirs`
+### `get_project_details`
 
-Analyzes C++ project build environment including:
+Comprehensive multi-provider project analysis including:
 
-- Automatic CMake build directory discovery
-- Build configuration analysis (generator, build type, compiler settings)
-- Compilation database status and file count
-- JSON-structured responses with comprehensive project metadata
+- **Multi-Provider Discovery**: Automatic detection of CMake and Meson projects with extensible architecture
+- **Build Configuration Analysis**: Generator type, build type, compiler settings, and feature flags
+- **Component Management**: Unified component representation across all build systems
+- **Compilation Database Intelligence**: Global and per-component compile_commands.json analysis
+- **Project Structure Mapping**: Build directories, source roots, and provider type identification
+- **Workspace Overview**: Project name, root directory, component count, and discovery metadata
+- **LSP Integration Assessment**: Compatibility validation across all discovered build systems
 
 ### `search_symbols` - **FIXED Result Limiting Architecture**
 
@@ -297,30 +336,35 @@ Deep symbol analysis for comprehensive understanding:
 - Implement indexing progress tracking to avoid blocking operations
 - Build incremental analysis to minimize recomputation overhead
 
-### LSP Integration Strategy
+### Clangd Integration Strategy (`clangd/` module)
 
-- Robust clangd client with full connection lifecycle management
-- Real-time indexing progress monitoring with completion detection
-- Automatic retry logic and graceful degradation for LSP server failures
-- Comprehensive error handling for all LSP communication scenarios
-- Efficient file management with automatic opening/closing of documents
-- **Proper result limiting**: Use fixed large limits for clangd, apply user limits client-side
+- **Session Builder Pattern**: Use `session_builder.rs` for flexible clangd configuration and startup
+- **Index Monitoring**: Leverage `index/monitor.rs` for real-time indexing progress tracking with hash validation
+- **File Management**: Utilize `file_manager.rs` for LSP document operations with automatic state tracking
+- **Version Compatibility**: Use `version.rs` for clangd version detection and compatibility checks
+- **Error Recovery**: Implement automatic session restart on failures with comprehensive error handling
 
-### MCP Server Implementation
+### Multi-Provider Project Management (`project/` module)
 
-- Use rust-mcp-sdk for complete MCP protocol compliance
-- Implement stdio transport for seamless MCP client integration
-- Leverage SDK's resource management and tool registration patterns
-- Convert LSP errors to structured MCP responses with proper error codes
-- Comprehensive logging for debugging and monitoring
+- **Unified Scanning**: Use `scanner.rs` with multiple providers for comprehensive project discovery
+- **Provider Architecture**: Implement new build systems using the `provider.rs` trait pattern
+- **Workspace Sessions**: Leverage `workspace_session.rs` for persistent state management across components
+- **Component Abstraction**: Use `component.rs` for unified representation across all build systems
+- **Compilation Database**: Utilize `compilation_database.rs` for global and per-component analysis
 
-### Integration Patterns
+### MCP Server Implementation (`mcp_server/` module)
 
-- **MCP Transport Layer**: stdio-based communication with rust-mcp-sdk
-- **LSP Client Management**: Process lifecycle with proper resource cleanup
-- **Error Propagation**: thiserror-based structured errors through all layers
-- **Async Coordination**: tokio-based async patterns for non-blocking LSP communication
-- **Resource Management**: Explicit cleanup for processes, file handles, and connections
+- **Tool Registration**: Use `server.rs` for MCP protocol compliance and tool routing
+- **Result Processing**: Implement intelligent filtering in `tools/utils.rs` with client-side limiting
+- **Error Handling**: Leverage `server_helpers.rs` for structured MCP error responses
+- **Workspace Integration**: Connect MCP tools with project workspace for context-aware analysis
+
+### LSP Protocol Layer (`lsp/` module)
+
+- **JSON-RPC Communication**: Use `client.rs` for reliable LSP communication with proper framing
+- **Protocol Compliance**: Leverage `protocol.rs` for complete LSP type definitions
+- **Message Framing**: Utilize `framing.rs` for robust JSON-RPC message handling
+- **Testing**: Use `testing.rs` utilities for comprehensive LSP integration testing
 
 ### CI/CD Pipeline
 
@@ -330,25 +374,31 @@ Deep symbol analysis for comprehensive understanding:
 - Security vulnerability scanning with cargo audit
 - GitHub Actions integration with status badges
 
-## Build Directory Management
+## Multi-Provider Build System Management
 
-### Auto-Detection vs Explicit Configuration
+### Comprehensive Project Discovery
 
-Both `search_symbols` and `analyze_symbol_context` tools support flexible build directory configuration:
+The system provides unified build system support through a multi-provider architecture:
 
-**Auto-Detection (Default Behavior):**
+**Supported Build Systems:**
 
-- Automatically discovers single build directory in current workspace
-- Analyzes CMake cache files and compilation database status
-- Fails gracefully when multiple or zero build directories found
-- Uses `list_build_dirs` tool logic for discovery
+- **CMake**: Full CMake project analysis with build directory discovery and cache parsing
+- **Meson**: Native Meson project support with build configuration analysis
+- **Extensible Architecture**: Ready for Bazel, Buck, xmake, and other build systems
 
-**Explicit Configuration:**
+**Auto-Detection Behavior:**
 
-- `build_directory` parameter accepts relative or absolute paths
-- Validates compile_commands.json presence before proceeding
-- Enables working with multiple build configurations
-- Supports custom build directory locations outside standard patterns
+- Automatically discovers all build system types in current workspace
+- Analyzes configuration files (CMakeLists.txt, meson.build, etc.) and build directories
+- Unified component representation across all providers
+- Uses `get_project_details` tool logic for comprehensive discovery
+
+**Multi-Component Projects:**
+
+- `build_directory` parameter accepts relative or absolute paths for specific components
+- Validates compile_commands.json presence across all discovered build systems
+- Enables working with mixed build configurations (CMake + Meson in same project)
+- Global compilation database override for unified analysis across all components
 
 ### clangd Process Management
 
@@ -368,30 +418,78 @@ Both `search_symbols` and `analyze_symbol_context` tools support flexible build 
 
 ## Architecture Overview
 
-### LSP Integration Layer
+### Clangd Integration Layer (`clangd/`)
 
-- **ClangdManager**: Manages clangd process lifecycle, build directory switching, and file operations
-- **LspClient**: Handles JSON-RPC communication, request/response management, and notification processing
-- **IndexingState**: Tracks real-time indexing progress with completion detection and estimation
-- **Error Handling**: Comprehensive LSP error mapping to MCP-compatible responses
+- **Session Management**: Advanced clangd session lifecycle with builder patterns and automatic recovery
+- **Index Monitoring**: Real-time indexing progress tracking with hash-based validation and completion detection
+- **File Management**: LSP document operations with automatic opening/closing and state tracking
+- **Configuration**: Clangd-specific configuration management with version compatibility checks
+- **Error Handling**: Comprehensive clangd error mapping to structured responses
 
-### Tool Implementation Layer
+### LSP Protocol Layer (`lsp/`)
 
-- **Symbol Search**: Workspace-wide and file-specific symbol discovery with intelligent filtering
-- **Symbol Analysis**: Deep context analysis including inheritance, call hierarchy, and usage patterns
-- **Project Management**: Build directory analysis, compilation database parsing, and project boundary detection
-- **Filtering Logic**: Smart distinction between project code and external dependencies
-- **Result Limiting**: Fixed 2000-limit clangd queries with client-side user limit application
+- **JSON-RPC Client**: Full LSP client implementation with message framing and protocol compliance
+- **Protocol Types**: Complete LSP type definitions and protocol abstractions
+- **Transport**: Reliable JSON-RPC communication with request/response management
+- **Testing**: Comprehensive LSP testing utilities and mock implementations
+
+### Project Analysis Layer (`project/`)
+
+- **Multi-Provider Scanning**: Unified project discovery across CMake, Meson, and extensible providers
+- **Workspace Management**: Project workspace state with multi-component support and session persistence
+- **Component Abstraction**: Unified representation of build system components across all providers
+- **Compilation Database**: Global and per-component compilation database analysis and validation
+
+### MCP Server Layer (`mcp_server/`)
+
+- **Tool Implementation**: Advanced MCP tools for symbol search, analysis, and project management
+- **Server Handler**: Core MCP protocol implementation with tool registration and routing
+- **Result Processing**: Intelligent filtering, ranking preservation, and client-side result limiting
 
 ### Data Flow Architecture
 
-1. **MCP Request** → Handler parses and validates tool parameters
-2. **Build Setup** → Automatic CMake detection and clangd initialization if needed
-3. **LSP Communication** → Structured requests to clangd with fixed large limits (2000) for comprehensive results
-4. **Response Processing** → Filter, transform, and enrich LSP responses, apply user limits client-side
-5. **MCP Response** → Structured JSON output with comprehensive metadata
+1. **MCP Request** → Server handler parses and validates tool parameters with comprehensive error handling
+2. **Project Discovery** → Multi-provider workspace scanning (CMake + Meson) with automatic component detection
+3. **Session Management** → Clangd session initialization with configuration builder patterns and indexing monitoring
+4. **LSP Communication** → Structured requests to clangd with fixed large limits (2000) for comprehensive results
+5. **Response Processing** → Intelligent filtering, project boundary detection, and client-side user limit application
+6. **MCP Response** → Structured JSON output with comprehensive metadata and workspace context
 
 This implementation provides a complete bridge between MCP clients and C++ semantic analysis, enabling AI agents to work with C++ codebases using the same tools and understanding that human developers rely on.
+
+## Advanced Session Management
+
+### Clangd Session Architecture
+
+The system implements sophisticated clangd session management through the `clangd/` module:
+
+**Session Builder Pattern:**
+- **Configuration Builder**: Flexible clangd configuration with version compatibility checks
+- **Process Management**: Robust process lifecycle with automatic recovery and cleanup
+- **Index State Tracking**: Real-time monitoring of clangd indexing progress with hash validation
+- **Resource Management**: Automatic cleanup of processes, file handles, and temporary resources
+
+**Advanced Features:**
+- **Session Persistence**: Maintains session state across tool invocations for performance
+- **Build Directory Switching**: Seamless switching between build configurations with state preservation
+- **Version Detection**: Automatic clangd version detection with compatibility validation
+- **Error Recovery**: Automatic session restart on failures with comprehensive error handling
+
+### Workspace Session Management
+
+The `project/workspace_session.rs` module provides persistent workspace state management:
+
+**Key Capabilities:**
+- **Multi-Provider State**: Maintains state across CMake and Meson components simultaneously
+- **Component Tracking**: Tracks build configuration changes across all discovered components
+- **Global Compilation Database**: Unified compilation database management across mixed build systems
+- **Session Lifecycle**: Persistent workspace sessions with automatic state recovery and validation
+
+**Workspace Intelligence:**
+- **Provider Discovery**: Automatic detection and tracking of all build system types in workspace
+- **Component Relationships**: Understanding of inter-component dependencies and build order
+- **Configuration Validation**: Continuous validation of build configurations and compilation databases
+- **State Synchronization**: Keeps workspace state synchronized with filesystem changes
 
 ## Testing Framework
 
@@ -646,7 +744,7 @@ cargo fmt && cargo clippy --all-targets --all-features -- -D warnings && cargo t
 cargo build && cd test/e2e && npm test
 
 # CLI tool validation
-python3 tools/mcp-cli.py list-build-dirs
+python3 tools/mcp-cli.py get-project-details
 python3 tools/mcp-cli.py search-symbols "pattern"
 
 # Debug preserved test failures
@@ -676,18 +774,26 @@ The code-committer subagent assists with:
 
 ### Key Technical Patterns
 
+#### Multi-Provider Architecture Pattern
+
+- **Unified Component Model**: Abstract build system differences through `component.rs` interface
+- **Provider Extensibility**: Add new build systems via `provider.rs` trait implementation
+- **Global Compilation Database**: Override per-component databases for unified analysis
+- **Workspace Session Persistence**: Maintain state across multi-provider project scanning
+
+#### Clangd Session Management Pattern
+
+- **Builder Configuration**: Use session builder for flexible clangd startup with version checks
+- **Index State Tracking**: Monitor indexing progress with hash-based validation and completion detection
+- **Automatic Recovery**: Restart sessions on failures with comprehensive error handling
+- **Resource Lifecycle**: Explicit management of processes, file handles, and temporary resources
+
 #### LSP-MCP Bridge Pattern
 
 - **Large LSP Queries**: Always query clangd with fixed 2000 limit for comprehensive results
 - **Client-side Filtering**: Apply user limits in post-processing to preserve ranking
-- **Error Context Preservation**: Maintain error context through all abstraction layers
-- **Resource Lifecycle**: Explicit management of clangd processes and file handles
-
-#### Async Integration Strategy
-
-- **Non-blocking Communication**: LSP requests don't block MCP responses
-- **Graceful Degradation**: Handle LSP failures without breaking MCP functionality
-- **Progress Tracking**: Real-time indexing progress with completion detection
+- **Project Boundary Detection**: Smart filtering between project code and external dependencies
+- **Context-Aware Analysis**: Integrate workspace intelligence with LSP responses for enhanced context
 
 # important-instruction-reminders
 
