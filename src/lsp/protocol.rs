@@ -87,42 +87,17 @@ pub struct JsonRpcErrorObject {
 /// JSON-RPC error codes as defined in the specification
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(i32)]
-#[allow(dead_code)]
+
 pub enum JsonRpcErrorCode {
-    ParseError = -32700,
-    InvalidRequest = -32600,
-    MethodNotFound = -32601,
-    InvalidParams = -32602,
     InternalError = -32603,
 }
 
-#[allow(dead_code)]
-impl JsonRpcErrorCode {
-    /// Check if the given code is in the server error range (-32099 to -32000)
-    pub fn is_server_error(code: i32) -> bool {
-        (-32099..=-32000).contains(&code)
-    }
-}
+impl JsonRpcErrorCode {}
 
 /// JSON-RPC error type
 #[derive(Debug, thiserror::Error)]
-#[allow(dead_code)]
+
 pub enum JsonRpcError {
-    #[error("JSON-RPC parse error: {0}")]
-    ParseError(String),
-
-    #[error("JSON-RPC invalid request: {0}")]
-    InvalidRequest(String),
-
-    #[error("JSON-RPC method not found: {0}")]
-    MethodNotFound(String),
-
-    #[error("JSON-RPC invalid params: {0}")]
-    InvalidParams(String),
-
-    #[error("JSON-RPC internal error: {0}")]
-    InternalError(String),
-
     #[error("JSON-RPC server error ({code}): {message}")]
     Server {
         code: i32,
@@ -237,7 +212,7 @@ struct ClientState {
 }
 
 /// JSON-RPC client with request/response correlation
-#[allow(dead_code)]
+
 pub struct JsonRpcClient<T: Transport> {
     /// Channel for sending outbound messages (requests and notifications)
     outbound_sender: mpsc::UnboundedSender<String>,
@@ -252,7 +227,6 @@ pub struct JsonRpcClient<T: Transport> {
     _phantom: std::marker::PhantomData<T>,
 }
 
-#[allow(dead_code)]
 impl<T: Transport + 'static> JsonRpcClient<T> {
     /// Create a new JSON-RPC client
     pub fn new(transport: T) -> Self {
@@ -434,74 +408,6 @@ impl<T: Transport + 'static> JsonRpcClient<T> {
             .await
     }
 
-    /// Send a JSON-RPC request without timeout (blocking until response)
-    pub async fn request_blocking<P, R>(
-        &mut self,
-        method: &str,
-        params: Option<P>,
-    ) -> Result<R, JsonRpcError>
-    where
-        P: serde::Serialize,
-        R: for<'de> serde::Deserialize<'de>,
-    {
-        let id = self.request_id.fetch_add(1, Ordering::SeqCst);
-        let (response_sender, mut response_receiver) = mpsc::unbounded_channel();
-
-        // Register pending request
-        {
-            let mut state = self.state.lock().await;
-            state.pending_requests.insert(id, response_sender);
-        }
-
-        // Create request
-        let request = JsonRpcRequest {
-            jsonrpc: crate::lsp::jsonrpc_utils::JSONRPC_VERSION.to_string(),
-            id: serde_json::Value::Number(serde_json::Number::from(id)),
-            method: method.to_string(),
-            params: params
-                .map(|p| serde_json::to_value(p).map_err(JsonRpcError::Serialization))
-                .transpose()?,
-        };
-
-        // Send request
-        let request_json = serde_json::to_string(&request).map_err(JsonRpcError::Serialization)?;
-        debug!("JsonRpcClient: Sending blocking request: {}", request_json);
-
-        // Send through the channel
-        self.outbound_sender
-            .send(request_json)
-            .map_err(|_| JsonRpcError::Transport("Outbound channel closed".to_string()))?;
-
-        // Wait for response without timeout
-        let response = match response_receiver.recv().await {
-            Some(response) => response,
-            None => {
-                // Channel closed - clean up pending request
-                let mut state = self.state.lock().await;
-                state.pending_requests.remove(&id);
-                return Err(JsonRpcError::RequestCancelled);
-            }
-        };
-
-        // Handle response
-        if let Some(error) = response.error {
-            return Err(JsonRpcError::Server {
-                code: error.code,
-                message: error.message,
-                data: error.data,
-            });
-        }
-
-        match response.result {
-            Some(Value::Null) => {
-                // Handle null results (e.g., LSP shutdown) by trying to deserialize null as R
-                serde_json::from_value(Value::Null).map_err(JsonRpcError::Deserialization)
-            }
-            Some(result) => serde_json::from_value(result).map_err(JsonRpcError::Deserialization),
-            None => Err(JsonRpcError::MissingResult),
-        }
-    }
-
     /// Send a JSON-RPC request with custom timeout
     pub async fn request_with_timeout<P, R>(
         &mut self,
@@ -603,12 +509,6 @@ impl<T: Transport + 'static> JsonRpcClient<T> {
             .map_err(|_| JsonRpcError::Transport("Outbound channel closed".to_string()))?;
 
         Ok(())
-    }
-
-    /// Check if transport is connected
-    pub async fn is_connected(&self) -> bool {
-        // Check if our channel is still open
-        !self.outbound_sender.is_closed()
     }
 
     /// Clean up all pending requests (e.g., during restart)

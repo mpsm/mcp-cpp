@@ -25,7 +25,6 @@ pub struct CompilationDatabase {
     pub path: PathBuf,
     /// Parsed compilation database entries (loaded at initialization)
     #[serde(skip)]
-    #[allow(dead_code)]
     pub entries: Vec<Entry>,
 }
 
@@ -63,15 +62,9 @@ impl CompilationDatabase {
     }
 
     /// Get all compilation database entries
-    #[allow(dead_code)]
+
     pub fn entries(&self) -> &[Entry] {
         &self.entries
-    }
-
-    /// Get the number of entries in the compilation database
-    #[allow(dead_code)]
-    pub fn entry_count(&self) -> usize {
-        self.entries.len()
     }
 
     /// Get the path to the compilation database file
@@ -79,14 +72,8 @@ impl CompilationDatabase {
         &self.path
     }
 
-    /// Check if the database contains an entry for the specified file
-    #[allow(dead_code)]
-    pub fn contains_file(&self, file_path: &Path) -> bool {
-        self.entries.iter().any(|entry| entry.file == file_path)
-    }
-
     /// Get all unique source files referenced in the compilation database
-    #[allow(dead_code)]
+
     pub fn source_files(&self) -> Vec<&Path> {
         let mut files: Vec<&Path> = self
             .entries
@@ -96,19 +83,6 @@ impl CompilationDatabase {
         files.sort();
         files.dedup();
         files
-    }
-
-    /// Get all unique directories referenced in the compilation database
-    #[allow(dead_code)]
-    pub fn directories(&self) -> Vec<&Path> {
-        let mut dirs: Vec<&Path> = self
-            .entries
-            .iter()
-            .map(|entry| entry.directory.as_path())
-            .collect();
-        dirs.sort();
-        dirs.dedup();
-        dirs
     }
 }
 

@@ -45,9 +45,10 @@ struct MockDocument {
     text: String,
 }
 
+#[allow(dead_code)]
 impl MockLspClient {
     /// Create a new mock LSP client
-    #[allow(dead_code)]
+
     pub fn new() -> Self {
         Self {
             initialized: false,
@@ -56,19 +57,19 @@ impl MockLspClient {
     }
 
     /// Set the client as initialized
-    #[allow(dead_code)]
+
     pub fn set_initialized(&mut self, initialized: bool) {
         self.initialized = initialized;
     }
 
     /// Get the list of open document URIs
-    #[allow(dead_code)]
+
     pub fn open_document_uris(&self) -> Vec<&String> {
         self.open_documents.keys().collect()
     }
 
     /// Check if a document is open
-    #[allow(dead_code)]
+
     pub fn is_document_open(&self, uri: &str) -> bool {
         self.open_documents.contains_key(uri)
     }
@@ -137,16 +138,6 @@ impl LspClientTrait for MockLspClient {
     // ========================================================================
     // Core State Methods
     // ========================================================================
-
-    async fn is_connected(&self) -> bool {
-        // Mock is always "connected"
-        true
-    }
-
-    fn server_capabilities(&self) -> Option<&lsp_types::ServerCapabilities> {
-        // Mock client doesn't track server capabilities
-        None
-    }
 
     // ========================================================================
     // Lifecycle Management

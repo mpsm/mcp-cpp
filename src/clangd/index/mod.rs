@@ -9,4 +9,3 @@ pub mod monitor;
 pub mod project_index;
 
 pub use monitor::IndexMonitor;
-pub use project_index::ProjectIndex;

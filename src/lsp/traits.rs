@@ -20,7 +20,7 @@ use crate::lsp::protocol::{JsonRpcNotification, JsonRpcRequest, JsonRpcResponse}
 /// This trait provides the complete LSP client interface needed by session
 /// management and other components that interact with LSP servers.
 #[async_trait]
-#[allow(dead_code)] // Methods will be used when session management is fully integrated
+// Methods will be used when session management is fully integrated
 pub trait LspClientTrait: Send + Sync {
     // ========================================================================
     // Core State Methods
@@ -28,12 +28,6 @@ pub trait LspClientTrait: Send + Sync {
 
     /// Check if client is initialized (ready for LSP operations)
     fn is_initialized(&self) -> bool;
-
-    /// Check if the connection is active
-    async fn is_connected(&self) -> bool;
-
-    /// Get server capabilities (available after initialization)
-    fn server_capabilities(&self) -> Option<&lsp_types::ServerCapabilities>;
 
     // ========================================================================
     // Lifecycle Management
@@ -107,6 +101,7 @@ pub trait LspClientTrait: Send + Sync {
     ) -> Result<lsp_types::GotoDefinitionResponse, LspError>;
 
     /// Get the declaration(s) of a symbol at the given position
+    #[allow(dead_code)]
     async fn text_document_declaration(
         &mut self,
         uri: String,

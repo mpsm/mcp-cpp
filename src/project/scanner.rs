@@ -30,12 +30,11 @@ impl Default for ScanOptions {
 ///
 /// The scanner uses a provider registry to detect different build systems
 /// and creates a ProjectWorkspace containing all discovered components.
-#[allow(dead_code)]
+
 pub struct ProjectScanner {
     provider_registry: ProjectProviderRegistry,
 }
 
-#[allow(dead_code)]
 impl ProjectScanner {
     /// Create a new project scanner with the given provider registry
     pub fn new(provider_registry: ProjectProviderRegistry) -> Self {
@@ -151,16 +150,6 @@ impl ProjectScanner {
             components,
             depth,
         ))
-    }
-
-    /// Get the names of all registered providers
-    pub fn provider_names(&self) -> Vec<&str> {
-        self.provider_registry.provider_names()
-    }
-
-    /// Get the number of registered providers
-    pub fn provider_count(&self) -> usize {
-        self.provider_registry.provider_count()
     }
 }
 
@@ -308,22 +297,6 @@ mod tests {
     async fn test_multi_provider_scanner_functionality() {
         // Test that the scanner properly uses multiple providers
         let scanner = super::ProjectScanner::with_default_providers();
-
-        // Verify we have both CMake and Meson providers registered
-        let provider_names = scanner.provider_names();
-        assert_eq!(
-            scanner.provider_count(),
-            2,
-            "Should have 2 providers registered"
-        );
-        assert!(
-            provider_names.contains(&"cmake"),
-            "Should have CMake provider"
-        );
-        assert!(
-            provider_names.contains(&"meson"),
-            "Should have Meson provider"
-        );
 
         // Create a workspace with different project types in the same directory level
         let workspace = TestWorkspace::new().unwrap();

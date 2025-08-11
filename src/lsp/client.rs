@@ -26,16 +26,13 @@ use tracing::{debug, info};
 
 /// LSP client errors
 #[derive(Debug, thiserror::Error)]
-#[allow(dead_code)]
+
 pub enum LspError {
     #[error("JSON-RPC error: {0}")]
     JsonRpc(#[from] JsonRpcError),
 
     #[error("LSP client not initialized")]
     NotInitialized,
-
-    #[error("Server capability not supported: {0}")]
-    UnsupportedCapability(String),
 
     #[error("LSP protocol error: {0}")]
     Protocol(String),
@@ -51,7 +48,7 @@ pub enum LspError {
 // ============================================================================
 
 /// LSP client structure - functionality accessed through LspClientTrait
-#[allow(dead_code)]
+
 pub struct LspClient<T: Transport> {
     /// JSON-RPC client for communication
     rpc_client: JsonRpcClient<T>,
@@ -115,14 +112,6 @@ use crate::lsp::traits::LspClientTrait;
 impl<T: Transport + 'static> LspClientTrait for LspClient<T> {
     fn is_initialized(&self) -> bool {
         self.initialized
-    }
-
-    async fn is_connected(&self) -> bool {
-        self.rpc_client.is_connected().await
-    }
-
-    fn server_capabilities(&self) -> Option<&lsp_types::ServerCapabilities> {
-        self.server_capabilities.as_ref()
     }
 
     // ========================================================================

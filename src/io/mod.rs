@@ -11,8 +11,5 @@ pub mod process;
 pub mod transport;
 
 // Re-export main types for convenience
-pub use process::{
-    ChildProcessManager, ProcessExitEvent, ProcessExitHandler, ProcessManager, ProcessState,
-    StderrMonitor, StopMode,
-};
-pub use transport::{MockTransport, StdioTransport, Transport};
+pub use process::{ChildProcessManager, ProcessManager, StderrMonitor, StopMode};
+pub use transport::StdioTransport;

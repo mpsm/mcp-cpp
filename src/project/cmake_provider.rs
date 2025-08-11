@@ -7,10 +7,9 @@ use std::path::{Path, PathBuf};
 ///
 /// This provider detects and parses CMake build directories by looking for
 /// CMakeCache.txt files and extracting build configuration information.
-#[allow(dead_code)]
+
 pub struct CmakeProvider;
 
-#[allow(dead_code)]
 impl CmakeProvider {
     /// Create a new CMake provider
     pub fn new() -> Self {
@@ -115,12 +114,7 @@ impl CmakeProvider {
     }
 }
 
-#[allow(dead_code)]
 impl ProjectComponentProvider for CmakeProvider {
-    fn name(&self) -> &str {
-        "cmake"
-    }
-
     fn scan_path(&self, path: &Path) -> Result<Option<ProjectComponent>, ProjectError> {
         // Check if this looks like a CMake build directory
         let cmake_cache = path.join("CMakeCache.txt");
@@ -182,7 +176,7 @@ impl Default for CmakeProvider {
 
 /// Internal struct to hold parsed CMake information
 #[derive(Debug)]
-#[allow(dead_code)]
+
 struct CmakeProjectInfo {
     generator: Option<String>,
     build_type: Option<String>,

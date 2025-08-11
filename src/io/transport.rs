@@ -316,6 +316,7 @@ impl Transport for StdioTransport {
 
 /// Error type for mock transport
 #[derive(Debug, thiserror::Error)]
+#[allow(dead_code)]
 pub enum MockTransportError {
     #[error("Transport is disconnected")]
     Disconnected,
@@ -324,6 +325,7 @@ pub enum MockTransportError {
 }
 
 /// Mock transport for testing - allows controlling sent/received messages
+#[allow(dead_code)]
 pub struct MockTransport {
     /// Messages that were sent via this transport
     sent_messages: Arc<Mutex<Vec<String>>>,

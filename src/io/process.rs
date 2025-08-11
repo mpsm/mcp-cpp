@@ -12,8 +12,8 @@ use std::sync::{Arc, Mutex};
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::{Child, Command};
 use tokio::task::JoinHandle;
-#[allow(unused_imports)] // warn! is used in Windows-specific code blocks
-use tracing::{error, info, trace, warn};
+// warn! is used in Windows-specific code blocks
+use tracing::{error, info, trace};
 
 // ============================================================================
 // Process State Management
@@ -21,17 +21,18 @@ use tracing::{error, info, trace, warn};
 
 /// How to stop a process
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[allow(dead_code)]
+
 pub enum StopMode {
     /// Try graceful shutdown first (SIGTERM), then force kill if needed
     Graceful,
     /// Force kill immediately (SIGKILL)
+    #[allow(dead_code)]
     Force,
 }
 
 /// Process lifecycle states
 #[derive(Debug, Clone, PartialEq, Eq)]
-#[allow(dead_code)]
+
 pub enum ProcessState {
     /// Process has not been started yet
     NotStarted,
@@ -62,15 +63,8 @@ impl ProcessState {
 
 /// Event fired when process exits unexpectedly
 #[derive(Debug, Clone)]
-#[allow(dead_code)]
-pub struct ProcessExitEvent {
-    /// Process ID that exited
-    pub pid: Option<u32>,
-    /// Exit code if available
-    pub exit_code: Option<i32>,
-    /// Timestamp when exit was detected
-    pub timestamp: std::time::SystemTime,
-}
+
+pub struct ProcessExitEvent {}
 
 // ============================================================================
 // Process Restart Handler Trait
@@ -78,7 +72,7 @@ pub struct ProcessExitEvent {
 
 /// Trait for handling process exit events
 #[async_trait]
-#[allow(dead_code)]
+
 pub trait ProcessExitHandler: Send + Sync {
     /// Called when process exits unexpectedly
     async fn on_process_exit(&self, event: ProcessExitEvent);
@@ -89,7 +83,7 @@ pub trait ProcessExitHandler: Send + Sync {
 // ============================================================================
 
 /// Trait for monitoring stderr output from external processes
-#[allow(dead_code)]
+
 pub trait StderrMonitor: Send + Sync {
     /// Install a handler for stderr lines
     ///
@@ -109,7 +103,7 @@ pub trait StderrMonitor: Send + Sync {
 
 /// Error types for process management
 #[derive(Debug, thiserror::Error)]
-#[allow(dead_code)]
+
 pub enum ProcessError {
     #[error("I/O error: {0}")]
     Io(#[from] io::Error),
@@ -128,14 +122,11 @@ pub enum ProcessError {
 
     #[error("Stderr not available")]
     StderrNotAvailable,
-
-    #[error("Process terminated unexpectedly")]
-    ProcessTerminated,
 }
 
 /// Trait for managing external process lifecycle
 #[async_trait]
-#[allow(dead_code)]
+
 pub trait ProcessManager: Send + Sync {
     type Error: std::error::Error + Send + Sync + 'static;
 
@@ -148,17 +139,9 @@ pub trait ProcessManager: Send + Sync {
     /// Check if the process is currently running
     fn is_running(&self) -> bool;
 
-    /// Get the process ID (if running)
-    fn process_id(&self) -> Option<u32>;
-
     /// Create a stdio transport for communicating with the process
     /// This consumes the stdin/stdout from the process
     fn create_stdio_transport(&mut self) -> Result<StdioTransport, Self::Error>;
-
-    /// Install a process exit event handler
-    fn on_process_exit<H>(&mut self, handler: H)
-    where
-        H: ProcessExitHandler + 'static;
 
     /// Synchronous force kill for Drop trait implementations
     ///
@@ -197,7 +180,6 @@ pub struct ChildProcessManager {
     exit_handler: Option<Arc<dyn ProcessExitHandler>>,
 }
 
-#[allow(dead_code)]
 impl ChildProcessManager {
     /// Create a new child process manager
     ///
@@ -223,14 +205,6 @@ impl ChildProcessManager {
     pub fn get_state(&self) -> ProcessState {
         // Intentional .unwrap() - poisoned mutex indicates serious bug, panic is appropriate
         self.state.lock().unwrap().clone()
-    }
-
-    /// Install a process exit event handler
-    pub fn on_process_exit<H>(&mut self, handler: H)
-    where
-        H: ProcessExitHandler + 'static,
-    {
-        self.exit_handler = Some(Arc::new(handler));
     }
 
     /// Spawn the stderr monitoring task with a provided stderr pipe
@@ -324,11 +298,7 @@ impl ChildProcessManager {
 
                     // Fire exit event if handler is present
                     if let Some(handler) = &exit_handler {
-                        let event = ProcessExitEvent {
-                            pid: current_pid,
-                            exit_code: exit_status.code(),
-                            timestamp: std::time::SystemTime::now(),
-                        };
+                        let event = ProcessExitEvent {};
 
                         handler.on_process_exit(event).await;
                     }
@@ -343,11 +313,7 @@ impl ChildProcessManager {
 
                     // Fire exit event for error case too
                     if let Some(handler) = &exit_handler {
-                        let event = ProcessExitEvent {
-                            pid: current_pid,
-                            exit_code: None,
-                            timestamp: std::time::SystemTime::now(),
-                        };
+                        let event = ProcessExitEvent {};
 
                         handler.on_process_exit(event).await;
                     }
@@ -362,26 +328,6 @@ impl ChildProcessManager {
 
         self.wait_task = Some(task);
         Ok(())
-    }
-
-    /// Check if process is actually running
-    pub fn is_process_alive(&self) -> bool {
-        let state = self.get_state();
-        if let Some(pid) = state.pid() {
-            #[cfg(unix)]
-            {
-                // Use kill(pid, 0) to check if process exists without sending signal
-                unsafe { libc::kill(pid as libc::pid_t, 0) == 0 }
-            }
-            #[cfg(not(unix))]
-            {
-                // On Windows, this is more complex - for now just check if we have a PID
-                // TODO: Implement proper Windows process checking
-                true
-            }
-        } else {
-            false
-        }
     }
 }
 
@@ -509,19 +455,8 @@ impl ProcessManager for ChildProcessManager {
         self.get_state().is_running()
     }
 
-    fn process_id(&self) -> Option<u32> {
-        self.get_state().pid()
-    }
-
     fn create_stdio_transport(&mut self) -> Result<StdioTransport, Self::Error> {
         self.stdio_transport.take().ok_or(ProcessError::NotStarted)
-    }
-
-    fn on_process_exit<H>(&mut self, handler: H)
-    where
-        H: ProcessExitHandler + 'static,
-    {
-        self.exit_handler = Some(Arc::new(handler));
     }
 
     fn kill_sync(&mut self) {
@@ -582,9 +517,10 @@ pub struct MockProcessManager {
 }
 
 #[cfg(test)]
+#[allow(dead_code)]
 impl MockProcessManager {
     /// Create a new mock process manager
-    #[allow(dead_code)]
+
     pub fn new() -> Self {
         Self {
             running: false,
@@ -624,21 +560,10 @@ impl ProcessManager for MockProcessManager {
         self.running
     }
 
-    fn process_id(&self) -> Option<u32> {
-        self.process_id
-    }
-
     fn create_stdio_transport(&mut self) -> Result<StdioTransport, Self::Error> {
         // For testing purposes, we can't create a real StdioTransport
         // In practice, tests would use MockTransport directly
         Err(ProcessError::NotStarted)
-    }
-
-    fn on_process_exit<H>(&mut self, _handler: H)
-    where
-        H: ProcessExitHandler + 'static,
-    {
-        // Mock implementation - no-op for testing
     }
 
     fn kill_sync(&mut self) {
@@ -659,13 +584,11 @@ mod tests {
             ChildProcessManager::new("echo".to_string(), vec!["hello".to_string()], None);
 
         assert!(!manager.is_running());
-        assert!(manager.process_id().is_none());
 
         // Start process
         manager.start().await.unwrap();
 
         assert!(manager.is_running());
-        assert!(manager.process_id().is_some());
 
         // Stop process
         manager.stop(StopMode::Graceful).await.unwrap();
@@ -713,20 +636,17 @@ mod tests {
         // Initial state should be NotStarted
         assert_eq!(manager.get_state(), ProcessState::NotStarted);
         assert!(!manager.is_running());
-        assert!(manager.process_id().is_none());
 
         // Start process - should transition to Running
         manager.start().await.unwrap();
         let running_state = manager.get_state();
         assert!(matches!(running_state, ProcessState::Running { .. }));
         assert!(manager.is_running());
-        assert!(manager.process_id().is_some());
 
         // Stop process - should transition to Stopped
         manager.stop(StopMode::Graceful).await.unwrap();
         assert_eq!(manager.get_state(), ProcessState::Stopped);
         assert!(!manager.is_running());
-        assert!(manager.process_id().is_none());
     }
 
     #[tokio::test]

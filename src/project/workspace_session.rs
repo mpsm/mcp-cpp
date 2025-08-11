@@ -27,7 +27,7 @@ pub struct WorkspaceSession {
 
 impl WorkspaceSession {
     /// Create a new WorkspaceSession for the given project workspace
-    #[allow(dead_code)]
+
     pub fn new(workspace: ProjectWorkspace) -> Self {
         Self {
             workspace,
@@ -47,7 +47,7 @@ impl WorkspaceSession {
     /// * `Ok(Arc<Mutex<ClangdSession>>)` - Shared session for the build directory
     /// * `Err(ProjectError)` - If session creation fails
     #[instrument(name = "workspace_session_get_or_create", skip(self))]
-    #[allow(dead_code)]
+
     pub async fn get_or_create_session(
         &self,
         build_dir: PathBuf,
@@ -128,71 +128,5 @@ impl WorkspaceSession {
         sessions.insert(build_dir.clone(), Arc::clone(&session_arc));
 
         Ok(session_arc)
-    }
-
-    /// Get the number of active sessions
-    #[allow(dead_code)]
-    pub async fn session_count(&self) -> usize {
-        let sessions = self.sessions.lock().await;
-        sessions.len()
-    }
-
-    /// Check if a session exists for the given build directory
-    #[allow(dead_code)]
-    pub async fn has_session(&self, build_dir: &PathBuf) -> bool {
-        let sessions = self.sessions.lock().await;
-        sessions.contains_key(build_dir)
-    }
-
-    /// Get the project workspace reference
-    #[allow(dead_code)]
-    pub fn workspace(&self) -> &ProjectWorkspace {
-        &self.workspace
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use std::path::PathBuf;
-
-    fn create_test_workspace() -> ProjectWorkspace {
-        ProjectWorkspace::new(PathBuf::from("/test/project"), vec![], 2)
-    }
-
-    #[tokio::test]
-    async fn test_workspace_session_creation() {
-        let workspace = create_test_workspace();
-        let session_manager = WorkspaceSession::new(workspace);
-
-        assert_eq!(session_manager.session_count().await, 0);
-    }
-
-    #[tokio::test]
-    async fn test_session_count() {
-        let workspace = create_test_workspace();
-        let session_manager = WorkspaceSession::new(workspace);
-
-        assert_eq!(session_manager.session_count().await, 0);
-    }
-
-    #[tokio::test]
-    async fn test_has_session() {
-        let workspace = create_test_workspace();
-        let session_manager = WorkspaceSession::new(workspace);
-        let build_dir = PathBuf::from("/test/build");
-
-        assert!(!session_manager.has_session(&build_dir).await);
-    }
-
-    #[test]
-    fn test_workspace_access() {
-        let workspace = create_test_workspace();
-        let session_manager = WorkspaceSession::new(workspace);
-
-        assert_eq!(
-            session_manager.workspace().project_root_path,
-            PathBuf::from("/test/project")
-        );
     }
 }

@@ -13,7 +13,7 @@ use tracing::trace;
 
 /// Error types for LSP framing
 #[derive(Debug, thiserror::Error)]
-#[allow(dead_code)]
+
 pub enum LspFramingError<T: std::error::Error + Send + Sync + 'static> {
     #[error("Transport error: {0}")]
     Transport(T),
@@ -26,9 +26,6 @@ pub enum LspFramingError<T: std::error::Error + Send + Sync + 'static> {
 
     #[error("Message too large: {size} bytes (max: {max})")]
     MessageTooLarge { size: usize, max: usize },
-
-    #[error("Incomplete message: expected {expected} bytes, got {actual}")]
-    IncompleteMessage { expected: usize, actual: usize },
 }
 
 /// Maximum message size to prevent memory exhaustion
@@ -50,7 +47,6 @@ pub struct LspFraming<T: Transport> {
     message_queue: VecDeque<String>,
 }
 
-#[allow(dead_code)]
 impl<T: Transport> LspFraming<T> {
     /// Create a new LSP framing wrapper around a transport
     pub fn new(transport: T) -> Self {
@@ -59,21 +55,6 @@ impl<T: Transport> LspFraming<T> {
             receive_buffer: String::new(),
             message_queue: VecDeque::new(),
         }
-    }
-
-    /// Get a reference to the underlying transport
-    pub fn transport(&self) -> &T {
-        &self.transport
-    }
-
-    /// Get a mutable reference to the underlying transport
-    pub fn transport_mut(&mut self) -> &mut T {
-        &mut self.transport
-    }
-
-    /// Unwrap and return the underlying transport
-    pub fn into_transport(self) -> T {
-        self.transport
     }
 
     /// Parse LSP message from the receive buffer
@@ -230,7 +211,7 @@ mod tests {
         let message = r#"{"jsonrpc":"2.0","id":1,"method":"initialize"}"#;
         framing.send(message).await.unwrap();
 
-        let sent = framing.transport().sent_messages();
+        let sent = framing.transport.sent_messages();
         assert_eq!(sent.len(), 1);
 
         let expected = format!("Content-Length: {}\r\n\r\n{}", message.len(), message);

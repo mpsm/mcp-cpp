@@ -43,19 +43,5 @@ pub mod traits;
 // ```
 
 // Re-export main types for convenience
-#[allow(unused_imports)]
+
 pub use client::{LspClient, LspError};
-#[allow(unused_imports)]
-pub use traits::LspClientTrait;
-
-// Re-export SymbolKind from lsp-types (replaces the deleted kind.rs)
-// lsp-types already provides Debug, TryFrom<&str>, and all necessary functionality
-#[allow(unused_imports)]
-pub use lsp_types::SymbolKind;
-
-// Re-export I/O types for convenience (these are now in crate::io)
-#[allow(unused_imports)]
-pub use crate::io::{
-    ChildProcessManager, MockTransport, ProcessExitEvent, ProcessExitHandler, ProcessManager,
-    ProcessState, StderrMonitor, StdioTransport, StopMode, Transport,
-};

@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 ///
 /// This provider detects and parses Meson build directories by looking for
 /// meson-info directory and extracting build configuration information.
-#[allow(dead_code)]
+
 pub struct MesonProvider;
 
 impl MesonProvider {
@@ -107,12 +107,7 @@ impl MesonProvider {
     }
 }
 
-#[allow(dead_code)]
 impl ProjectComponentProvider for MesonProvider {
-    fn name(&self) -> &str {
-        "meson"
-    }
-
     fn scan_path(&self, path: &Path) -> Result<Option<ProjectComponent>, ProjectError> {
         // Check if this looks like a Meson build directory
         let meson_info_dir = path.join("meson-info");
