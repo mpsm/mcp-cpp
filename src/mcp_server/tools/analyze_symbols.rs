@@ -246,8 +246,8 @@ impl<'de> serde::Deserialize<'de> for AnalyzeSymbolContextTool {
 
 impl AnalyzeSymbolContextTool {
     /// V2 entry point - uses shared ClangdSession from server
-    #[instrument(name = "analyze_symbol_context_v2", skip(self, session, _workspace))]
-    pub async fn call_tool_v2(
+    #[instrument(name = "analyze_symbol_context", skip(self, session, _workspace))]
+    pub async fn call_tool(
         &self,
         session: Arc<Mutex<ClangdSession>>,
         _workspace: &ProjectWorkspace,
@@ -323,38 +323,38 @@ impl AnalyzeSymbolContextTool {
         });
 
         // Get hover information
-        if let Some(hover_info) = self.get_hover_info(client, &symbol_location).await? {
+        if let Some(hover_info) = self.get_hover_info(client, symbol_location).await? {
             result["symbol"]["hover"] = hover_info;
         }
 
         // Get definition/declaration
-        if let Some(definition) = self.get_definition(client, &symbol_location).await? {
+        if let Some(definition) = self.get_definition(client, symbol_location).await? {
             result["symbol"]["definition"] = definition;
         }
 
         // Get usage patterns if requested
         if self.include_usage_patterns.unwrap_or(false)
-            && let Some(usage) = self.get_usage_patterns(client, &symbol_location).await?
+            && let Some(usage) = self.get_usage_patterns(client, symbol_location).await?
         {
             result["symbol"]["usage_patterns"] = usage;
         }
 
         // Get inheritance if requested
         if self.include_inheritance.unwrap_or(false)
-            && let Some(inheritance) = self.get_inheritance(client, &symbol_location).await?
+            && let Some(inheritance) = self.get_inheritance(client, symbol_location).await?
         {
             result["symbol"]["inheritance"] = inheritance;
         }
 
         // Get call hierarchy if requested
         if self.include_call_hierarchy.unwrap_or(false)
-            && let Some(calls) = self.get_call_hierarchy(client, &symbol_location).await?
+            && let Some(calls) = self.get_call_hierarchy(client, symbol_location).await?
         {
             result["symbol"]["call_hierarchy"] = calls;
         }
 
         // Get class members if applicable
-        if let Some(members) = self.get_class_members(client, &symbol_location).await? {
+        if let Some(members) = self.get_class_members(client, symbol_location).await? {
             result["symbol"]["class_members"] = members;
         }
 
@@ -409,7 +409,7 @@ impl AnalyzeSymbolContextTool {
         if let Some(symbol) = best_match {
             // Convert LSP SymbolKind enum to string representation
             let kind_str = format!("{:?}", symbol.kind).to_lowercase();
-            
+
             // Handle OneOf<Location, WorkspaceLocation>
             let location = match &symbol.location {
                 lsp_types::OneOf::Left(location) => json!({
@@ -424,7 +424,7 @@ impl AnalyzeSymbolContextTool {
                     })
                 }
             };
-            
+
             Ok(json!({
                 "location": location,
                 "kind": kind_str
@@ -662,20 +662,24 @@ impl AnalyzeSymbolContextTool {
     }
 
     /// Recursively searches through nested document symbols to find a class with the target name
-    fn find_class_symbol_recursive(&self, symbols: &[lsp_types::DocumentSymbol]) -> Option<lsp_types::DocumentSymbol> {
+    fn find_class_symbol_recursive(
+        &self,
+        symbols: &[lsp_types::DocumentSymbol],
+    ) -> Option<lsp_types::DocumentSymbol> {
         for symbol in symbols {
             // Check if this symbol is the target class
             if symbol.name == self.symbol
-                && (symbol.kind == lsp_types::SymbolKind::CLASS || symbol.kind == lsp_types::SymbolKind::STRUCT)
+                && (symbol.kind == lsp_types::SymbolKind::CLASS
+                    || symbol.kind == lsp_types::SymbolKind::STRUCT)
             {
                 return Some(symbol.clone());
             }
-            
+
             // Recursively search children (for namespaces, etc.)
-            if let Some(children) = &symbol.children {
-                if let Some(found) = self.find_class_symbol_recursive(children) {
-                    return Some(found);
-                }
+            if let Some(children) = &symbol.children
+                && let Some(found) = self.find_class_symbol_recursive(children)
+            {
+                return Some(found);
             }
         }
         None

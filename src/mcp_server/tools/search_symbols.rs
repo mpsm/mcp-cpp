@@ -1,4 +1,4 @@
-//! Symbol search functionality v2 using new session-based API
+//! Symbol search functionality using session-based API
 
 use rust_mcp_sdk::macros::{JsonSchema, mcp_tool};
 use rust_mcp_sdk::schema::{CallToolResult, TextContent, schema_utils::CallToolError};
@@ -75,8 +75,8 @@ impl<'de> serde::Deserialize<'de> for SearchSymbolsTool {
 }
 
 impl SearchSymbolsTool {
-    #[instrument(name = "search_symbols_v2", skip(self, session, workspace))]
-    pub async fn call_tool_v2(
+    #[instrument(name = "search_symbols", skip(self, session, workspace))]
+    pub async fn call_tool(
         &self,
         session: Arc<Mutex<ClangdSession>>,
         workspace: &ProjectWorkspace,
@@ -433,7 +433,6 @@ impl SearchSymbolsTool {
 
         false
     }
-
 }
 
 #[cfg(test)]

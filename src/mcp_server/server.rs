@@ -7,9 +7,9 @@ use rust_mcp_sdk::{McpServer, mcp_server::ServerHandler};
 use tracing::{Level, info};
 
 use super::server_helpers::{self, McpToolHandler};
-use super::tools::analyze_symbols_v2::AnalyzeSymbolContextTool;
+use super::tools::analyze_symbols::AnalyzeSymbolContextTool;
 use super::tools::project_tools::GetProjectDetailsTool;
-use super::tools::search_symbols_v2::SearchSymbolsTool;
+use super::tools::search_symbols::SearchSymbolsTool;
 use crate::project::ProjectWorkspace;
 use crate::project::WorkspaceSession;
 use crate::register_tools;
@@ -69,7 +69,7 @@ impl McpToolHandler<SearchSymbolsTool> for CppServerHandler {
                 )))
             })?;
 
-        tool.call_tool_v2(clangd_session, &self.project_workspace)
+        tool.call_tool(clangd_session, &self.project_workspace)
             .await
     }
 }
@@ -94,7 +94,7 @@ impl McpToolHandler<AnalyzeSymbolContextTool> for CppServerHandler {
                 )))
             })?;
 
-        tool.call_tool_v2(clangd_session, &self.project_workspace)
+        tool.call_tool(clangd_session, &self.project_workspace)
             .await
     }
 }

@@ -7,9 +7,9 @@
 pub mod server;
 pub mod server_helpers;
 pub mod tools {
-    pub mod analyze_symbols_v2;
+    pub mod analyze_symbols;
     pub mod project_tools;
-    pub mod search_symbols_v2;
+    pub mod search_symbols;
     pub mod utils;
 }
 
