@@ -32,4 +32,7 @@ pub enum ProjectError {
 
     #[error("Compilation database is empty")]
     CompilationDatabaseEmpty,
+
+    #[error("Session creation failed: {0}")]
+    SessionCreation(String),
 }

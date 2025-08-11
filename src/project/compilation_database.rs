@@ -19,7 +19,7 @@ pub enum CompilationDatabaseError {
 ///
 /// This struct contains both the path to the compilation database file and the parsed entries.
 /// When serialized, only the path is included in the output to avoid serializing large database content.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 pub struct CompilationDatabase {
     /// Path to the compilation database file (compile_commands.json)
     pub path: PathBuf,

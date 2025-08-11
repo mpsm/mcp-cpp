@@ -10,7 +10,7 @@ use crate::project::{CompilationDatabase, ProjectComponent};
 /// A ProjectWorkspace contains the root directory that was scanned and all discovered
 /// ProjectComponents within that workspace. This allows managing complex projects
 /// that may have multiple build systems or configurations.
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ProjectWorkspace {
     /// Root directory that was scanned to discover components
     pub project_root_path: PathBuf,
@@ -84,6 +84,14 @@ impl ProjectWorkspace {
         self.components
             .iter()
             .find(|c| c.build_dir_path == *build_dir)
+    }
+
+    /// Get all build directories from components
+    pub fn get_build_dirs(&self) -> Vec<PathBuf> {
+        self.components
+            .iter()
+            .map(|c| c.build_dir_path.clone())
+            .collect()
     }
 
     /// Get unique source root directories from all components

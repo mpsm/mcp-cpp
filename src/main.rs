@@ -7,7 +7,10 @@ mod lsp_v2;
 mod project;
 mod server;
 mod tools {
+    #[cfg(not(feature = "tools-v2"))]
     pub mod analyze_symbols;
+    #[cfg(feature = "tools-v2")]
+    pub mod analyze_symbols_v2;
     pub mod project_tools;
     pub mod search_symbols;
     pub mod symbol_filtering;

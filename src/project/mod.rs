@@ -12,6 +12,7 @@ pub mod meson_provider;
 pub mod provider;
 pub mod scanner;
 pub mod workspace;
+pub mod workspace_session;
 
 #[allow(unused_imports)]
 pub use cmake_provider::CmakeProvider;
@@ -29,6 +30,8 @@ pub use provider::{ProjectComponentProvider, ProjectProviderRegistry};
 pub use scanner::{ProjectScanner, ScanOptions};
 #[allow(unused_imports)]
 pub use workspace::ProjectWorkspace;
+#[allow(unused_imports)]
+pub use workspace_session::WorkspaceSession;
 
 // Suppress unused warnings since this module is not integrated yet
 #[allow(unused_imports)]

@@ -8,12 +8,19 @@ use tracing::{Level, info};
 
 use crate::legacy_lsp::manager::ClangdManager;
 use crate::project::ProjectWorkspace;
+#[cfg(feature = "tools-v2")]
+use crate::project::WorkspaceSession;
 use crate::register_tools;
+#[cfg(not(feature = "tools-v2"))]
 use crate::tools::analyze_symbols::AnalyzeSymbolContextTool;
+#[cfg(feature = "tools-v2")]
+use crate::tools::analyze_symbols_v2::AnalyzeSymbolContextTool;
 use crate::tools::project_tools::GetProjectDetailsTool;
 use crate::tools::search_symbols::SearchSymbolsTool;
 use crate::tools::utils::McpToolHandler;
 use crate::{log_mcp_message, log_timing};
+#[cfg(feature = "tools-v2")]
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Instant;
 use tokio::sync::Mutex;
@@ -21,13 +28,68 @@ use tokio::sync::Mutex;
 pub struct CppServerHandler {
     clangd_manager: Arc<Mutex<ClangdManager>>,
     project_workspace: ProjectWorkspace,
+    #[cfg(feature = "tools-v2")]
+    workspace_session: WorkspaceSession,
 }
 
 impl CppServerHandler {
     pub fn new(project_workspace: ProjectWorkspace) -> Self {
+        #[cfg(feature = "tools-v2")]
+        let workspace_session = WorkspaceSession::new(project_workspace.clone());
         Self {
             clangd_manager: Arc::new(Mutex::new(ClangdManager::new())),
             project_workspace,
+            #[cfg(feature = "tools-v2")]
+            workspace_session,
+        }
+    }
+
+    /// Resolves build directory from optional parameter.
+    /// Returns error if specified directory doesn't exist in workspace or if
+    /// auto-detection fails due to zero or multiple build directories.
+    #[cfg(feature = "tools-v2")]
+    fn resolve_build_directory(
+        &self,
+        requested_build_dir: Option<&str>,
+    ) -> Result<PathBuf, CallToolError> {
+        match requested_build_dir {
+            Some(build_dir_str) => {
+                let requested_path = PathBuf::from(build_dir_str);
+
+                if self
+                    .project_workspace
+                    .get_component_by_build_dir(&requested_path)
+                    .is_some()
+                {
+                    Ok(requested_path)
+                } else {
+                    let available = self.project_workspace.get_build_dirs();
+                    Err(CallToolError::new(std::io::Error::new(
+                        std::io::ErrorKind::InvalidInput,
+                        format!(
+                            "Build directory '{}' not found in project workspace. Available: {:?}",
+                            build_dir_str, available
+                        ),
+                    )))
+                }
+            }
+            None => {
+                let build_dirs = self.project_workspace.get_build_dirs();
+                match build_dirs.len() {
+                    0 => Err(CallToolError::new(std::io::Error::new(
+                        std::io::ErrorKind::NotFound,
+                        "No build directories found in project. Run cmake to generate build configuration.",
+                    ))),
+                    1 => Ok(build_dirs[0].clone()),
+                    _ => Err(CallToolError::new(std::io::Error::new(
+                        std::io::ErrorKind::InvalidInput,
+                        format!(
+                            "Multiple build directories found. Please specify build_directory parameter. Available: {:?}",
+                            build_dirs
+                        ),
+                    ))),
+                }
+            }
         }
     }
 }
@@ -52,6 +114,7 @@ impl McpToolHandler<SearchSymbolsTool> for CppServerHandler {
     }
 }
 
+#[cfg(not(feature = "tools-v2"))]
 impl McpToolHandler<AnalyzeSymbolContextTool> for CppServerHandler {
     const TOOL_NAME: &'static str = "analyze_symbol_context";
 
@@ -60,6 +123,32 @@ impl McpToolHandler<AnalyzeSymbolContextTool> for CppServerHandler {
         tool: AnalyzeSymbolContextTool,
     ) -> Result<CallToolResult, CallToolError> {
         tool.call_tool(&self.clangd_manager).await
+    }
+}
+
+#[cfg(feature = "tools-v2")]
+impl McpToolHandler<AnalyzeSymbolContextTool> for CppServerHandler {
+    const TOOL_NAME: &'static str = "analyze_symbol_context";
+
+    async fn call_tool_async(
+        &self,
+        tool: AnalyzeSymbolContextTool,
+    ) -> Result<CallToolResult, CallToolError> {
+        let build_dir = self.resolve_build_directory(tool.build_directory.as_deref())?;
+
+        let clangd_session = self
+            .workspace_session
+            .get_or_create_session(build_dir)
+            .await
+            .map_err(|e| {
+                CallToolError::new(std::io::Error::other(format!(
+                    "Session creation failed: {}",
+                    e
+                )))
+            })?;
+
+        tool.call_tool_v2(clangd_session, &self.project_workspace)
+            .await
     }
 }
 

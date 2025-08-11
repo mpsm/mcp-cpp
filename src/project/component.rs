@@ -10,7 +10,7 @@ use crate::project::{CompilationDatabase, CompilationDatabaseError};
 /// including paths to key directories and files, as well as build-specific options.
 /// Providers should populate the structured fields (generator, build_type) from their
 /// specific configuration formats.
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ProjectComponent {
     /// Path to the build directory
     pub build_dir_path: PathBuf,
