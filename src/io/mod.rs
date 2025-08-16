@@ -9,14 +9,13 @@
 //! These abstractions can be used by any protocol layer (LSP, MCP, etc.)
 
 pub mod file_buffer;
+pub mod file_manager;
+pub mod file_system;
 pub mod process;
 pub mod transport;
 
 // Re-export main types for convenience
 #[allow(dead_code, unused_imports)]
-pub use file_buffer::{
-    FileBuffer, FileBufferError, FileBufferManager, FilePosition, FileSystemTrait,
-    RealFileBufferManager, RealFileSystem,
-};
+pub use file_buffer::{FileBuffer, FileBufferError, FilePosition};
 pub use process::{ChildProcessManager, ProcessManager, StderrMonitor, StopMode};
 pub use transport::StdioTransport;
