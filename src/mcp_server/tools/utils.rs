@@ -1,6 +1,5 @@
 //! Common utilities for MCP tools
 
-use lsp_types::{Position, Range};
 use tracing::{info, warn};
 
 /// Default timeout for waiting for clangd indexing to complete
@@ -70,46 +69,4 @@ pub fn convert_symbol_kinds(symbols: Vec<serde_json::Value>) -> Vec<serde_json::
             symbol
         })
         .collect()
-}
-
-// ============================================================================
-// LSP Location Utilities
-// ============================================================================
-
-/// Creates a zero position (line 0, character 0) for default cases
-pub fn zero_position() -> Position {
-    Position::new(0, 0)
-}
-
-/// Creates a Position from line and character coordinates
-///
-/// This is a convenience wrapper around Position::new() for better readability
-///
-/// # Arguments
-/// * `line` - Zero-based line number
-/// * `character` - Zero-based character offset
-///
-/// # Returns
-/// * Position instance
-pub fn position(line: u32, character: u32) -> Position {
-    Position::new(line, character)
-}
-
-/// Creates a zero-width range at a specific position (useful for cursor positions)
-///
-/// # Arguments
-/// * `line` - Zero-based line number
-/// * `character` - Zero-based character offset
-///
-/// # Returns
-/// * Range instance where start and end are the same position
-pub fn point_range(line: u32, character: u32) -> Range {
-    let pos = Position::new(line, character);
-    Range::new(pos, pos)
-}
-
-/// Creates a default zero range (0,0 to 0,0) for default cases
-pub fn zero_range() -> Range {
-    let zero_pos = zero_position();
-    Range::new(zero_pos, zero_pos)
 }

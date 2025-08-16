@@ -44,15 +44,6 @@ pub mod version;
 #[cfg(test)]
 pub mod testing;
 
-// Re-export main types for convenience
-
-pub use config::ClangdConfigBuilder;
-
-pub use session::{ClangdSession, ClangdSessionTrait};
-
-pub use session_builder::ClangdSessionBuilder;
-
-// Re-export testing utilities when in test mode
-#[cfg(test)]
-#[allow(unused_imports)]
-pub use testing::{MockClangdSession, MockProjectWorkspace};
+pub use crate::clangd::config::ClangdConfigBuilder;
+pub use crate::clangd::session::ClangdSession;
+pub use crate::clangd::session_builder::ClangdSessionBuilder;

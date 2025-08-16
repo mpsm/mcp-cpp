@@ -95,6 +95,7 @@ pub trait LspClientTrait: Send + Sync {
     ) -> Result<Vec<lsp_types::WorkspaceSymbol>, LspError>;
 
     /// Get the definition(s) of a symbol at the given position
+    #[allow(dead_code)]
     async fn text_document_definition(
         &mut self,
         uri: String,
@@ -110,6 +111,7 @@ pub trait LspClientTrait: Send + Sync {
     ) -> Result<lsp_types::request::GotoDeclarationResponse, LspError>;
 
     /// Find all references to a symbol at the given position
+    #[allow(dead_code)]
     async fn text_document_references(
         &mut self,
         uri: String,
@@ -118,6 +120,7 @@ pub trait LspClientTrait: Send + Sync {
     ) -> Result<Vec<lsp_types::Location>, LspError>;
 
     /// Get hover information for a symbol at the given position
+    #[allow(dead_code)]
     async fn text_document_hover(
         &mut self,
         uri: String,
@@ -135,6 +138,7 @@ pub trait LspClientTrait: Send + Sync {
     // ========================================================================
 
     /// Prepare call hierarchy for the symbol at the given position
+    #[allow(dead_code)]
     async fn text_document_prepare_call_hierarchy(
         &mut self,
         uri: String,
@@ -142,12 +146,14 @@ pub trait LspClientTrait: Send + Sync {
     ) -> Result<Vec<lsp_types::CallHierarchyItem>, LspError>;
 
     /// Get incoming calls for a call hierarchy item
+    #[allow(dead_code)]
     async fn call_hierarchy_incoming_calls(
         &mut self,
         item: lsp_types::CallHierarchyItem,
     ) -> Result<Vec<lsp_types::CallHierarchyIncomingCall>, LspError>;
 
     /// Get outgoing calls for a call hierarchy item
+    #[allow(dead_code)]
     async fn call_hierarchy_outgoing_calls(
         &mut self,
         item: lsp_types::CallHierarchyItem,
