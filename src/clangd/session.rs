@@ -20,7 +20,7 @@ use crate::lsp::{LspClient, traits::LspClientTrait};
 /// Type alias for testing sessions with mock dependencies
 #[cfg(test)]
 type TestSession =
-    ClangdSession<crate::io::process::MockProcessManager, crate::lsp::testing::MockLspClient>;
+    ClangdSession<crate::io::process::MockProcessManager, crate::lsp::testing::MockLspClientTrait>;
 
 // ============================================================================
 // Clangd Session Trait
@@ -427,11 +427,23 @@ mod tests {
 
         // Use proper fluent builder API with mock dependencies
         use crate::io::process::MockProcessManager;
-        use crate::lsp::testing::MockLspClient;
+        use crate::lsp::testing::MockLspClientTrait;
+        use crate::lsp::traits::LspClientTrait;
 
         let process_manager = MockProcessManager::new();
-        let mut lsp_client = MockLspClient::new();
-        lsp_client.set_initialized(true); // Mock is pre-initialized
+        let mut lsp_client = MockLspClientTrait::new();
+
+        // Setup expectations for basic mock functionality
+        lsp_client.expect_is_initialized().returning(|| true);
+        lsp_client
+            .expect_shutdown()
+            .returning(|| Box::pin(async { Ok(()) }));
+        lsp_client
+            .expect_close()
+            .returning(|| Box::pin(async { Ok(()) }));
+        lsp_client
+            .expect_open_text_document()
+            .returning(|_, _, _, _| Box::pin(async { Ok(()) }));
 
         let session = ClangdSessionBuilder::new()
             .with_config(config)
@@ -466,11 +478,23 @@ mod tests {
 
         // Demonstrate comprehensive unit testing with mock dependencies using fluent API
         use crate::io::process::MockProcessManager;
-        use crate::lsp::testing::MockLspClient;
+        use crate::lsp::testing::MockLspClientTrait;
+        use crate::lsp::traits::LspClientTrait;
 
         let process_manager = MockProcessManager::new();
-        let mut lsp_client = MockLspClient::new();
-        lsp_client.set_initialized(true); // Mock is pre-initialized
+        let mut lsp_client = MockLspClientTrait::new();
+
+        // Setup expectations for basic mock functionality
+        lsp_client.expect_is_initialized().returning(|| true);
+        lsp_client
+            .expect_shutdown()
+            .returning(|| Box::pin(async { Ok(()) }));
+        lsp_client
+            .expect_close()
+            .returning(|| Box::pin(async { Ok(()) }));
+        lsp_client
+            .expect_open_text_document()
+            .returning(|_, _, _, _| Box::pin(async { Ok(()) }));
 
         let mut session = ClangdSessionBuilder::new()
             .with_config(config)

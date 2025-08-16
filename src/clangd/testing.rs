@@ -11,6 +11,7 @@ use std::time::Instant;
 use crate::clangd::config::ClangdConfig;
 use crate::clangd::error::ClangdSessionError;
 use crate::clangd::session::ClangdSessionTrait;
+use crate::lsp::traits::{LspClientTrait, MockLspClientTrait};
 use crate::project::{ProjectComponent, ProjectError, ProjectWorkspace};
 
 // ============================================================================
@@ -20,7 +21,7 @@ use crate::project::{ProjectComponent, ProjectError, ProjectWorkspace};
 /// Mock implementation of clangd session for testing
 pub struct MockClangdSession {
     config: ClangdConfig,
-    mock_client: MockLspClient,
+    mock_client: MockLspClientTrait,
     started_at: Instant,
     stderr_handler: Option<Arc<dyn Fn(String) + Send + Sync>>,
     // Test control flags
@@ -30,9 +31,23 @@ pub struct MockClangdSession {
 impl MockClangdSession {
     /// Create a new mock session
     pub fn new(config: ClangdConfig) -> Self {
+        let mut mock_client = MockLspClientTrait::new();
+
+        // Setup default expectations
+        mock_client.expect_is_initialized().returning(|| true);
+        mock_client
+            .expect_shutdown()
+            .returning(|| Box::pin(async { Ok(()) }));
+        mock_client
+            .expect_close()
+            .returning(|| Box::pin(async { Ok(()) }));
+        mock_client
+            .expect_open_text_document()
+            .returning(|_, _, _, _| Box::pin(async { Ok(()) }));
+
         Self {
             config,
-            mock_client: MockLspClient::new(),
+            mock_client,
             started_at: Instant::now(),
             stderr_handler: None,
             should_fail_close: false,
@@ -77,7 +92,7 @@ impl MockClangdSession {
 #[async_trait]
 impl ClangdSessionTrait for MockClangdSession {
     type Error = ClangdSessionError;
-    type Client = MockLspClient;
+    type Client = MockLspClientTrait;
 
     /// Graceful async cleanup (consumes self)
     async fn close(self) -> Result<(), Self::Error> {
@@ -290,16 +305,27 @@ pub mod test_helpers {
         config: ClangdConfig,
     ) -> super::super::session::ClangdSession<
         crate::io::process::MockProcessManager,
-        crate::lsp::testing::MockLspClient,
+        crate::lsp::testing::MockLspClientTrait,
     > {
         use crate::clangd::file_manager::ClangdFileManager;
         use crate::clangd::index::IndexMonitor;
         use crate::io::process::MockProcessManager;
-        use crate::lsp::testing::MockLspClient;
+        use crate::lsp::testing::MockLspClientTrait;
 
         let mock_process = MockProcessManager::new();
-        let mut mock_lsp = MockLspClient::new();
-        mock_lsp.set_initialized(true);
+        let mut mock_lsp = MockLspClientTrait::new();
+
+        // Setup expectations for basic mock functionality
+        mock_lsp.expect_is_initialized().returning(|| true);
+        mock_lsp
+            .expect_shutdown()
+            .returning(|| Box::pin(async { Ok(()) }));
+        mock_lsp
+            .expect_close()
+            .returning(|| Box::pin(async { Ok(()) }));
+        mock_lsp
+            .expect_open_text_document()
+            .returning(|_, _, _, _| Box::pin(async { Ok(()) }));
         let file_manager = ClangdFileManager::new();
         let index_monitor = IndexMonitor::new();
 

@@ -20,6 +20,7 @@ use crate::lsp::protocol::{JsonRpcNotification, JsonRpcRequest, JsonRpcResponse}
 /// This trait provides the complete LSP client interface needed by session
 /// management and other components that interact with LSP servers.
 #[async_trait]
+#[cfg_attr(test, mockall::automock)]
 // Methods will be used when session management is fully integrated
 pub trait LspClientTrait: Send + Sync {
     // ========================================================================
@@ -151,4 +152,30 @@ pub trait LspClientTrait: Send + Sync {
         &mut self,
         item: lsp_types::CallHierarchyItem,
     ) -> Result<Vec<lsp_types::CallHierarchyOutgoingCall>, LspError>;
+
+    // ========================================================================
+    // Type Hierarchy Methods
+    // ========================================================================
+
+    /// Prepare type hierarchy for the symbol at the given position
+    #[allow(dead_code)]
+    async fn text_document_prepare_type_hierarchy(
+        &mut self,
+        uri: String,
+        position: lsp_types::Position,
+    ) -> Result<Option<Vec<lsp_types::TypeHierarchyItem>>, LspError>;
+
+    /// Get supertypes (base classes) for a type hierarchy item
+    #[allow(dead_code)]
+    async fn type_hierarchy_supertypes(
+        &mut self,
+        item: lsp_types::TypeHierarchyItem,
+    ) -> Result<Option<Vec<lsp_types::TypeHierarchyItem>>, LspError>;
+
+    /// Get subtypes (derived classes) for a type hierarchy item
+    #[allow(dead_code)]
+    async fn type_hierarchy_subtypes(
+        &mut self,
+        item: lsp_types::TypeHierarchyItem,
+    ) -> Result<Option<Vec<lsp_types::TypeHierarchyItem>>, LspError>;
 }

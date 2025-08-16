@@ -14,8 +14,10 @@ pub mod client;
 pub mod framing;
 pub mod jsonrpc_utils;
 pub mod protocol;
-pub mod testing;
 pub mod traits;
+
+#[cfg(test)]
+pub mod testing;
 
 //
 // Example usage with direct component coordination:

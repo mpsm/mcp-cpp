@@ -15,8 +15,9 @@ use lsp_types::{
     GotoDefinitionResponse, HoverParams, InitializeParams, InitializedParams, Location, Position,
     ReferenceContext, ReferenceParams, TextDocumentClientCapabilities,
     TextDocumentContentChangeEvent, TextDocumentIdentifier, TextDocumentItem,
-    TextDocumentPositionParams, VersionedTextDocumentIdentifier, WorkspaceClientCapabilities,
-    WorkspaceSymbol, WorkspaceSymbolParams,
+    TextDocumentPositionParams, TypeHierarchyItem, TypeHierarchyPrepareParams,
+    TypeHierarchySubtypesParams, TypeHierarchySupertypesParams, VersionedTextDocumentIdentifier,
+    WorkspaceClientCapabilities, WorkspaceSymbol, WorkspaceSymbolParams,
 };
 use tracing::{debug, info};
 
@@ -615,18 +616,154 @@ impl<T: Transport + 'static> LspClientTrait for LspClient<T> {
 
         Ok(result.unwrap_or_default())
     }
+
+    // ========================================================================
+    // Type Hierarchy Methods Implementation
+    // ========================================================================
+
+    async fn text_document_prepare_type_hierarchy(
+        &mut self,
+        uri: String,
+        position: Position,
+    ) -> Result<Option<Vec<TypeHierarchyItem>>, LspError> {
+        if !self.initialized {
+            return Err(LspError::NotInitialized);
+        }
+
+        let params = TypeHierarchyPrepareParams {
+            text_document_position_params: TextDocumentPositionParams {
+                text_document: TextDocumentIdentifier {
+                    uri: uri
+                        .parse()
+                        .map_err(|e| LspError::Protocol(format!("Invalid URI: {}", e)))?,
+                },
+                position,
+            },
+            work_done_progress_params: Default::default(),
+        };
+
+        debug!(
+            "Preparing type hierarchy at {:?}:{:?}",
+            params.text_document_position_params.text_document.uri,
+            params.text_document_position_params.position
+        );
+
+        let result = self
+            .request::<lsp_types::request::TypeHierarchyPrepare>(params)
+            .await?;
+
+        Ok(result)
+    }
+
+    async fn type_hierarchy_supertypes(
+        &mut self,
+        item: TypeHierarchyItem,
+    ) -> Result<Option<Vec<TypeHierarchyItem>>, LspError> {
+        if !self.initialized {
+            return Err(LspError::NotInitialized);
+        }
+
+        let params = TypeHierarchySupertypesParams {
+            item,
+            work_done_progress_params: Default::default(),
+            partial_result_params: Default::default(),
+        };
+
+        debug!("Requesting supertypes for: {:?}", params.item.name);
+        let result = self
+            .request::<lsp_types::request::TypeHierarchySupertypes>(params)
+            .await?;
+
+        Ok(result)
+    }
+
+    async fn type_hierarchy_subtypes(
+        &mut self,
+        item: TypeHierarchyItem,
+    ) -> Result<Option<Vec<TypeHierarchyItem>>, LspError> {
+        if !self.initialized {
+            return Err(LspError::NotInitialized);
+        }
+
+        let params = TypeHierarchySubtypesParams {
+            item,
+            work_done_progress_params: Default::default(),
+            partial_result_params: Default::default(),
+        };
+
+        debug!("Requesting subtypes for: {:?}", params.item.name);
+        let result = self
+            .request::<lsp_types::request::TypeHierarchySubtypes>(params)
+            .await?;
+
+        Ok(result)
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::lsp::testing::MockLspClient;
-    use lsp_types::{Position, Range, SymbolKind};
+    use crate::lsp::testing::MockLspClientTrait;
+    use lsp_types::{
+        GotoDefinitionResponse, Location, Position, Range, SymbolKind, WorkspaceSymbol,
+    };
+    use mockall::predicate::*;
 
     #[tokio::test]
     async fn test_mock_client_workspace_symbols_success() {
-        let mut client = MockLspClient::new();
-        client.set_initialized(true);
+        let mut client = MockLspClientTrait::new();
+
+        // Set up expectation for workspace_symbols
+        client
+            .expect_workspace_symbols()
+            .with(eq("test".to_string()))
+            .times(1)
+            .returning(|_| {
+                Box::pin(async {
+                    Ok(vec![
+                        WorkspaceSymbol {
+                            name: "MockFunction".to_string(),
+                            kind: SymbolKind::FUNCTION,
+                            tags: None,
+                            container_name: Some("MockClass".to_string()),
+                            location: lsp_types::OneOf::Left(Location {
+                                uri: "file:///mock/file.cpp".parse().unwrap(),
+                                range: Range {
+                                    start: Position {
+                                        line: 10,
+                                        character: 0,
+                                    },
+                                    end: Position {
+                                        line: 15,
+                                        character: 0,
+                                    },
+                                },
+                            }),
+                            data: None,
+                        },
+                        WorkspaceSymbol {
+                            name: "MockClass".to_string(),
+                            kind: SymbolKind::CLASS,
+                            tags: None,
+                            container_name: None,
+                            location: lsp_types::OneOf::Left(Location {
+                                uri: "file:///mock/file.cpp".parse().unwrap(),
+                                range: Range {
+                                    start: Position {
+                                        line: 5,
+                                        character: 0,
+                                    },
+                                    end: Position {
+                                        line: 20,
+                                        character: 0,
+                                    },
+                                },
+                            }),
+                            data: None,
+                        },
+                    ])
+                })
+            });
 
         let result = client.workspace_symbols("test".to_string()).await;
         assert!(result.is_ok());
@@ -639,8 +776,13 @@ mod tests {
 
     #[tokio::test]
     async fn test_mock_client_workspace_symbols_not_initialized() {
-        let mut client = MockLspClient::new();
-        // Client not initialized
+        let mut client = MockLspClientTrait::new();
+
+        client
+            .expect_workspace_symbols()
+            .with(eq("test".to_string()))
+            .times(1)
+            .returning(|_| Box::pin(async { Err(LspError::NotInitialized) }));
 
         let result = client.workspace_symbols("test".to_string()).await;
         assert!(matches!(result, Err(LspError::NotInitialized)));
@@ -648,13 +790,35 @@ mod tests {
 
     #[tokio::test]
     async fn test_mock_client_definition_success() {
-        let mut client = MockLspClient::new();
-        client.set_initialized(true);
+        let mut client = MockLspClientTrait::new();
 
         let position = Position {
             line: 10,
             character: 5,
         };
+
+        client
+            .expect_text_document_definition()
+            .with(eq("file:///test.cpp".to_string()), eq(position))
+            .times(1)
+            .returning(|_, _| {
+                Box::pin(async {
+                    Ok(GotoDefinitionResponse::Scalar(Location {
+                        uri: "file:///mock/definition.cpp".parse().unwrap(),
+                        range: Range {
+                            start: Position {
+                                line: 42,
+                                character: 8,
+                            },
+                            end: Position {
+                                line: 42,
+                                character: 20,
+                            },
+                        },
+                    }))
+                })
+            });
+
         let result = client
             .text_document_definition("file:///test.cpp".to_string(), position)
             .await;
@@ -671,13 +835,50 @@ mod tests {
 
     #[tokio::test]
     async fn test_mock_client_references_success() {
-        let mut client = MockLspClient::new();
-        client.set_initialized(true);
+        let mut client = MockLspClientTrait::new();
 
         let position = Position {
             line: 10,
             character: 5,
         };
+
+        client
+            .expect_text_document_references()
+            .with(eq("file:///test.cpp".to_string()), eq(position), eq(true))
+            .times(1)
+            .returning(|_, _, _| {
+                Box::pin(async {
+                    Ok(vec![
+                        Location {
+                            uri: "file:///mock/usage1.cpp".parse().unwrap(),
+                            range: Range {
+                                start: Position {
+                                    line: 25,
+                                    character: 4,
+                                },
+                                end: Position {
+                                    line: 25,
+                                    character: 16,
+                                },
+                            },
+                        },
+                        Location {
+                            uri: "file:///mock/usage2.cpp".parse().unwrap(),
+                            range: Range {
+                                start: Position {
+                                    line: 30,
+                                    character: 8,
+                                },
+                                end: Position {
+                                    line: 30,
+                                    character: 20,
+                                },
+                            },
+                        },
+                    ])
+                })
+            });
+
         let result = client
             .text_document_references("file:///test.cpp".to_string(), position, true)
             .await;
@@ -691,13 +892,31 @@ mod tests {
 
     #[tokio::test]
     async fn test_mock_client_hover_success() {
-        let mut client = MockLspClient::new();
-        client.set_initialized(true);
+        let mut client = MockLspClientTrait::new();
 
         let position = Position {
             line: 10,
             character: 5,
         };
+
+        client
+            .expect_text_document_hover()
+            .with(eq("file:///test.cpp".to_string()), eq(position))
+            .times(1)
+            .returning(|_, _| {
+                Box::pin(async {
+                    Ok(Some(lsp_types::Hover {
+                        contents: lsp_types::HoverContents::Scalar(lsp_types::MarkedString::String(
+                            "Mock hover information: int mockFunction(const std::string& param)".to_string(),
+                        )),
+                        range: Some(Range {
+                            start: Position { line: 10, character: 0 },
+                            end: Position { line: 10, character: 12 },
+                        }),
+                    }))
+                })
+            });
+
         let result = client
             .text_document_hover("file:///test.cpp".to_string(), position)
             .await;
@@ -716,8 +935,39 @@ mod tests {
 
     #[tokio::test]
     async fn test_mock_client_document_symbols_success() {
-        let mut client = MockLspClient::new();
-        client.set_initialized(true);
+        use lsp_types::{DocumentSymbolResponse, SymbolInformation};
+
+        let mut client = MockLspClientTrait::new();
+
+        client
+            .expect_text_document_document_symbol()
+            .with(eq("file:///test.cpp".to_string()))
+            .times(1)
+            .returning(|_| {
+                Box::pin(async {
+                    Ok(DocumentSymbolResponse::Flat(vec![SymbolInformation {
+                        name: "MockSymbol".to_string(),
+                        kind: SymbolKind::FUNCTION,
+                        tags: None,
+                        #[allow(deprecated)]
+                        deprecated: None,
+                        location: Location {
+                            uri: "file:///mock/file.cpp".parse().unwrap(),
+                            range: Range {
+                                start: Position {
+                                    line: 5,
+                                    character: 0,
+                                },
+                                end: Position {
+                                    line: 10,
+                                    character: 0,
+                                },
+                            },
+                        },
+                        container_name: Some("MockContainer".to_string()),
+                    }]))
+                })
+            });
 
         let result = client
             .text_document_document_symbol("file:///test.cpp".to_string())
@@ -736,13 +986,52 @@ mod tests {
 
     #[tokio::test]
     async fn test_mock_client_prepare_call_hierarchy_success() {
-        let mut client = MockLspClient::new();
-        client.set_initialized(true);
+        use lsp_types::CallHierarchyItem;
+
+        let mut client = MockLspClientTrait::new();
 
         let position = Position {
             line: 10,
             character: 5,
         };
+
+        client
+            .expect_text_document_prepare_call_hierarchy()
+            .with(eq("file:///test.cpp".to_string()), eq(position))
+            .times(1)
+            .returning(|_, _| {
+                Box::pin(async {
+                    Ok(vec![CallHierarchyItem {
+                        name: "mockFunction".to_string(),
+                        kind: SymbolKind::FUNCTION,
+                        tags: None,
+                        detail: Some("Mock function detail".to_string()),
+                        uri: "file:///mock/file.cpp".parse().unwrap(),
+                        range: Range {
+                            start: Position {
+                                line: 10,
+                                character: 0,
+                            },
+                            end: Position {
+                                line: 15,
+                                character: 0,
+                            },
+                        },
+                        selection_range: Range {
+                            start: Position {
+                                line: 10,
+                                character: 4,
+                            },
+                            end: Position {
+                                line: 10,
+                                character: 16,
+                            },
+                        },
+                        data: None,
+                    }])
+                })
+            });
+
         let result = client
             .text_document_prepare_call_hierarchy("file:///test.cpp".to_string(), position)
             .await;
@@ -756,8 +1045,9 @@ mod tests {
 
     #[tokio::test]
     async fn test_mock_client_incoming_calls_success() {
-        let mut client = MockLspClient::new();
-        client.set_initialized(true);
+        use lsp_types::{CallHierarchyIncomingCall, CallHierarchyItem};
+
+        let mut client = MockLspClientTrait::new();
 
         let item = CallHierarchyItem {
             name: "test".to_string(),
@@ -787,6 +1077,54 @@ mod tests {
             },
             data: None,
         };
+
+        client
+            .expect_call_hierarchy_incoming_calls()
+            .times(1)
+            .returning(|_| {
+                Box::pin(async {
+                    Ok(vec![CallHierarchyIncomingCall {
+                        from: CallHierarchyItem {
+                            name: "callerFunction".to_string(),
+                            kind: SymbolKind::FUNCTION,
+                            tags: None,
+                            detail: None,
+                            uri: "file:///caller.cpp".parse().unwrap(),
+                            range: Range {
+                                start: Position {
+                                    line: 5,
+                                    character: 0,
+                                },
+                                end: Position {
+                                    line: 10,
+                                    character: 0,
+                                },
+                            },
+                            selection_range: Range {
+                                start: Position {
+                                    line: 5,
+                                    character: 4,
+                                },
+                                end: Position {
+                                    line: 5,
+                                    character: 16,
+                                },
+                            },
+                            data: None,
+                        },
+                        from_ranges: vec![Range {
+                            start: Position {
+                                line: 7,
+                                character: 4,
+                            },
+                            end: Position {
+                                line: 7,
+                                character: 8,
+                            },
+                        }],
+                    }])
+                })
+            });
 
         let result = client.call_hierarchy_incoming_calls(item).await;
         assert!(result.is_ok());
@@ -798,8 +1136,9 @@ mod tests {
 
     #[tokio::test]
     async fn test_mock_client_outgoing_calls_success() {
-        let mut client = MockLspClient::new();
-        client.set_initialized(true);
+        use lsp_types::{CallHierarchyItem, CallHierarchyOutgoingCall};
+
+        let mut client = MockLspClientTrait::new();
 
         let item = CallHierarchyItem {
             name: "test".to_string(),
@@ -830,6 +1169,54 @@ mod tests {
             data: None,
         };
 
+        client
+            .expect_call_hierarchy_outgoing_calls()
+            .times(1)
+            .returning(|_| {
+                Box::pin(async {
+                    Ok(vec![CallHierarchyOutgoingCall {
+                        to: CallHierarchyItem {
+                            name: "calleeFunction".to_string(),
+                            kind: SymbolKind::FUNCTION,
+                            tags: None,
+                            detail: None,
+                            uri: "file:///callee.cpp".parse().unwrap(),
+                            range: Range {
+                                start: Position {
+                                    line: 15,
+                                    character: 0,
+                                },
+                                end: Position {
+                                    line: 20,
+                                    character: 0,
+                                },
+                            },
+                            selection_range: Range {
+                                start: Position {
+                                    line: 15,
+                                    character: 4,
+                                },
+                                end: Position {
+                                    line: 15,
+                                    character: 17,
+                                },
+                            },
+                            data: None,
+                        },
+                        from_ranges: vec![Range {
+                            start: Position {
+                                line: 3,
+                                character: 8,
+                            },
+                            end: Position {
+                                line: 3,
+                                character: 21,
+                            },
+                        }],
+                    }])
+                })
+            });
+
         let result = client.call_hierarchy_outgoing_calls(item).await;
         assert!(result.is_ok());
 
@@ -840,7 +1227,45 @@ mod tests {
 
     #[tokio::test]
     async fn test_mock_client_all_methods_require_initialization() {
-        let mut client = MockLspClient::new();
+        let mut client = MockLspClientTrait::new();
+
+        // Set up expectations for all methods to return NotInitialized
+        client
+            .expect_workspace_symbols()
+            .returning(|_| Box::pin(async { Err(LspError::NotInitialized) }));
+
+        client
+            .expect_text_document_definition()
+            .returning(|_, _| Box::pin(async { Err(LspError::NotInitialized) }));
+
+        client
+            .expect_text_document_declaration()
+            .returning(|_, _| Box::pin(async { Err(LspError::NotInitialized) }));
+
+        client
+            .expect_text_document_references()
+            .returning(|_, _, _| Box::pin(async { Err(LspError::NotInitialized) }));
+
+        client
+            .expect_text_document_hover()
+            .returning(|_, _| Box::pin(async { Err(LspError::NotInitialized) }));
+
+        client
+            .expect_text_document_document_symbol()
+            .returning(|_| Box::pin(async { Err(LspError::NotInitialized) }));
+
+        client
+            .expect_text_document_prepare_call_hierarchy()
+            .returning(|_, _| Box::pin(async { Err(LspError::NotInitialized) }));
+
+        client
+            .expect_call_hierarchy_incoming_calls()
+            .returning(|_| Box::pin(async { Err(LspError::NotInitialized) }));
+
+        client
+            .expect_call_hierarchy_outgoing_calls()
+            .returning(|_| Box::pin(async { Err(LspError::NotInitialized) }));
+
         // Client not initialized
         let position = Position {
             line: 0,

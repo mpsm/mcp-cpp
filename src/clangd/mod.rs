@@ -39,8 +39,10 @@ pub mod file_manager;
 pub mod index;
 pub mod session;
 pub mod session_builder;
-pub mod testing;
 pub mod version;
+
+#[cfg(test)]
+pub mod testing;
 
 // Re-export main types for convenience
 
