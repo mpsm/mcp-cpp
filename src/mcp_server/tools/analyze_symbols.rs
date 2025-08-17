@@ -8,12 +8,36 @@
 
 use rust_mcp_sdk::macros::{JsonSchema, mcp_tool};
 use rust_mcp_sdk::schema::{CallToolResult, TextContent, schema_utils::CallToolError};
+use serde::Serialize;
 use std::sync::Arc;
 use tokio::sync::Mutex;
-use tracing::{info, instrument};
+use tracing::{error, info, instrument};
 
-use crate::clangd::ClangdSession;
+use crate::clangd::session::{ClangdSession, ClangdSessionTrait};
+use crate::io::file_manager::RealFileBufferManager;
+use crate::lsp::traits::LspClientTrait;
 use crate::project::ProjectWorkspace;
+use crate::symbol::Symbol;
+
+// ============================================================================
+// Analyzer Error Type
+// ============================================================================
+
+#[derive(Debug, thiserror::Error)]
+pub enum AnalyzerError {
+    #[error("No symbols found for '{0}'")]
+    NoSymbols(String),
+    #[error("LSP error: {0}")]
+    Lsp(#[from] crate::lsp::client::LspError),
+    #[error("JSON error: {0}")]
+    Json(#[from] serde_json::Error),
+}
+
+impl From<AnalyzerError> for CallToolError {
+    fn from(err: AnalyzerError) -> Self {
+        CallToolError::new(std::io::Error::other(err.to_string()))
+    }
+}
 
 // ============================================================================
 // MCP Tool Definition - PRESERVE EXACT EXTERNAL SCHEMA
@@ -116,20 +140,190 @@ pub struct AnalyzeSymbolContextTool {
     pub build_directory: Option<String>,
 }
 
+#[derive(Debug, Serialize)]
+struct AnalyzerResult {
+    symbol: Symbol,
+    query: String,
+    total_found: usize,
+}
+
+#[derive(Debug, Serialize)]
+struct AnalyzerErrorResult {
+    error: String,
+    query: String,
+}
+
 impl AnalyzeSymbolContextTool {
     /// V2 entry point - uses shared ClangdSession from server
-    #[instrument(name = "analyze_symbol_context", skip(self, _session, _workspace))]
+    #[instrument(
+        name = "analyze_symbol_context",
+        skip(self, session, _workspace, _file_buffer_manager)
+    )]
     pub async fn call_tool(
         &self,
-        _session: Arc<Mutex<ClangdSession>>,
+        session: Arc<Mutex<ClangdSession>>,
         _workspace: &ProjectWorkspace,
+        _file_buffer_manager: Arc<Mutex<RealFileBufferManager>>,
     ) -> Result<CallToolResult, CallToolError> {
+        info!("Starting symbol analysis for '{}'", self.symbol);
+
+        // Lock session, perform analysis, then drop the lock
+        let symbols = {
+            let mut session_guard = session.lock().await;
+            super::utils::wait_for_indexing(session_guard.index_monitor(), None).await;
+            session_guard
+                .client_mut()
+                .workspace_symbols(self.symbol.clone())
+                .await
+                .map_err(AnalyzerError::from)?
+        }; // session_guard is dropped here
+
+        // Process symbols without holding the mutex
+        self.process_symbols(symbols).await
+    }
+
+    /// Process symbols and create result - no mutex locks needed
+    async fn process_symbols(
+        &self,
+        symbols: Vec<lsp_types::WorkspaceSymbol>,
+    ) -> Result<CallToolResult, CallToolError> {
+        if symbols.is_empty() {
+            let error_result = AnalyzerErrorResult {
+                error: format!("No symbols found for '{}'", self.symbol),
+                query: self.symbol.clone(),
+            };
+            let output =
+                serde_json::to_string_pretty(&error_result).map_err(AnalyzerError::from)?;
+            return Ok(CallToolResult::text_content(vec![TextContent::from(
+                output,
+            )]));
+        }
+
+        // Take the first symbol as the best match
+        let best_match = &symbols[0];
         info!(
-            "🚀 V2 Implementation with shared session: Starting symbol analysis for '{}'",
-            self.symbol
+            "Found {} symbols, using first match: {}",
+            symbols.len(),
+            best_match.name
         );
 
-        // just return empty result for now
-        Ok(CallToolResult::text_content(vec![TextContent::from("")]))
+        // Convert to our Symbol type
+        let symbol = Symbol::from(best_match.clone());
+
+        // Create result with the symbol
+        let result = AnalyzerResult {
+            symbol,
+            query: self.symbol.clone(),
+            total_found: symbols.len(),
+        };
+
+        let output = serde_json::to_string_pretty(&result).map_err(AnalyzerError::from)?;
+        Ok(CallToolResult::text_content(vec![TextContent::from(
+            output,
+        )]))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use lsp_types::SymbolKind;
+
+    #[test]
+    fn test_analyzer_result_serialization() {
+        let symbol = Symbol {
+            name: "Math".to_string(),
+            kind: SymbolKind::CLASS,
+            container_name: Some("TestProject".to_string()),
+            location: "/test/math.cpp".to_string(),
+        };
+
+        let result = AnalyzerResult {
+            symbol,
+            query: "Math".to_string(),
+            total_found: 1,
+        };
+
+        let json = serde_json::to_string(&result).unwrap();
+        assert!(json.contains("\"name\":\"Math\""));
+        assert!(json.contains("\"kind\":\"class\""));
+        assert!(json.contains("\"container_name\":\"TestProject\""));
+        assert!(json.contains("\"location\":\"/test/math.cpp\""));
+        assert!(json.contains("\"query\":\"Math\""));
+        assert!(json.contains("\"total_found\":1"));
+    }
+
+    #[test]
+    fn test_analyzer_error_result_serialization() {
+        let result = AnalyzerErrorResult {
+            error: "No symbols found".to_string(),
+            query: "NonExistent".to_string(),
+        };
+
+        let json = serde_json::to_string(&result).unwrap();
+        assert!(json.contains("\"error\":\"No symbols found\""));
+        assert!(json.contains("\"query\":\"NonExistent\""));
+    }
+
+    #[cfg(feature = "clangd-integration-tests")]
+    #[tokio::test]
+    async fn test_analyzer_with_real_clangd() {
+        use crate::io::file_manager::RealFileBufferManager;
+        use std::sync::Arc;
+        use tokio::sync::Mutex;
+
+        // Create a test project first
+        use crate::test_utils::integration::TestProject;
+        let test_project = TestProject::new().await.unwrap();
+        test_project.cmake_configure().await.unwrap();
+
+        // Scan the test project to create a proper workspace with components
+        use crate::project::{ProjectScanner, WorkspaceSession};
+        let scanner = ProjectScanner::with_default_providers();
+        let workspace = scanner
+            .scan_project(&test_project.project_root, 3, None)
+            .expect("Failed to scan test project");
+
+        // Create a WorkspaceSession which will trigger indexing
+        let workspace_session = WorkspaceSession::new(workspace.clone());
+        let session = workspace_session
+            .get_or_create_session(test_project.build_dir.clone())
+            .await
+            .expect("Failed to create session");
+
+        let file_buffer_manager = Arc::new(Mutex::new(RealFileBufferManager::new_real()));
+
+        let tool = AnalyzeSymbolContextTool {
+            symbol: "Math".to_string(),
+            build_directory: None,
+        };
+
+        let result = tool
+            .call_tool(session, &workspace, file_buffer_manager)
+            .await;
+        assert!(result.is_ok());
+
+        let call_result = result.unwrap();
+        if let Some(rust_mcp_sdk::schema::ContentBlock::TextContent(
+            rust_mcp_sdk::schema::TextContent { text, .. },
+        )) = call_result.content.first()
+        {
+            let output: serde_json::Value = serde_json::from_str(text).unwrap();
+
+            if output.get("error").is_none() {
+                // Should find Math symbol
+                assert!(output.get("symbol").is_some());
+                let symbol = &output["symbol"];
+                assert_eq!(symbol["name"], "Math");
+                assert_eq!(symbol["kind"], "class");
+                info!("Found symbol: {}", symbol);
+            } else {
+                // If no Math symbol found, that's a problem with our test setup
+                panic!(
+                    "Math symbol should exist in test project but got error: {}",
+                    output["error"]
+                );
+            }
+        }
     }
 }

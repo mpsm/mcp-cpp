@@ -2,6 +2,7 @@
 //!
 //! Provides centralized management of file buffers with caching,
 //! using the manager-owned filesystem pattern for testability.
+#![allow(dead_code)]
 
 use crate::io::file_buffer::{FileBuffer, FileBufferError};
 use crate::io::file_system::FileSystemTrait;

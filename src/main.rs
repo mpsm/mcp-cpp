@@ -4,6 +4,7 @@ mod logging;
 mod lsp;
 mod mcp_server;
 mod project;
+mod symbol;
 
 #[cfg(test)]
 mod test_utils;

@@ -10,24 +10,30 @@ use super::server_helpers::{self, McpToolHandler};
 use super::tools::analyze_symbols::AnalyzeSymbolContextTool;
 use super::tools::project_tools::GetProjectDetailsTool;
 use super::tools::search_symbols::SearchSymbolsTool;
+use crate::io::file_manager::RealFileBufferManager;
 use crate::project::ProjectWorkspace;
 use crate::project::WorkspaceSession;
 use crate::register_tools;
 use crate::{log_mcp_message, log_timing};
 use std::path::PathBuf;
+use std::sync::Arc;
 use std::time::Instant;
+use tokio::sync::Mutex;
 
 pub struct CppServerHandler {
     project_workspace: ProjectWorkspace,
     workspace_session: WorkspaceSession,
+    file_buffer_manager: Arc<Mutex<RealFileBufferManager>>,
 }
 
 impl CppServerHandler {
     pub fn new(project_workspace: ProjectWorkspace) -> Self {
         let workspace_session = WorkspaceSession::new(project_workspace.clone());
+        let file_buffer_manager = Arc::new(Mutex::new(RealFileBufferManager::new_real()));
         Self {
             project_workspace,
             workspace_session,
+            file_buffer_manager,
         }
     }
 
@@ -94,8 +100,12 @@ impl McpToolHandler<AnalyzeSymbolContextTool> for CppServerHandler {
                 )))
             })?;
 
-        tool.call_tool(clangd_session, &self.project_workspace)
-            .await
+        tool.call_tool(
+            clangd_session,
+            &self.project_workspace,
+            self.file_buffer_manager.clone(),
+        )
+        .await
     }
 }
 

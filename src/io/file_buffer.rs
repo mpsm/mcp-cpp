@@ -2,6 +2,7 @@
 //!
 //! Provides efficient file content management with UTF-8 code point positioning,
 //! automatic change detection, and comprehensive encoding support.
+#![allow(dead_code)]
 
 use crate::io::file_system::FileSystemTrait;
 use sha2::{Digest, Sha256};

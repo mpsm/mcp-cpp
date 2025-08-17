@@ -2,8 +2,9 @@
 //!
 //! Provides trait-based abstractions for file system operations, enabling
 //! dependency injection and comprehensive testing through mock implementations.
+#![allow(dead_code)]
 
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::time::SystemTime;
 
 // ============================================================================
@@ -24,7 +25,6 @@ pub struct FileMetadata {
 
 impl FileMetadata {
     /// Create new file metadata
-    #[allow(dead_code)]
     pub fn new(modified: SystemTime, size: u64) -> Self {
         Self { modified, size }
     }
@@ -89,6 +89,7 @@ impl FileSystemTrait for RealFileSystem {
 mod test_filesystem {
     use super::*;
     use std::collections::HashMap;
+    use std::path::PathBuf;
     use std::sync::{Arc, Mutex};
 
     /// In-memory filesystem state for testing scenarios
@@ -173,6 +174,7 @@ impl Clone for MockFileSystemTrait {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::path::PathBuf;
     use std::time::{Duration, UNIX_EPOCH};
 
     #[test]
