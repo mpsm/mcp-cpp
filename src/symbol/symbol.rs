@@ -4,17 +4,16 @@
 //! with conversion from LSP WorkspaceSymbol responses.
 
 use lsp_types::{OneOf, SymbolKind, WorkspaceSymbol};
-use serde::{Serialize, Serializer};
+use serde::{Deserialize, Serialize};
 use tracing::warn;
 
 /// A symbol in the codebase with resolved location
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Symbol {
     /// Symbol name
     pub name: String,
 
     /// Symbol kind (function, class, variable, etc.)
-    #[serde(serialize_with = "serialize_symbol_kind")]
     pub kind: SymbolKind,
 
     /// Container name (namespace, class, etc.)
@@ -63,14 +62,6 @@ impl From<WorkspaceSymbol> for Symbol {
             location,
         }
     }
-}
-
-/// Serialize SymbolKind as string using Display trait
-fn serialize_symbol_kind<S>(kind: &SymbolKind, serializer: S) -> Result<S::Ok, S::Error>
-where
-    S: Serializer,
-{
-    serializer.serialize_str(&format!("{:?}", kind).to_lowercase())
 }
 
 #[cfg(test)]

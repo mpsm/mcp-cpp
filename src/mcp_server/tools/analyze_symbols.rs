@@ -6,12 +6,15 @@
 //! - project/: Extensible project/build system abstraction
 //! - io/: Process and transport management
 
+use lsp_types::WorkspaceSymbol;
 use rust_mcp_sdk::macros::{JsonSchema, mcp_tool};
 use rust_mcp_sdk::schema::{CallToolResult, TextContent, schema_utils::CallToolError};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
+use std::path::Path;
 use std::sync::Arc;
+use std::time::Duration;
 use tokio::sync::Mutex;
-use tracing::{error, info, instrument};
+use tracing::{debug, error, info, instrument, warn};
 
 use crate::clangd::session::{ClangdSession, ClangdSessionTrait};
 use crate::io::file_manager::RealFileBufferManager;
@@ -27,8 +30,12 @@ use crate::symbol::Symbol;
 pub enum AnalyzerError {
     #[error("No symbols found for '{0}'")]
     NoSymbols(String),
+    #[error("No data found for '{0}'")]
+    NoData(String),
     #[error("LSP error: {0}")]
     Lsp(#[from] crate::lsp::client::LspError),
+    #[error("Session error")]
+    Session(#[from] crate::clangd::error::ClangdSessionError),
     #[error("JSON error: {0}")]
     Json(#[from] serde_json::Error),
 }
@@ -140,18 +147,16 @@ pub struct AnalyzeSymbolContextTool {
     pub build_directory: Option<String>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Deserialize)]
 struct AnalyzerResult {
     symbol: Symbol,
     query: String,
-    total_found: usize,
+
+    #[serde(skip_serializing_if = "Option::is_none")]
+    hover_documentation: Option<String>,
 }
 
-#[derive(Debug, Serialize)]
-struct AnalyzerErrorResult {
-    error: String,
-    query: String,
-}
+const ANALYZER_INDEX_TIMEOUT: Duration = Duration::from_secs(20);
 
 impl AnalyzeSymbolContextTool {
     /// V2 entry point - uses shared ClangdSession from server
@@ -167,54 +172,38 @@ impl AnalyzeSymbolContextTool {
     ) -> Result<CallToolResult, CallToolError> {
         info!("Starting symbol analysis for '{}'", self.symbol);
 
-        // Lock session, perform analysis, then drop the lock
-        let symbols = {
-            let mut session_guard = session.lock().await;
-            super::utils::wait_for_indexing(session_guard.index_monitor(), None).await;
-            session_guard
-                .client_mut()
-                .workspace_symbols(self.symbol.clone())
-                .await
-                .map_err(AnalyzerError::from)?
-        }; // session_guard is dropped here
+        // Lock session and wait for index completion
+        let mut locked_session = session.lock().await;
 
-        // Process symbols without holding the mutex
-        self.process_symbols(symbols).await
-    }
+        super::utils::wait_for_indexing(
+            locked_session.index_monitor(),
+            Some(ANALYZER_INDEX_TIMEOUT.as_secs()),
+        )
+        .await;
 
-    /// Process symbols and create result - no mutex locks needed
-    async fn process_symbols(
-        &self,
-        symbols: Vec<lsp_types::WorkspaceSymbol>,
-    ) -> Result<CallToolResult, CallToolError> {
-        if symbols.is_empty() {
-            let error_result = AnalyzerErrorResult {
-                error: format!("No symbols found for '{}'", self.symbol),
-                query: self.symbol.clone(),
-            };
-            let output =
-                serde_json::to_string_pretty(&error_result).map_err(AnalyzerError::from)?;
-            return Ok(CallToolResult::text_content(vec![TextContent::from(
-                output,
-            )]));
-        }
+        // Get matching symbol
+        let lsp_symbol = match self.get_matching_symbol(&mut locked_session).await {
+            Ok(symbol) => symbol,
+            Err(err) => {
+                error!("Failed to get matching symbol: {}", err);
+                return Err(CallToolError::from(err));
+            }
+        };
+        let symbol: Symbol = lsp_symbol.clone().into();
 
-        // Take the first symbol as the best match
-        let best_match = &symbols[0];
-        info!(
-            "Found {} symbols, using first match: {}",
-            symbols.len(),
-            best_match.name
-        );
+        // Get hover information
+        let hover = match Self::get_hover_info(&lsp_symbol, &mut locked_session).await {
+            Ok(info) => Some(info),
+            Err(err) => {
+                warn!("Failed to get hover information: {}", err);
+                None
+            }
+        };
 
-        // Convert to our Symbol type
-        let symbol = Symbol::from(best_match.clone());
-
-        // Create result with the symbol
         let result = AnalyzerResult {
             symbol,
             query: self.symbol.clone(),
-            total_found: symbols.len(),
+            hover_documentation: hover,
         };
 
         let output = serde_json::to_string_pretty(&result).map_err(AnalyzerError::from)?;
@@ -222,52 +211,89 @@ impl AnalyzeSymbolContextTool {
             output,
         )]))
     }
+
+    /// Get the first (best) matching symbol from the session based on the user query
+    async fn get_matching_symbol(
+        &self,
+        session: &mut ClangdSession,
+    ) -> Result<WorkspaceSymbol, AnalyzerError> {
+        // Use the LSP client to find symbols matching the provided name
+        let symbols = session
+            .client_mut()
+            .workspace_symbols(self.symbol.clone())
+            .await
+            .map_err(AnalyzerError::from)?;
+
+        if symbols.is_empty() {
+            return Err(AnalyzerError::NoSymbols(self.symbol.clone()));
+        }
+
+        debug!("Found {} symbols matching '{}'", symbols.len(), self.symbol);
+
+        // Return the first symbol as the best match
+        Ok(symbols[0].clone())
+    }
+
+    /// Get hover information for a symbol
+    async fn get_hover_info(
+        symbol: &WorkspaceSymbol,
+        session: &mut ClangdSession,
+    ) -> Result<String, AnalyzerError> {
+        let (uri, position) = match &symbol.location {
+            lsp_types::OneOf::Left(loc) => (loc.uri.clone(), loc.range.start),
+            lsp_types::OneOf::Right(_) => {
+                // WorkspaceLocation is not directly supported for hover; handle as needed
+                return Err(AnalyzerError::NoData(
+                    "WorkspaceLocation variant not supported for hover".to_string(),
+                ));
+            }
+        };
+
+        let path_str = uri.path().to_string();
+        match session.ensure_file_ready(Path::new(&path_str)).await {
+            Ok(_) => {}
+            Err(err) => {
+                warn!("Failed to ensure file is ready: {}", err);
+                return Err(AnalyzerError::Session(err));
+            }
+        }
+
+        let client = session.client_mut();
+        let hover_info = client
+            .text_document_hover(uri.to_string(), position)
+            .await
+            .map_err(AnalyzerError::from)?;
+
+        let markup = match hover_info {
+            Some(lsp_types::Hover {
+                contents: lsp_types::HoverContents::Markup(markup),
+                ..
+            }) => Some(markup),
+            _ => None,
+        };
+
+        match markup {
+            Some(lsp_types::MarkupContent {
+                kind: lsp_types::MarkupKind::Markdown,
+                value,
+            }) => Ok(value),
+            Some(lsp_types::MarkupContent {
+                kind: lsp_types::MarkupKind::PlainText,
+                value,
+            }) => Ok(value),
+            _ => Err(AnalyzerError::NoData(
+                "No hover content available".to_string(),
+            )),
+        }
+    }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use lsp_types::SymbolKind;
-
-    #[test]
-    fn test_analyzer_result_serialization() {
-        let symbol = Symbol {
-            name: "Math".to_string(),
-            kind: SymbolKind::CLASS,
-            container_name: Some("TestProject".to_string()),
-            location: "/test/math.cpp".to_string(),
-        };
-
-        let result = AnalyzerResult {
-            symbol,
-            query: "Math".to_string(),
-            total_found: 1,
-        };
-
-        let json = serde_json::to_string(&result).unwrap();
-        assert!(json.contains("\"name\":\"Math\""));
-        assert!(json.contains("\"kind\":\"class\""));
-        assert!(json.contains("\"container_name\":\"TestProject\""));
-        assert!(json.contains("\"location\":\"/test/math.cpp\""));
-        assert!(json.contains("\"query\":\"Math\""));
-        assert!(json.contains("\"total_found\":1"));
-    }
-
-    #[test]
-    fn test_analyzer_error_result_serialization() {
-        let result = AnalyzerErrorResult {
-            error: "No symbols found".to_string(),
-            query: "NonExistent".to_string(),
-        };
-
-        let json = serde_json::to_string(&result).unwrap();
-        assert!(json.contains("\"error\":\"No symbols found\""));
-        assert!(json.contains("\"query\":\"NonExistent\""));
-    }
-
     #[cfg(feature = "clangd-integration-tests")]
     #[tokio::test]
     async fn test_analyzer_with_real_clangd() {
+        use super::*;
         use crate::io::file_manager::RealFileBufferManager;
         use std::sync::Arc;
         use tokio::sync::Mutex;
@@ -304,26 +330,26 @@ mod tests {
         assert!(result.is_ok());
 
         let call_result = result.unwrap();
-        if let Some(rust_mcp_sdk::schema::ContentBlock::TextContent(
+        let text = if let Some(rust_mcp_sdk::schema::ContentBlock::TextContent(
             rust_mcp_sdk::schema::TextContent { text, .. },
         )) = call_result.content.first()
         {
-            let output: serde_json::Value = serde_json::from_str(text).unwrap();
+            text
+        } else {
+            panic!("Expected TextContent in call_result");
+        };
+        let analyzer_result: AnalyzerResult = serde_json::from_str(text).unwrap();
 
-            if output.get("error").is_none() {
-                // Should find Math symbol
-                assert!(output.get("symbol").is_some());
-                let symbol = &output["symbol"];
-                assert_eq!(symbol["name"], "Math");
-                assert_eq!(symbol["kind"], "class");
-                info!("Found symbol: {}", symbol);
-            } else {
-                // If no Math symbol found, that's a problem with our test setup
-                panic!(
-                    "Math symbol should exist in test project but got error: {}",
-                    output["error"]
-                );
-            }
+        assert_eq!(analyzer_result.symbol.name, "Math");
+        assert_eq!(analyzer_result.symbol.kind, lsp_types::SymbolKind::CLASS);
+        assert_eq!(analyzer_result.query, "Math");
+
+        info!("Found symbol: {:?}", analyzer_result.symbol);
+
+        assert!(&analyzer_result.hover_documentation.is_some());
+
+        if let Some(hover_doc) = &analyzer_result.hover_documentation {
+            info!("Hover documentation: {}", hover_doc);
         }
     }
 }
