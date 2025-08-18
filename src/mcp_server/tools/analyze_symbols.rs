@@ -18,6 +18,7 @@ use tracing::{debug, error, info, instrument, warn};
 use crate::clangd::session::{ClangdSession, ClangdSessionTrait};
 use crate::io::{file_buffer::FileBufferError, file_manager::RealFileBufferManager};
 use crate::lsp::traits::LspClientTrait;
+use crate::mcp_server::tools::lsp_helpers::members::{get_members, Members};
 use crate::project::ProjectWorkspace;
 use crate::symbol::{FileLineWithContents, FileLocation, Symbol, get_symbol_location};
 
@@ -162,7 +163,7 @@ pub struct AnalyzeSymbolContextTool {
 }
 
 #[derive(Debug, Serialize, Deserialize)]
-struct TypeHierarchy {
+pub struct TypeHierarchy {
     /// Parent classes/interfaces that this type inherits from
     supertypes: Vec<String>,
     /// Derived classes that inherit from this type
@@ -170,7 +171,7 @@ struct TypeHierarchy {
 }
 
 #[derive(Debug, Serialize, Deserialize)]
-struct CallHierarchy {
+pub struct CallHierarchy {
     /// Functions that call this function (incoming calls)
     callers: Vec<String>,
     /// Functions that this function calls (outgoing calls)
@@ -178,25 +179,29 @@ struct CallHierarchy {
 }
 
 #[derive(Debug, Serialize, Deserialize)]
-struct AnalyzerResult {
-    symbol: Symbol,
-    query: String,
-    definitions: Vec<FileLineWithContents>,
-    declarations: Vec<FileLineWithContents>,
+pub struct AnalyzerResult {
+    pub symbol: Symbol,
+    pub query: String,
+    pub definitions: Vec<FileLineWithContents>,
+    pub declarations: Vec<FileLineWithContents>,
 
     #[serde(skip_serializing_if = "Option::is_none")]
-    hover_documentation: Option<String>,
+    pub hover_documentation: Option<String>,
 
     /// Usage examples showing how the symbol is used throughout the codebase
-    examples: Vec<FileLineWithContents>,
+    pub examples: Vec<FileLineWithContents>,
 
     /// Type hierarchy information for classes, structs, and interfaces
     #[serde(skip_serializing_if = "Option::is_none")]
-    type_hierarchy: Option<TypeHierarchy>,
+    pub type_hierarchy: Option<TypeHierarchy>,
 
     /// Call hierarchy information for functions and methods
     #[serde(skip_serializing_if = "Option::is_none")]
-    call_hierarchy: Option<CallHierarchy>,
+    pub call_hierarchy: Option<CallHierarchy>,
+
+    /// Callable members for classes and structs
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub members: Option<Members>,
 }
 
 const ANALYZER_INDEX_TIMEOUT: Duration = Duration::from_secs(20);
@@ -358,6 +363,36 @@ impl AnalyzeSymbolContextTool {
             _ => None,
         };
 
+        // Get members for classes and structs
+        let members = match symbol.kind {
+            lsp_types::SymbolKind::CLASS | lsp_types::SymbolKind::STRUCT => {
+                match get_members(
+                    symbol_location.as_ref().unwrap(),
+                    &mut locked_session,
+                    &symbol.name,
+                )
+                .await
+                {
+                    Ok(members) => {
+                        info!(
+                            "Found members for '{}': {} methods, {} constructors, {} operators, {} static methods",
+                            self.symbol,
+                            members.methods.len(),
+                            members.constructors.len(),
+                            members.operators.len(),
+                            members.static_methods.len()
+                        );
+                        Some(members)
+                    }
+                    Err(err) => {
+                        warn!("Failed to get members: {}", err);
+                        None
+                    }
+                }
+            }
+            _ => None,
+        };
+
         let result = AnalyzerResult {
             symbol,
             query: self.symbol.clone(),
@@ -367,6 +402,7 @@ impl AnalyzeSymbolContextTool {
             examples,
             type_hierarchy,
             call_hierarchy,
+            members,
         };
 
         let output = serde_json::to_string_pretty(&result).map_err(AnalyzerError::from)?;
