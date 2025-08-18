@@ -162,6 +162,14 @@ pub struct AnalyzeSymbolContextTool {
 }
 
 #[derive(Debug, Serialize, Deserialize)]
+struct TypeHierarchy {
+    /// Parent classes/interfaces that this type inherits from
+    supertypes: Vec<String>,
+    /// Derived classes that inherit from this type
+    subtypes: Vec<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
 struct AnalyzerResult {
     symbol: Symbol,
     query: String,
@@ -173,6 +181,10 @@ struct AnalyzerResult {
 
     /// Usage examples showing how the symbol is used throughout the codebase
     examples: Vec<FileLineWithContents>,
+
+    /// Type hierarchy information for classes, structs, and interfaces
+    #[serde(skip_serializing_if = "Option::is_none")]
+    type_hierarchy: Option<TypeHierarchy>,
 }
 
 const ANALYZER_INDEX_TIMEOUT: Duration = Duration::from_secs(20);
@@ -276,6 +288,32 @@ impl AnalyzeSymbolContextTool {
             }
         };
 
+        // Get type hierarchy for classes, structs, and interfaces
+        let type_hierarchy = match symbol.kind {
+            lsp_types::SymbolKind::CLASS
+            | lsp_types::SymbolKind::STRUCT
+            | lsp_types::SymbolKind::INTERFACE => {
+                match Self::get_type_hierarchy(symbol_location.as_ref().unwrap(), &mut locked_session)
+                    .await
+                {
+                    Ok(hierarchy) => {
+                        info!(
+                            "Found type hierarchy for '{}': {} supertypes, {} subtypes",
+                            self.symbol,
+                            hierarchy.supertypes.len(),
+                            hierarchy.subtypes.len()
+                        );
+                        Some(hierarchy)
+                    }
+                    Err(err) => {
+                        warn!("Failed to get type hierarchy: {}", err);
+                        None
+                    }
+                }
+            }
+            _ => None,
+        };
+
         let result = AnalyzerResult {
             symbol,
             query: self.symbol.clone(),
@@ -283,6 +321,7 @@ impl AnalyzeSymbolContextTool {
             definitions,
             declarations,
             examples,
+            type_hierarchy,
         };
 
         let output = serde_json::to_string_pretty(&result).map_err(AnalyzerError::from)?;
@@ -459,6 +498,66 @@ impl AnalyzeSymbolContextTool {
         }
     }
 
+    /// Get type hierarchy information for a symbol (classes, structs, interfaces)
+    async fn get_type_hierarchy(
+        symbol_location: &FileLocation,
+        session: &mut ClangdSession,
+    ) -> Result<TypeHierarchy, AnalyzerError> {
+        let file_path = symbol_location.file_path.to_str().ok_or_else(|| {
+            AnalyzerError::NoData("Invalid file path in symbol location".to_string())
+        })?;
+        let uri = format!("file://{}", file_path);
+        let position = symbol_location.range.start;
+
+        session
+            .ensure_file_ready(&symbol_location.file_path)
+            .await?;
+
+        let client = session.client_mut();
+        
+        // Prepare type hierarchy at the symbol location
+        let hierarchy_items = client
+            .text_document_prepare_type_hierarchy(uri.to_string(), position.into())
+            .await
+            .map_err(AnalyzerError::from)?;
+
+        // If we don't get any hierarchy items, return empty hierarchy
+        let hierarchy_item = match hierarchy_items {
+            Some(items) if !items.is_empty() => items.into_iter().next().unwrap(),
+            _ => {
+                return Ok(TypeHierarchy {
+                    supertypes: Vec::new(),
+                    subtypes: Vec::new(),
+                })
+            }
+        };
+
+        // Get supertypes (parent classes/interfaces)
+        let supertypes = client
+            .type_hierarchy_supertypes(hierarchy_item.clone())
+            .await
+            .map_err(AnalyzerError::from)?
+            .unwrap_or_default()
+            .into_iter()
+            .map(|item| item.name)
+            .collect();
+
+        // Get subtypes (derived classes)
+        let subtypes = client
+            .type_hierarchy_subtypes(hierarchy_item)
+            .await
+            .map_err(AnalyzerError::from)?
+            .unwrap_or_default()
+            .into_iter()
+            .map(|item| item.name)
+            .collect();
+
+        Ok(TypeHierarchy {
+            supertypes,
+            subtypes,
+        })
+    }
+
     /// Get usage examples for a symbol
     async fn get_examples(
         session: &mut ClangdSession,
@@ -614,6 +713,213 @@ mod tests {
             !analyzer_result.examples.is_empty(),
             "Should have usage examples"
         );
+    }
+
+    #[cfg(feature = "clangd-integration-tests")]
+    #[tokio::test]
+    async fn test_analyzer_type_hierarchy_interface() {
+        use super::*;
+        use crate::io::file_manager::RealFileBufferManager;
+        use std::sync::Arc;
+        use tokio::sync::Mutex;
+
+        // Create a test project first
+        use crate::test_utils::integration::TestProject;
+        let test_project = TestProject::new().await.unwrap();
+        test_project.cmake_configure().await.unwrap();
+
+        // Scan the test project to create a proper workspace with components
+        use crate::project::{ProjectScanner, WorkspaceSession};
+        let scanner = ProjectScanner::with_default_providers();
+        let workspace = scanner
+            .scan_project(&test_project.project_root, 3, None)
+            .expect("Failed to scan test project");
+
+        // Create a WorkspaceSession with test clangd path
+        let clangd_path = crate::test_utils::get_test_clangd_path();
+        let workspace_session = WorkspaceSession::new(workspace.clone(), clangd_path);
+        let session = workspace_session
+            .get_or_create_session(test_project.build_dir.clone())
+            .await
+            .expect("Failed to create session");
+
+        let file_buffer_manager = Arc::new(Mutex::new(RealFileBufferManager::new_real()));
+
+        // Test IStorageBackend interface - should have derived classes
+        let tool = AnalyzeSymbolContextTool {
+            symbol: "IStorageBackend".to_string(),
+            build_directory: None,
+            max_examples: Some(2),
+        };
+
+        let result = tool
+            .call_tool(session, &workspace, file_buffer_manager)
+            .await;
+
+        assert!(result.is_ok());
+
+        let call_result = result.unwrap();
+        let text = if let Some(rust_mcp_sdk::schema::ContentBlock::TextContent(
+            rust_mcp_sdk::schema::TextContent { text, .. },
+        )) = call_result.content.first()
+        {
+            text
+        } else {
+            panic!("Expected TextContent in call_result");
+        };
+        let analyzer_result: AnalyzerResult = serde_json::from_str(text).unwrap();
+
+        assert_eq!(analyzer_result.symbol.name, "IStorageBackend");
+        assert_eq!(analyzer_result.symbol.kind, lsp_types::SymbolKind::CLASS);
+
+        // Check type hierarchy
+        assert!(analyzer_result.type_hierarchy.is_some());
+        let hierarchy = analyzer_result.type_hierarchy.unwrap();
+        
+        // IStorageBackend should have no supertypes (it's the base interface)
+        assert_eq!(hierarchy.supertypes.len(), 0);
+        
+        // IStorageBackend should have MemoryStorage as subtype
+        // Note: Only MemoryStorage is compiled by default (USE_MEMORY_STORAGE=ON in CMakeLists.txt)
+        // FileStorage is conditionally excluded, so clangd won't see it
+        assert_eq!(hierarchy.subtypes.len(), 1);
+        assert_eq!(hierarchy.subtypes[0], "MemoryStorage");
+        
+        info!("IStorageBackend subtypes: {:?}", hierarchy.subtypes);
+    }
+
+    #[cfg(feature = "clangd-integration-tests")]
+    #[tokio::test]
+    async fn test_analyzer_type_hierarchy_derived_class() {
+        use super::*;
+        use crate::io::file_manager::RealFileBufferManager;
+        use std::sync::Arc;
+        use tokio::sync::Mutex;
+
+        // Create a test project first
+        use crate::test_utils::integration::TestProject;
+        let test_project = TestProject::new().await.unwrap();
+        test_project.cmake_configure().await.unwrap();
+
+        // Scan the test project to create a proper workspace with components
+        use crate::project::{ProjectScanner, WorkspaceSession};
+        let scanner = ProjectScanner::with_default_providers();
+        let workspace = scanner
+            .scan_project(&test_project.project_root, 3, None)
+            .expect("Failed to scan test project");
+
+        // Create a WorkspaceSession with test clangd path
+        let clangd_path = crate::test_utils::get_test_clangd_path();
+        let workspace_session = WorkspaceSession::new(workspace.clone(), clangd_path);
+        let session = workspace_session
+            .get_or_create_session(test_project.build_dir.clone())
+            .await
+            .expect("Failed to create session");
+
+        let file_buffer_manager = Arc::new(Mutex::new(RealFileBufferManager::new_real()));
+
+        // Test MemoryStorage - should have IStorageBackend as supertype
+        let tool = AnalyzeSymbolContextTool {
+            symbol: "MemoryStorage".to_string(),
+            build_directory: None,
+            max_examples: Some(2),
+        };
+
+        let result = tool
+            .call_tool(session, &workspace, file_buffer_manager)
+            .await;
+
+        assert!(result.is_ok());
+
+        let call_result = result.unwrap();
+        let text = if let Some(rust_mcp_sdk::schema::ContentBlock::TextContent(
+            rust_mcp_sdk::schema::TextContent { text, .. },
+        )) = call_result.content.first()
+        {
+            text
+        } else {
+            panic!("Expected TextContent in call_result");
+        };
+        let analyzer_result: AnalyzerResult = serde_json::from_str(text).unwrap();
+
+        assert_eq!(analyzer_result.symbol.name, "MemoryStorage");
+        assert_eq!(analyzer_result.symbol.kind, lsp_types::SymbolKind::CLASS);
+
+        // Check type hierarchy
+        assert!(analyzer_result.type_hierarchy.is_some());
+        let hierarchy = analyzer_result.type_hierarchy.unwrap();
+        
+        // MemoryStorage should have IStorageBackend as supertype
+        assert_eq!(hierarchy.supertypes.len(), 1);
+        assert_eq!(hierarchy.supertypes[0], "IStorageBackend");
+        
+        // MemoryStorage should have no subtypes (it's a leaf class)
+        assert_eq!(hierarchy.subtypes.len(), 0);
+
+        info!("MemoryStorage supertypes: {:?}", hierarchy.supertypes);
+    }
+
+    #[cfg(feature = "clangd-integration-tests")]
+    #[tokio::test]
+    async fn test_analyzer_type_hierarchy_non_class() {
+        use super::*;
+        use crate::io::file_manager::RealFileBufferManager;
+        use std::sync::Arc;
+        use tokio::sync::Mutex;
+
+        // Create a test project first
+        use crate::test_utils::integration::TestProject;
+        let test_project = TestProject::new().await.unwrap();
+        test_project.cmake_configure().await.unwrap();
+
+        // Scan the test project to create a proper workspace with components
+        use crate::project::{ProjectScanner, WorkspaceSession};
+        let scanner = ProjectScanner::with_default_providers();
+        let workspace = scanner
+            .scan_project(&test_project.project_root, 3, None)
+            .expect("Failed to scan test project");
+
+        // Create a WorkspaceSession with test clangd path
+        let clangd_path = crate::test_utils::get_test_clangd_path();
+        let workspace_session = WorkspaceSession::new(workspace.clone(), clangd_path);
+        let session = workspace_session
+            .get_or_create_session(test_project.build_dir.clone())
+            .await
+            .expect("Failed to create session");
+
+        let file_buffer_manager = Arc::new(Mutex::new(RealFileBufferManager::new_real()));
+
+        // Test a function - should have no type hierarchy
+        let tool = AnalyzeSymbolContextTool {
+            symbol: "factorial".to_string(),
+            build_directory: None,
+            max_examples: Some(2),
+        };
+
+        let result = tool
+            .call_tool(session, &workspace, file_buffer_manager)
+            .await;
+
+        assert!(result.is_ok());
+
+        let call_result = result.unwrap();
+        let text = if let Some(rust_mcp_sdk::schema::ContentBlock::TextContent(
+            rust_mcp_sdk::schema::TextContent { text, .. },
+        )) = call_result.content.first()
+        {
+            text
+        } else {
+            panic!("Expected TextContent in call_result");
+        };
+        let analyzer_result: AnalyzerResult = serde_json::from_str(text).unwrap();
+
+        assert_eq!(analyzer_result.symbol.name, "factorial");
+        assert_eq!(analyzer_result.symbol.kind, lsp_types::SymbolKind::METHOD);
+
+        // Check that type hierarchy is not present for functions
+        assert!(analyzer_result.type_hierarchy.is_none());
+
+        info!("factorial symbol kind: {:?}", analyzer_result.symbol.kind);
     }
 
     #[cfg(feature = "clangd-integration-tests")]
