@@ -4,4 +4,8 @@
 //! member analysis, symbol search, and project tools.
 
 #[cfg(feature = "clangd-integration-tests")]
+pub mod call_hierarchy_tests;
+#[cfg(feature = "clangd-integration-tests")]
 pub mod member_tests;
+#[cfg(feature = "clangd-integration-tests")]
+pub mod type_hierarchy_tests;

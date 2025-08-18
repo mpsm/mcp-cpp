@@ -1,0 +1,89 @@
+//! Type hierarchy analysis functionality for C++ classes and structs
+//!
+//! This module provides LSP-based type hierarchy analysis capabilities that work with
+//! clangd to analyze class inheritance relationships including supertypes (parent classes)
+//! and subtypes (derived classes).
+
+use serde::{Deserialize, Serialize};
+
+use crate::clangd::session::{ClangdSession, ClangdSessionTrait};
+use crate::lsp::traits::LspClientTrait;
+use crate::mcp_server::tools::analyze_symbols::AnalyzerError;
+use crate::symbol::FileLocation;
+
+// ============================================================================
+// Type Hierarchy Types
+// ============================================================================
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct TypeHierarchy {
+    /// Parent classes/interfaces that this type inherits from
+    pub supertypes: Vec<String>,
+    /// Derived classes that inherit from this type
+    pub subtypes: Vec<String>,
+}
+
+// ============================================================================
+// Public API
+// ============================================================================
+
+/// Get type hierarchy information for a symbol (classes, structs, interfaces)
+pub async fn get_type_hierarchy(
+    symbol_location: &FileLocation,
+    session: &mut ClangdSession,
+) -> Result<TypeHierarchy, AnalyzerError> {
+    let file_path = symbol_location
+        .file_path
+        .to_str()
+        .ok_or_else(|| AnalyzerError::NoData("Invalid file path in symbol location".to_string()))?;
+    let uri = format!("file://{}", file_path);
+    let position = symbol_location.range.start;
+
+    session
+        .ensure_file_ready(&symbol_location.file_path)
+        .await?;
+
+    let client = session.client_mut();
+
+    // Prepare type hierarchy at the symbol location
+    let hierarchy_items = client
+        .text_document_prepare_type_hierarchy(uri.to_string(), position.into())
+        .await
+        .map_err(AnalyzerError::from)?;
+
+    // If we don't get any hierarchy items, return empty hierarchy
+    let hierarchy_item = match hierarchy_items {
+        Some(items) if !items.is_empty() => items.into_iter().next().unwrap(),
+        _ => {
+            return Ok(TypeHierarchy {
+                supertypes: Vec::new(),
+                subtypes: Vec::new(),
+            });
+        }
+    };
+
+    // Get supertypes (parent classes/interfaces)
+    let supertypes = client
+        .type_hierarchy_supertypes(hierarchy_item.clone())
+        .await
+        .map_err(AnalyzerError::from)?
+        .unwrap_or_default()
+        .into_iter()
+        .map(|item| item.name)
+        .collect();
+
+    // Get subtypes (derived classes)
+    let subtypes = client
+        .type_hierarchy_subtypes(hierarchy_item)
+        .await
+        .map_err(AnalyzerError::from)?
+        .unwrap_or_default()
+        .into_iter()
+        .map(|item| item.name)
+        .collect();
+
+    Ok(TypeHierarchy {
+        supertypes,
+        subtypes,
+    })
+}
