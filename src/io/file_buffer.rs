@@ -13,7 +13,7 @@ use std::time::SystemTime;
 // File Position
 // ============================================================================
 
-/// Represents a position in a file using line and column coordinates
+/// Represents a position in a file using 0-based line and column coordinates
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct FilePosition {
     pub line: u32,
@@ -101,7 +101,7 @@ impl<F: FileSystemTrait> FileBuffer<F> {
     /// Extract text between two positions (inclusive start, exclusive end)
     ///
     /// Automatically refreshes content if file has been modified.
-    /// Uses UTF-8 code point positioning for proper international text handling.
+    /// Uses 0-based UTF-8 code point positioning for proper international text handling.
     pub fn text_between(
         &mut self,
         start: FilePosition,
@@ -109,6 +109,15 @@ impl<F: FileSystemTrait> FileBuffer<F> {
     ) -> Result<String, FileBufferError> {
         // Check for file changes and refresh if needed using stored filesystem
         self.refresh_if_changed()?;
+
+        use tracing::info;
+
+        info!(
+            "Extracting text from {:?} to {:?} in file {}",
+            start,
+            end,
+            self.path.display()
+        );
 
         // Validate position order
         if start.line > end.line || (start.line == end.line && start.column > end.column) {
@@ -155,12 +164,19 @@ impl<F: FileSystemTrait> FileBuffer<F> {
 
     /// Convert file position to byte offset in UTF-8 content
     fn position_to_offset(&self, pos: FilePosition) -> Result<usize, FileBufferError> {
-        // Convert to 0-based indexing
-        let line_index = pos.line.saturating_sub(1) as usize;
-        let column_index = pos.column.saturating_sub(1) as usize;
+        use tracing::error;
+
+        // Positions are already 0-based
+        let line_index = pos.line as usize;
+        let column_index = pos.column as usize;
 
         // Check line bounds
         if line_index >= self.line_starts.len() {
+            error!(
+                "File position out of bounds: {:?}, line count: {}",
+                pos,
+                self.line_starts.len()
+            );
             return Err(FileBufferError::PositionOutOfBounds { pos });
         }
 
@@ -178,6 +194,11 @@ impl<F: FileSystemTrait> FileBuffer<F> {
         let chars: Vec<char> = line_content.chars().collect();
 
         if column_index > chars.len() {
+            error!(
+                "File position out of bounds: {:?}, chars count: {}",
+                pos,
+                chars.len()
+            );
             return Err(FileBufferError::PositionOutOfBounds { pos });
         }
 
@@ -270,14 +291,14 @@ mod tests {
         let mut buffer = FileBuffer::new_with_filesystem(&test_path, filesystem).unwrap();
 
         // Extract text across UTF-8 emoji boundaries
-        let start = FilePosition::new(1, 8); // Just after the emoji
-        let end = FilePosition::new(2, 6); // Up to "World"
+        let start = FilePosition::new(0, 7); // After the emoji (end of line 0)
+        let end = FilePosition::new(1, 5); // Up to "World"
         let result = buffer.text_between(start, end).unwrap();
         assert_eq!(result, "\nWorld");
 
         // Extract single emoji character
-        let start = FilePosition::new(1, 7);
-        let end = FilePosition::new(1, 8);
+        let start = FilePosition::new(0, 6);
+        let end = FilePosition::new(0, 7);
         let result = buffer.text_between(start, end).unwrap();
         assert_eq!(result, "🌍");
     }
@@ -297,20 +318,20 @@ mod tests {
         println!("Line starts: {:?}", buffer.line_starts);
 
         // Extract ASCII text
-        let start = FilePosition::new(1, 1);
-        let end = FilePosition::new(1, 6);
+        let start = FilePosition::new(0, 0);
+        let end = FilePosition::new(0, 5);
         let result = buffer.text_between(start, end).unwrap();
         assert_eq!(result, "Hello");
 
         // Extract text with Unicode characters
-        let start = FilePosition::new(2, 1);
-        let end = FilePosition::new(2, 6);
+        let start = FilePosition::new(1, 0);
+        let end = FilePosition::new(1, 5);
         let result = buffer.text_between(start, end).unwrap();
         assert_eq!(result, "World");
 
         // Extract emoji
-        let start = FilePosition::new(3, 6);
-        let end = FilePosition::new(3, 7);
+        let start = FilePosition::new(2, 5);
+        let end = FilePosition::new(2, 6);
         let result = buffer.text_between(start, end).unwrap();
         assert_eq!(result, "📝");
     }
@@ -356,14 +377,14 @@ mod tests {
                 .unwrap();
 
         // Test text extraction
-        let start = FilePosition::new(1, 1);
-        let end = FilePosition::new(1, 5);
+        let start = FilePosition::new(0, 0);
+        let end = FilePosition::new(0, 4);
         let result = buffer.text_between(start, end).unwrap();
         assert_eq!(result, "Real");
 
         // Test second line
-        let start = FilePosition::new(2, 1);
-        let end = FilePosition::new(2, 7);
+        let start = FilePosition::new(1, 0);
+        let end = FilePosition::new(1, 6);
         let result = buffer.text_between(start, end).unwrap();
         assert_eq!(result, "Second");
     }
@@ -380,8 +401,8 @@ mod tests {
         let mut buffer = FileBuffer::new_with_filesystem(&test_path, filesystem).unwrap();
 
         // Test line out of bounds
-        let start = FilePosition::new(5, 1);
-        let end = FilePosition::new(5, 5);
+        let start = FilePosition::new(4, 0);
+        let end = FilePosition::new(4, 4);
         let result = buffer.text_between(start, end);
         assert!(matches!(
             result,
@@ -389,8 +410,8 @@ mod tests {
         ));
 
         // Test column out of bounds
-        let start = FilePosition::new(1, 20);
-        let end = FilePosition::new(1, 25);
+        let start = FilePosition::new(0, 19);
+        let end = FilePosition::new(0, 24);
         let result = buffer.text_between(start, end);
         assert!(matches!(
             result,
@@ -410,8 +431,8 @@ mod tests {
         let mut buffer = FileBuffer::new_with_filesystem(&test_path, filesystem).unwrap();
 
         // Test start after end
-        let start = FilePosition::new(1, 10);
-        let end = FilePosition::new(1, 5);
+        let start = FilePosition::new(0, 9);
+        let end = FilePosition::new(0, 4);
         let result = buffer.text_between(start, end);
         assert!(matches!(result, Err(FileBufferError::InvalidRange { .. })));
     }
@@ -428,19 +449,19 @@ mod tests {
         let mut buffer = FileBuffer::new_with_filesystem(&test_path, filesystem).unwrap();
 
         // Test empty line
-        let start = FilePosition::new(2, 1);
-        let end = FilePosition::new(2, 1);
+        let start = FilePosition::new(1, 0);
+        let end = FilePosition::new(1, 0);
         let result = buffer.text_between(start, end).unwrap();
         assert_eq!(result, "");
 
         // Test single character lines
-        let start = FilePosition::new(1, 1);
-        let end = FilePosition::new(1, 2);
+        let start = FilePosition::new(0, 0);
+        let end = FilePosition::new(0, 1);
         let result = buffer.text_between(start, end).unwrap();
         assert_eq!(result, "A");
 
-        let start = FilePosition::new(3, 1);
-        let end = FilePosition::new(3, 2);
+        let start = FilePosition::new(2, 0);
+        let end = FilePosition::new(2, 1);
         let result = buffer.text_between(start, end).unwrap();
         assert_eq!(result, "C");
     }
@@ -459,8 +480,8 @@ mod tests {
         let mut buffer = FileBuffer::new_with_filesystem(&test_path, filesystem.clone()).unwrap();
 
         // Initial state - should work without refresh
-        let start = FilePosition::new(1, 1);
-        let end = FilePosition::new(1, 8);
+        let start = FilePosition::new(0, 0);
+        let end = FilePosition::new(0, 7);
         let result = buffer.text_between(start, end).unwrap();
         assert_eq!(result, "Initial");
 
@@ -518,8 +539,8 @@ mod tests {
         };
 
         // This should trigger refresh due to time difference (time1 vs time2)
-        let start = FilePosition::new(1, 1);
-        let end = FilePosition::new(1, 8);
+        let start = FilePosition::new(0, 0);
+        let end = FilePosition::new(0, 7);
         let result = buffer.text_between(start, end).unwrap();
         assert_eq!(result, "Updated");
     }
@@ -535,8 +556,8 @@ mod tests {
         let mut buffer = FileBuffer::new_with_filesystem(&test_path, filesystem).unwrap();
 
         // Test extracting from empty file
-        let start = FilePosition::new(1, 1);
-        let end = FilePosition::new(1, 1);
+        let start = FilePosition::new(0, 0);
+        let end = FilePosition::new(0, 0);
         let result = buffer.text_between(start, end).unwrap();
         assert_eq!(result, "");
     }
@@ -551,8 +572,8 @@ mod tests {
 
         let mut buffer = FileBuffer::new_with_filesystem(&test_path, filesystem).unwrap();
 
-        let start = FilePosition::new(1, 1);
-        let end = FilePosition::new(1, 2);
+        let start = FilePosition::new(0, 0);
+        let end = FilePosition::new(0, 1);
         let result = buffer.text_between(start, end).unwrap();
         assert_eq!(result, "X");
     }

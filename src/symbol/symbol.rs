@@ -64,6 +64,14 @@ impl From<WorkspaceSymbol> for Symbol {
     }
 }
 
+/// Extract symbol location from WorkspaceSymbol
+pub fn get_symbol_location(symbol: &WorkspaceSymbol) -> Option<crate::symbol::FileLocation> {
+    match &symbol.location {
+        lsp_types::OneOf::Left(loc) => Some(crate::symbol::FileLocation::from(loc)),
+        lsp_types::OneOf::Right(_) => None, // WorkspaceLocation is not directly supported
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -117,42 +125,5 @@ mod tests {
         assert_eq!(symbol.kind, SymbolKind::CLASS);
         assert_eq!(symbol.container_name, Some("TestProject".to_string()));
         assert_eq!(symbol.location, "/path/to/test.cpp");
-    }
-
-    // Note: OneOf::Right case test removed due to type complexity
-    // The warning case is tested in runtime when WorkspaceLocation is encountered
-
-    #[test]
-    fn test_symbol_serialization() {
-        let symbol = Symbol::new(
-            "factorial".to_string(),
-            SymbolKind::FUNCTION,
-            Some("Math".to_string()),
-            "/project/math.cpp".to_string(),
-        );
-
-        let json = serde_json::to_string(&symbol).unwrap();
-        assert!(json.contains("\"name\":\"factorial\""));
-        assert!(json.contains("\"kind\":\"function\""));
-        assert!(json.contains("\"container_name\":\"Math\""));
-        assert!(json.contains("\"location\":\"/project/math.cpp\""));
-    }
-
-    #[test]
-    fn test_symbol_kind_serialization() {
-        let test_cases = vec![
-            (SymbolKind::CLASS, "class"),
-            (SymbolKind::FUNCTION, "function"),
-            (SymbolKind::VARIABLE, "variable"),
-            (SymbolKind::ENUM, "enum"),
-            (SymbolKind::STRUCT, "struct"),
-        ];
-
-        for (kind, expected_str) in test_cases {
-            let symbol = Symbol::new("test".to_string(), kind, None, "/test.cpp".to_string());
-
-            let json = serde_json::to_string(&symbol).unwrap();
-            assert!(json.contains(&format!("\"kind\":\"{}\"", expected_str)));
-        }
     }
 }

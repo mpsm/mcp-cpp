@@ -3,7 +3,9 @@
 //! Provides a clean Symbol abstraction that uses std types and lsp_types::SymbolKind
 //! while enabling conversion from LSP WorkspaceSymbol responses.
 
+mod location;
 #[allow(clippy::module_inception)]
 mod symbol;
 
-pub use symbol::Symbol;
+pub use location::{FileLocation, FileLocationWithContents};
+pub use symbol::{Symbol, get_symbol_location};

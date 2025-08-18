@@ -10,17 +10,16 @@ use lsp_types::WorkspaceSymbol;
 use rust_mcp_sdk::macros::{JsonSchema, mcp_tool};
 use rust_mcp_sdk::schema::{CallToolResult, TextContent, schema_utils::CallToolError};
 use serde::{Deserialize, Serialize};
-use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::Mutex;
 use tracing::{debug, error, info, instrument, warn};
 
 use crate::clangd::session::{ClangdSession, ClangdSessionTrait};
-use crate::io::file_manager::RealFileBufferManager;
+use crate::io::{file_buffer::FileBufferError, file_manager::RealFileBufferManager};
 use crate::lsp::traits::LspClientTrait;
 use crate::project::ProjectWorkspace;
-use crate::symbol::Symbol;
+use crate::symbol::{FileLocation, FileLocationWithContents, Symbol, get_symbol_location};
 
 // ============================================================================
 // Analyzer Error Type
@@ -32,6 +31,8 @@ pub enum AnalyzerError {
     NoSymbols(String),
     #[error("No data found for '{0}'")]
     NoData(String),
+    #[error("File buffer error: {0}")]
+    FileBuffer(#[from] FileBufferError),
     #[error("LSP error: {0}")]
     Lsp(#[from] crate::lsp::client::LspError),
     #[error("Session error")]
@@ -151,6 +152,8 @@ pub struct AnalyzeSymbolContextTool {
 struct AnalyzerResult {
     symbol: Symbol,
     query: String,
+    definitions: Vec<FileLocationWithContents>,
+    declarations: Vec<FileLocationWithContents>,
 
     #[serde(skip_serializing_if = "Option::is_none")]
     hover_documentation: Option<String>,
@@ -162,13 +165,13 @@ impl AnalyzeSymbolContextTool {
     /// V2 entry point - uses shared ClangdSession from server
     #[instrument(
         name = "analyze_symbol_context",
-        skip(self, session, _workspace, _file_buffer_manager)
+        skip(self, session, _workspace, file_buffer_manager)
     )]
     pub async fn call_tool(
         &self,
         session: Arc<Mutex<ClangdSession>>,
         _workspace: &ProjectWorkspace,
-        _file_buffer_manager: Arc<Mutex<RealFileBufferManager>>,
+        file_buffer_manager: Arc<Mutex<RealFileBufferManager>>,
     ) -> Result<CallToolResult, CallToolError> {
         info!("Starting symbol analysis for '{}'", self.symbol);
 
@@ -181,7 +184,7 @@ impl AnalyzeSymbolContextTool {
         )
         .await;
 
-        // Get matching symbol
+        // Get matching symbol and its location
         let lsp_symbol = match self.get_matching_symbol(&mut locked_session).await {
             Ok(symbol) => symbol,
             Err(err) => {
@@ -190,9 +193,47 @@ impl AnalyzeSymbolContextTool {
             }
         };
         let symbol: Symbol = lsp_symbol.clone().into();
+        let symbol_location = get_symbol_location(&lsp_symbol);
+        if symbol_location.is_none() {
+            error!("No location found for symbol '{}'", self.symbol);
+            return Err(CallToolError::new(std::io::Error::new(
+                std::io::ErrorKind::NotFound,
+                format!("No location found for symbol '{}'", self.symbol),
+            )));
+        }
+
+        // Get symbol definition and declaration
+        let mut locked_file_buffer = file_buffer_manager.lock().await;
+        let definitions = Self::get_definitions(
+            &mut locked_session,
+            &mut locked_file_buffer,
+            symbol_location.as_ref().unwrap(),
+        )
+        .await?;
+        info!(
+            "Found {} definitions for '{}'",
+            definitions.len(),
+            self.symbol
+        );
+        let declarations = Self::get_declarations(
+            &mut locked_session,
+            &mut locked_file_buffer,
+            symbol_location.as_ref().unwrap(),
+        )
+        .await?;
+        info!(
+            "Found {} declarations for '{}'",
+            declarations.len(),
+            self.symbol
+        );
 
         // Get hover information
-        let hover = match Self::get_hover_info(&lsp_symbol, &mut locked_session).await {
+        let hover = match Self::get_hover_info(
+            symbol_location.as_ref().unwrap(),
+            &mut locked_session,
+        )
+        .await
+        {
             Ok(info) => Some(info),
             Err(err) => {
                 warn!("Failed to get hover information: {}", err);
@@ -204,6 +245,8 @@ impl AnalyzeSymbolContextTool {
             symbol,
             query: self.symbol.clone(),
             hover_documentation: hover,
+            definitions,
+            declarations,
         };
 
         let output = serde_json::to_string_pretty(&result).map_err(AnalyzerError::from)?;
@@ -234,33 +277,124 @@ impl AnalyzeSymbolContextTool {
         Ok(symbols[0].clone())
     }
 
-    /// Get hover information for a symbol
-    async fn get_hover_info(
-        symbol: &WorkspaceSymbol,
+    async fn get_declarations(
         session: &mut ClangdSession,
-    ) -> Result<String, AnalyzerError> {
-        let (uri, position) = match &symbol.location {
-            lsp_types::OneOf::Left(loc) => (loc.uri.clone(), loc.range.start),
-            lsp_types::OneOf::Right(_) => {
-                // WorkspaceLocation is not directly supported for hover; handle as needed
-                return Err(AnalyzerError::NoData(
-                    "WorkspaceLocation variant not supported for hover".to_string(),
-                ));
-            }
-        };
+        file_buffer_manager: &mut RealFileBufferManager,
+        symbol_location: &FileLocation,
+    ) -> Result<Vec<FileLocationWithContents>, AnalyzerError> {
+        let declarations_locations =
+            Self::get_symbol_declarations(symbol_location, session).await?;
 
-        let path_str = uri.path().to_string();
-        match session.ensure_file_ready(Path::new(&path_str)).await {
-            Ok(_) => {}
-            Err(err) => {
-                warn!("Failed to ensure file is ready: {}", err);
-                return Err(AnalyzerError::Session(err));
+        let declarations = declarations_locations
+            .iter()
+            .map(|loc| {
+                FileLocationWithContents::new_from_location(loc, file_buffer_manager)
+                    .map_err(AnalyzerError::from)
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+
+        Ok(declarations)
+    }
+
+    async fn get_definitions(
+        session: &mut ClangdSession,
+        file_buffer_manager: &mut RealFileBufferManager,
+        symbol_location: &FileLocation,
+    ) -> Result<Vec<FileLocationWithContents>, AnalyzerError> {
+        let definitions_locations = Self::get_symbol_definitions(symbol_location, session).await?;
+
+        let definitions = definitions_locations
+            .iter()
+            .map(|loc| {
+                FileLocationWithContents::new_from_location(loc, file_buffer_manager)
+                    .map_err(AnalyzerError::from)
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+
+        Ok(definitions)
+    }
+
+    fn goto_defdecl_response_to_file_locations(
+        response: lsp_types::GotoDefinitionResponse,
+    ) -> Result<Vec<FileLocation>, AnalyzerError> {
+        use lsp_types::GotoDefinitionResponse;
+        match response {
+            GotoDefinitionResponse::Scalar(loc) => Ok(vec![FileLocation::from(&loc)]),
+            GotoDefinitionResponse::Array(locs) => {
+                Ok(locs.iter().map(FileLocation::from).collect())
+            }
+            GotoDefinitionResponse::Link(links) => {
+                Ok(links.iter().map(FileLocation::from).collect())
             }
         }
+    }
+
+    /// Get the declaration locations of a symbol
+    async fn get_symbol_declarations(
+        symbol_location: &FileLocation,
+        session: &mut ClangdSession,
+    ) -> Result<Vec<FileLocation>, AnalyzerError> {
+        let file_path = symbol_location.file_path.to_str().ok_or_else(|| {
+            AnalyzerError::NoData("Invalid file path in symbol location".to_string())
+        })?;
+        let uri = format!("file://{}", file_path);
+        let position = symbol_location.range.start;
+
+        session
+            .ensure_file_ready(&symbol_location.file_path)
+            .await?;
+
+        let declaration = session
+            .client_mut()
+            .text_document_declaration(uri.to_string(), position.into())
+            .await
+            .map_err(AnalyzerError::from)?;
+
+        Self::goto_defdecl_response_to_file_locations(declaration)
+    }
+
+    /// Get the definition locations of a symbol
+    async fn get_symbol_definitions(
+        symbol_location: &FileLocation,
+        session: &mut ClangdSession,
+    ) -> Result<Vec<FileLocation>, AnalyzerError> {
+        let file_path = symbol_location.file_path.to_str().ok_or_else(|| {
+            AnalyzerError::NoData("Invalid file path in symbol location".to_string())
+        })?;
+        let uri = format!("file://{}", file_path);
+        let position = symbol_location.range.start;
+
+        session
+            .ensure_file_ready(&symbol_location.file_path)
+            .await?;
+
+        let definition = session
+            .client_mut()
+            .text_document_definition(uri.to_string(), position.into())
+            .await
+            .map_err(AnalyzerError::from)?;
+
+        Self::goto_defdecl_response_to_file_locations(definition)
+    }
+
+    /// Get hover information for a symbol
+    async fn get_hover_info(
+        symbol_location: &FileLocation,
+        session: &mut ClangdSession,
+    ) -> Result<String, AnalyzerError> {
+        let file_path = symbol_location.file_path.to_str().ok_or_else(|| {
+            AnalyzerError::NoData("Invalid file path in symbol location".to_string())
+        })?;
+        let uri = format!("file://{}", file_path);
+        let position = symbol_location.range.start;
+
+        session
+            .ensure_file_ready(&symbol_location.file_path)
+            .await?;
 
         let client = session.client_mut();
         let hover_info = client
-            .text_document_hover(uri.to_string(), position)
+            .text_document_hover(uri.to_string(), position.into())
             .await
             .map_err(AnalyzerError::from)?;
 
@@ -327,6 +461,12 @@ mod tests {
         let result = tool
             .call_tool(session, &workspace, file_buffer_manager)
             .await;
+
+        // Check and log error if present
+        if let Err(ref err) = result {
+            error!("Failed to analyze symbol: {}", err);
+        }
+
         assert!(result.is_ok());
 
         let call_result = result.unwrap();
@@ -350,6 +490,25 @@ mod tests {
 
         if let Some(hover_doc) = &analyzer_result.hover_documentation {
             info!("Hover documentation: {}", hover_doc);
+        }
+
+        assert!(!analyzer_result.definitions.is_empty());
+        assert!(!analyzer_result.declarations.is_empty());
+
+        for definition in analyzer_result.definitions {
+            info!(
+                "Definition: {} at {}",
+                definition.contents,
+                definition.location.file_path.display()
+            );
+        }
+
+        for declaration in analyzer_result.declarations {
+            info!(
+                "Declaration: {} at {}",
+                declaration.contents,
+                declaration.location.file_path.display()
+            );
         }
     }
 }

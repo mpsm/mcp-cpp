@@ -108,8 +108,8 @@ mod tests {
         {
             let buffer1 = manager.get_buffer(&test_path).unwrap();
 
-            let start = FilePosition::new(1, 1);
-            let end = FilePosition::new(1, 7);
+            let start = FilePosition::new(0, 0);
+            let end = FilePosition::new(0, 6);
             let result = buffer1.text_between(start, end).unwrap();
             assert_eq!(result, "Cached");
         }
@@ -117,8 +117,8 @@ mod tests {
         // Subsequent access returns cached instance
         {
             let buffer2 = manager.get_buffer(&test_path).unwrap();
-            let start = FilePosition::new(1, 1);
-            let end = FilePosition::new(1, 7);
+            let start = FilePosition::new(0, 0);
+            let end = FilePosition::new(0, 6);
             let result = buffer2.text_between(start, end).unwrap();
             assert_eq!(result, "Cached");
         }
@@ -139,16 +139,16 @@ mod tests {
         // Access multiple buffers
         {
             let buffer1 = manager.get_buffer(&path1).unwrap();
-            let start = FilePosition::new(1, 1);
-            let end = FilePosition::new(1, 8);
+            let start = FilePosition::new(0, 0);
+            let end = FilePosition::new(0, 7);
             let result = buffer1.text_between(start, end).unwrap();
             assert_eq!(result, "Content");
         }
 
         {
             let buffer2 = manager.get_buffer(&path2).unwrap();
-            let start = FilePosition::new(1, 1);
-            let end = FilePosition::new(1, 8);
+            let start = FilePosition::new(0, 0);
+            let end = FilePosition::new(0, 7);
             let result = buffer2.text_between(start, end).unwrap();
             assert_eq!(result, "Content");
         }
@@ -159,8 +159,8 @@ mod tests {
         // Post-clear access reloads from filesystem
         {
             let buffer1 = manager.get_buffer(&path1).unwrap();
-            let start = FilePosition::new(1, 1);
-            let end = FilePosition::new(1, 8);
+            let start = FilePosition::new(0, 0);
+            let end = FilePosition::new(0, 7);
             let result = buffer1.text_between(start, end).unwrap();
             assert_eq!(result, "Content");
         }
@@ -180,14 +180,14 @@ mod tests {
             let buffer = manager.get_buffer(&file_path).unwrap();
 
             // Extract text
-            let start = FilePosition::new(1, 1);
-            let end = FilePosition::new(1, 5);
+            let start = FilePosition::new(0, 0);
+            let end = FilePosition::new(0, 4);
             let result = buffer.text_between(start, end).unwrap();
             assert_eq!(result, "Real");
 
             // Extract from second line
-            let start = FilePosition::new(2, 1);
-            let end = FilePosition::new(2, 7);
+            let start = FilePosition::new(1, 0);
+            let end = FilePosition::new(1, 6);
             let result = buffer.text_between(start, end).unwrap();
             assert_eq!(result, "Second");
         }
@@ -213,8 +213,8 @@ mod tests {
         assert!(!std::ptr::eq(buffer1, buffer2));
 
         // But both should see the same content
-        let start = FilePosition::new(1, 1);
-        let end = FilePosition::new(1, 8);
+        let start = FilePosition::new(0, 0);
+        let end = FilePosition::new(0, 7);
 
         let result1 = buffer1.text_between(start, end).unwrap();
         let result2 = buffer2.text_between(start, end).unwrap();
