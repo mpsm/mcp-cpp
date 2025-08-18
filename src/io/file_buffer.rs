@@ -130,6 +130,35 @@ impl<F: FileSystemTrait> FileBuffer<F> {
         Ok(self.content[start_offset..end_offset].to_string())
     }
 
+    /// Extract the full line at the given line number (0-based), trimmed on both ends
+    ///
+    /// Automatically refreshes content if file has been modified.
+    pub fn get_line(&mut self, line_number: u32) -> Result<String, FileBufferError> {
+        // Check for file changes and refresh if needed using stored filesystem
+        self.refresh_if_changed()?;
+
+        let line_index = line_number as usize;
+
+        // Check if line number is valid
+        if line_index >= self.line_starts.len() {
+            return Err(FileBufferError::PositionOutOfBounds {
+                pos: FilePosition::new(line_number, 0),
+            });
+        }
+
+        let line_start = self.line_starts[line_index];
+        let line_end = if line_index + 1 < self.line_starts.len() {
+            // Not the last line - exclude the newline character
+            self.line_starts[line_index + 1].saturating_sub(1)
+        } else {
+            // Last line - go to end of content
+            self.content.len()
+        };
+
+        let line_content = &self.content[line_start..line_end];
+        Ok(line_content.trim().to_string())
+    }
+
     // ========================================================================
     // Internal Methods
     // ========================================================================

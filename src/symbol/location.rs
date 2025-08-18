@@ -2,6 +2,7 @@ use crate::io::file_buffer::{FileBufferError, FilePosition as FileBufPosition};
 use crate::io::file_manager::FileBufferManager;
 use crate::io::file_system::FileSystemTrait;
 
+use std::fmt;
 use std::path::{Path, PathBuf};
 
 use lsp_types::{
@@ -32,6 +33,33 @@ pub struct FilePosition {
 pub struct FileLocation {
     pub range: Range,
     pub file_path: PathBuf,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FileLine {
+    pub file_path: PathBuf,
+    pub line_number: u32, // 0-based
+}
+
+impl fmt::Display for FileLine {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}:{}", self.file_path.display(), self.line_number)
+    }
+}
+
+impl FileLocation {
+    /// Get the start line number (0-based) from the range
+    pub fn get_start_line(&self) -> u32 {
+        self.range.start.line
+    }
+
+    /// Convert FileLocation to FileLine using the start line
+    pub fn to_file_line(&self) -> FileLine {
+        FileLine {
+            file_path: self.file_path.clone(),
+            line_number: self.get_start_line(),
+        }
+    }
 }
 
 impl From<Position> for FileBufPosition {
@@ -133,7 +161,14 @@ pub struct FileLocationWithContents {
     pub contents: String,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FileLineWithContents {
+    pub line: FileLine,
+    pub contents: String,
+}
+
 impl FileLocationWithContents {
+    #[allow(dead_code)]
     pub fn new_from_location<T: FileSystemTrait>(
         location: &FileLocation,
         file_buf_manager: &mut FileBufferManager<T>,
@@ -143,6 +178,33 @@ impl FileLocationWithContents {
             location: location.clone(),
             contents: file_buffer
                 .text_between(location.range.start.into(), location.range.end.into())?,
+        })
+    }
+
+    /// Create FileLocationWithContents using the full line at the location, trimmed on both ends
+    #[allow(dead_code)]
+    pub fn new_from_location_full_line<T: FileSystemTrait>(
+        location: &FileLocation,
+        file_buf_manager: &mut FileBufferManager<T>,
+    ) -> Result<Self, FileBufferError> {
+        let file_buffer = file_buf_manager.get_buffer(&location.file_path)?;
+        Ok(FileLocationWithContents {
+            location: location.clone(),
+            contents: file_buffer.get_line(location.range.start.line)?,
+        })
+    }
+}
+
+impl FileLineWithContents {
+    /// Create FileLineWithContents from a FileLine, getting the full line content trimmed
+    pub fn new_from_file_line<T: FileSystemTrait>(
+        file_line: &FileLine,
+        file_buf_manager: &mut FileBufferManager<T>,
+    ) -> Result<Self, FileBufferError> {
+        let file_buffer = file_buf_manager.get_buffer(&file_line.file_path)?;
+        Ok(FileLineWithContents {
+            line: file_line.clone(),
+            contents: file_buffer.get_line(file_line.line_number)?,
         })
     }
 }

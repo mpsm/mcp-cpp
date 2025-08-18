@@ -19,7 +19,7 @@ use crate::clangd::session::{ClangdSession, ClangdSessionTrait};
 use crate::io::{file_buffer::FileBufferError, file_manager::RealFileBufferManager};
 use crate::lsp::traits::LspClientTrait;
 use crate::project::ProjectWorkspace;
-use crate::symbol::{FileLocation, FileLocationWithContents, Symbol, get_symbol_location};
+use crate::symbol::{FileLineWithContents, FileLocation, Symbol, get_symbol_location};
 
 // ============================================================================
 // Analyzer Error Type
@@ -79,11 +79,11 @@ impl From<AnalyzerError> for CallToolError {
                    • Static vs instance member identification
                    • Access level determination where available
 
-                   📈 USAGE PATTERN ANALYSIS (optional):
-                   • Statistical reference counting across entire codebase
-                   • Usage pattern classification (initialization, calls, inheritance)
-                   • Concrete code examples demonstrating typical usage
-                   • File distribution and usage density metrics
+                   📈 USAGE EXAMPLES (always included):
+                   • Concrete code snippets showing how the symbol is used throughout the codebase
+                   • Real usage patterns from actual code references
+                   • Automatically collected from all references to the symbol
+                   • Configurable limit via max_examples parameter (unlimited by default)
 
                    🏗️ INHERITANCE HIERARCHY ANALYSIS (optional):
                    • Complete class relationship mapping and base class hierarchies
@@ -110,11 +110,13 @@ impl From<AnalyzerError> for CallToolError {
 
                    INPUT REQUIREMENTS:
                    • symbol: Required string - the symbol name to analyze
+                   • build_directory: Optional - specific build directory containing compile_commands.json
+                   • max_examples: Optional number - limits the number of usage examples (unlimited by default)
+                   
+                   FUTURE PARAMETERS (not yet implemented):
                    • location: Optional - for disambiguating overloaded/template symbols
-                   • include_usage_patterns: Optional boolean - enables usage statistics and examples
                    • include_inheritance: Optional boolean - enables class hierarchy analysis
-                   • include_call_hierarchy: Optional boolean - enables function call analysis
-                   • Analysis depth and example limits are configurable via optional parameters"
+                   • include_call_hierarchy: Optional boolean - enables function call analysis"
 )]
 #[derive(Debug, ::serde::Serialize, ::serde::Deserialize, JsonSchema)]
 pub struct AnalyzeSymbolContextTool {
@@ -146,17 +148,31 @@ pub struct AnalyzeSymbolContextTool {
     /// and build directory will be passed via --compile-commands-dir argument.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub build_directory: Option<String>,
+
+    /// Maximum number of usage examples to include in the analysis. OPTIONAL.
+    ///
+    /// BEHAVIOR:
+    /// • Not specified or None: Returns all available usage examples (unlimited)
+    /// • Some(n): Returns at most n usage examples
+    ///
+    /// EXAMPLES are code snippets showing how the symbol is used throughout the codebase.
+    /// They are collected from references to the symbol, excluding the declaration itself.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_examples: Option<u32>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
 struct AnalyzerResult {
     symbol: Symbol,
     query: String,
-    definitions: Vec<FileLocationWithContents>,
-    declarations: Vec<FileLocationWithContents>,
+    definitions: Vec<FileLineWithContents>,
+    declarations: Vec<FileLineWithContents>,
 
     #[serde(skip_serializing_if = "Option::is_none")]
     hover_documentation: Option<String>,
+
+    /// Usage examples showing how the symbol is used throughout the codebase
+    examples: Vec<FileLineWithContents>,
 }
 
 const ANALYZER_INDEX_TIMEOUT: Duration = Duration::from_secs(20);
@@ -241,12 +257,32 @@ impl AnalyzeSymbolContextTool {
             }
         };
 
+        // Get usage examples
+        let examples = match Self::get_examples(
+            &mut locked_session,
+            &mut locked_file_buffer,
+            symbol_location.as_ref().unwrap(),
+            self.max_examples,
+        )
+        .await
+        {
+            Ok(examples) => {
+                info!("Found {} examples for '{}'", examples.len(), self.symbol);
+                examples
+            }
+            Err(err) => {
+                warn!("Failed to get usage examples: {}", err);
+                Vec::new()
+            }
+        };
+
         let result = AnalyzerResult {
             symbol,
             query: self.symbol.clone(),
             hover_documentation: hover,
             definitions,
             declarations,
+            examples,
         };
 
         let output = serde_json::to_string_pretty(&result).map_err(AnalyzerError::from)?;
@@ -281,14 +317,15 @@ impl AnalyzeSymbolContextTool {
         session: &mut ClangdSession,
         file_buffer_manager: &mut RealFileBufferManager,
         symbol_location: &FileLocation,
-    ) -> Result<Vec<FileLocationWithContents>, AnalyzerError> {
+    ) -> Result<Vec<FileLineWithContents>, AnalyzerError> {
         let declarations_locations =
             Self::get_symbol_declarations(symbol_location, session).await?;
 
         let declarations = declarations_locations
             .iter()
             .map(|loc| {
-                FileLocationWithContents::new_from_location(loc, file_buffer_manager)
+                let file_line = loc.to_file_line();
+                FileLineWithContents::new_from_file_line(&file_line, file_buffer_manager)
                     .map_err(AnalyzerError::from)
             })
             .collect::<Result<Vec<_>, _>>()?;
@@ -300,13 +337,14 @@ impl AnalyzeSymbolContextTool {
         session: &mut ClangdSession,
         file_buffer_manager: &mut RealFileBufferManager,
         symbol_location: &FileLocation,
-    ) -> Result<Vec<FileLocationWithContents>, AnalyzerError> {
+    ) -> Result<Vec<FileLineWithContents>, AnalyzerError> {
         let definitions_locations = Self::get_symbol_definitions(symbol_location, session).await?;
 
         let definitions = definitions_locations
             .iter()
             .map(|loc| {
-                FileLocationWithContents::new_from_location(loc, file_buffer_manager)
+                let file_line = loc.to_file_line();
+                FileLineWithContents::new_from_file_line(&file_line, file_buffer_manager)
                     .map_err(AnalyzerError::from)
             })
             .collect::<Result<Vec<_>, _>>()?;
@@ -420,6 +458,58 @@ impl AnalyzeSymbolContextTool {
             )),
         }
     }
+
+    /// Get usage examples for a symbol
+    async fn get_examples(
+        session: &mut ClangdSession,
+        file_buffer_manager: &mut RealFileBufferManager,
+        symbol_location: &FileLocation,
+        max_examples: Option<u32>,
+    ) -> Result<Vec<FileLineWithContents>, AnalyzerError> {
+        let file_path = symbol_location.file_path.to_str().ok_or_else(|| {
+            AnalyzerError::NoData("Invalid file path in symbol location".to_string())
+        })?;
+        let uri = format!("file://{}", file_path);
+        let position = symbol_location.range.start;
+
+        session
+            .ensure_file_ready(&symbol_location.file_path)
+            .await?;
+
+        // Get references to the symbol (exclude declaration)
+        let references = session
+            .client_mut()
+            .text_document_references(uri.to_string(), position.into(), false)
+            .await
+            .map_err(AnalyzerError::from)?;
+
+        // Convert references to FileLocation
+        let reference_locations: Vec<FileLocation> =
+            references.iter().map(FileLocation::from).collect();
+
+        // Apply max_examples limit if specified
+        let locations_to_process = match max_examples {
+            Some(max) => reference_locations.into_iter().take(max as usize).collect(),
+            None => reference_locations,
+        };
+
+        // Extract code snippets for each reference (full line, trimmed)
+        let examples = locations_to_process
+            .iter()
+            .filter_map(|loc| {
+                let file_line = loc.to_file_line();
+                match FileLineWithContents::new_from_file_line(&file_line, file_buffer_manager) {
+                    Ok(line_with_contents) => Some(line_with_contents),
+                    Err(err) => {
+                        debug!("Failed to get contents for reference: {}", err);
+                        None
+                    }
+                }
+            })
+            .collect();
+
+        Ok(examples)
+    }
 }
 
 #[cfg(test)]
@@ -456,6 +546,7 @@ mod tests {
         let tool = AnalyzeSymbolContextTool {
             symbol: "Math".to_string(),
             build_directory: None,
+            max_examples: None,
         };
 
         let result = tool
@@ -495,20 +586,98 @@ mod tests {
         assert!(!analyzer_result.definitions.is_empty());
         assert!(!analyzer_result.declarations.is_empty());
 
-        for definition in analyzer_result.definitions {
+        for definition in &analyzer_result.definitions {
+            info!("Definition: {} at {}", definition.contents, definition.line);
+        }
+
+        for declaration in &analyzer_result.declarations {
             info!(
-                "Definition: {} at {}",
-                definition.contents,
-                definition.location.file_path.display()
+                "Declaration: {} at {}",
+                declaration.contents, declaration.line
             );
         }
 
-        for declaration in analyzer_result.declarations {
+        // Verify examples are collected
+        info!("Found {} usage examples", analyzer_result.examples.len());
+        for (i, example) in analyzer_result.examples.iter().enumerate() {
             info!(
-                "Declaration: {} at {}",
-                declaration.contents,
-                declaration.location.file_path.display()
+                "Example {}: {} at {}",
+                i + 1,
+                example.contents,
+                example.line
             );
         }
+
+        // The Math class should have usage examples in main.cpp
+        assert!(
+            !analyzer_result.examples.is_empty(),
+            "Should have usage examples"
+        );
+    }
+
+    #[cfg(feature = "clangd-integration-tests")]
+    #[tokio::test]
+    async fn test_analyzer_with_max_examples() {
+        use super::*;
+        use crate::io::file_manager::RealFileBufferManager;
+        use std::sync::Arc;
+        use tokio::sync::Mutex;
+
+        // Create a test project first
+        use crate::test_utils::integration::TestProject;
+        let test_project = TestProject::new().await.unwrap();
+        test_project.cmake_configure().await.unwrap();
+
+        // Scan the test project to create a proper workspace with components
+        use crate::project::{ProjectScanner, WorkspaceSession};
+        let scanner = ProjectScanner::with_default_providers();
+        let workspace = scanner
+            .scan_project(&test_project.project_root, 3, None)
+            .expect("Failed to scan test project");
+
+        // Create a WorkspaceSession which will trigger indexing
+        let workspace_session = WorkspaceSession::new(workspace.clone());
+        let session = workspace_session
+            .get_or_create_session(test_project.build_dir.clone())
+            .await
+            .expect("Failed to create session");
+
+        let file_buffer_manager = Arc::new(Mutex::new(RealFileBufferManager::new_real()));
+
+        // Test with max_examples = 2
+        let tool = AnalyzeSymbolContextTool {
+            symbol: "Math".to_string(),
+            build_directory: None,
+            max_examples: Some(2),
+        };
+
+        let result = tool
+            .call_tool(session, &workspace, file_buffer_manager)
+            .await;
+
+        assert!(result.is_ok());
+
+        let call_result = result.unwrap();
+        let text = if let Some(rust_mcp_sdk::schema::ContentBlock::TextContent(
+            rust_mcp_sdk::schema::TextContent { text, .. },
+        )) = call_result.content.first()
+        {
+            text
+        } else {
+            panic!("Expected TextContent in call_result");
+        };
+        let analyzer_result: AnalyzerResult = serde_json::from_str(text).unwrap();
+
+        // Should have at most 2 examples
+        assert!(
+            analyzer_result.examples.len() <= 2,
+            "Should have at most 2 examples, but got {}",
+            analyzer_result.examples.len()
+        );
+
+        info!(
+            "Found {} usage examples (max was 2)",
+            analyzer_result.examples.len()
+        );
     }
 }
