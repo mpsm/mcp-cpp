@@ -38,6 +38,10 @@ struct Args {
     #[arg(long, short = 'c', value_name = "FILE")]
     compilation_database: Option<PathBuf>,
 
+    /// Path to clangd executable (overrides CLANGD_PATH env var)
+    #[arg(long, value_name = "PATH")]
+    clangd_path: Option<String>,
+
     /// Log level (overrides RUST_LOG env var)
     #[arg(long, value_name = "LEVEL")]
     log_level: Option<String>,
@@ -72,6 +76,14 @@ fn detect_global_compilation_database_from_args(
             None
         }
     }
+}
+
+/// Resolve clangd path from CLI args and environment
+fn resolve_clangd_path(clangd_path_arg: Option<String>) -> String {
+    // Priority: CLI arg > CLANGD_PATH env var > "clangd" default
+    clangd_path_arg
+        .or_else(|| std::env::var("CLANGD_PATH").ok())
+        .unwrap_or_else(|| "clangd".to_string())
 }
 
 /// Create ProjectWorkspace with all project setup logic centralized
@@ -178,11 +190,15 @@ async fn main() -> SdkResult<()> {
         protocol_version: LATEST_PROTOCOL_VERSION.to_string(),
     };
 
+    // Resolve clangd path
+    let clangd_path = resolve_clangd_path(args.clangd_path);
+    info!("Using clangd: {}", clangd_path);
+
     // Create stdio transport
     let transport = StdioTransport::new(TransportOptions::default())?;
 
-    // Create custom handler with ProjectWorkspace
-    let handler = CppServerHandler::new(project_workspace);
+    // Create custom handler with ProjectWorkspace and clangd path
+    let handler = CppServerHandler::new(project_workspace, clangd_path);
 
     // Create MCP server
     let server: ServerRuntime = server_runtime::create_server(server_details, transport, handler);

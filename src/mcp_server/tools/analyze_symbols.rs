@@ -534,8 +534,9 @@ mod tests {
             .scan_project(&test_project.project_root, 3, None)
             .expect("Failed to scan test project");
 
-        // Create a WorkspaceSession which will trigger indexing
-        let workspace_session = WorkspaceSession::new(workspace.clone());
+        // Create a WorkspaceSession with test clangd path
+        let clangd_path = crate::test_utils::get_test_clangd_path();
+        let workspace_session = WorkspaceSession::new(workspace.clone(), clangd_path);
         let session = workspace_session
             .get_or_create_session(test_project.build_dir.clone())
             .await
@@ -635,8 +636,9 @@ mod tests {
             .scan_project(&test_project.project_root, 3, None)
             .expect("Failed to scan test project");
 
-        // Create a WorkspaceSession which will trigger indexing
-        let workspace_session = WorkspaceSession::new(workspace.clone());
+        // Create a WorkspaceSession with test clangd path
+        let clangd_path = crate::test_utils::get_test_clangd_path();
+        let workspace_session = WorkspaceSession::new(workspace.clone(), clangd_path);
         let session = workspace_session
             .get_or_create_session(test_project.build_dir.clone())
             .await

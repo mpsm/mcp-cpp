@@ -23,14 +23,17 @@ pub struct WorkspaceSession {
     workspace: ProjectWorkspace,
     /// Map of build directories to their ClangdSession instances
     sessions: Arc<Mutex<HashMap<PathBuf, Arc<Mutex<ClangdSession>>>>>,
+    /// Path to clangd executable
+    clangd_path: String,
 }
 
 impl WorkspaceSession {
     /// Create a new WorkspaceSession for the given project workspace
-    pub fn new(workspace: ProjectWorkspace) -> Self {
+    pub fn new(workspace: ProjectWorkspace, clangd_path: String) -> Self {
         Self {
             workspace,
             sessions: Arc::new(Mutex::new(HashMap::new())),
+            clangd_path,
         }
     }
 
@@ -77,10 +80,11 @@ impl WorkspaceSession {
             })?
         };
 
-        // Build configuration using v2 builder pattern
+        // Build configuration using v2 builder pattern with clangd path
         let config = ClangdConfigBuilder::new()
             .working_directory(project_root)
             .build_directory(build_dir.clone())
+            .clangd_path(self.clangd_path.clone())
             .build()
             .map_err(|e| ProjectError::SessionCreation(format!("Failed to build config: {}", e)))?;
 

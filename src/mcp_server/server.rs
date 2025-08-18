@@ -27,8 +27,8 @@ pub struct CppServerHandler {
 }
 
 impl CppServerHandler {
-    pub fn new(project_workspace: ProjectWorkspace) -> Self {
-        let workspace_session = WorkspaceSession::new(project_workspace.clone());
+    pub fn new(project_workspace: ProjectWorkspace, clangd_path: String) -> Self {
+        let workspace_session = WorkspaceSession::new(project_workspace.clone(), clangd_path);
         let file_buffer_manager = Arc::new(Mutex::new(RealFileBufferManager::new_real()));
         Self {
             project_workspace,
