@@ -4,5 +4,9 @@
 //! domain-specific logic for C++ code analysis.
 
 pub mod call_hierarchy;
+pub mod definitions;
+pub mod examples;
+pub mod hover;
 pub mod members;
+pub mod symbol_resolution;
 pub mod type_hierarchy;

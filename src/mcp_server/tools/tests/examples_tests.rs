@@ -1,0 +1,270 @@
+//! Integration tests for usage examples and reference analysis functionality
+//!
+//! These tests verify that the usage examples and reference analysis functionality
+//! works correctly with real clangd integration, testing reference collection,
+//! example limiting, and various usage pattern scenarios.
+
+use crate::io::file_manager::RealFileBufferManager;
+use crate::mcp_server::tools::lsp_helpers::{
+    examples::get_examples, symbol_resolution::get_matching_symbol,
+};
+use crate::project::{ProjectScanner, WorkspaceSession};
+use crate::symbol::get_symbol_location;
+use crate::test_utils::integration::TestProject;
+use std::sync::Arc;
+use tokio::sync::Mutex;
+use tracing::info;
+
+#[cfg(feature = "clangd-integration-tests")]
+#[tokio::test]
+async fn test_examples_class_usage() {
+    // Create a test project first
+    let test_project = TestProject::new().await.unwrap();
+    test_project.cmake_configure().await.unwrap();
+
+    // Scan the test project to create a proper workspace with components
+    let scanner = ProjectScanner::with_default_providers();
+    let workspace = scanner
+        .scan_project(&test_project.project_root, 3, None)
+        .expect("Failed to scan test project");
+
+    // Create a WorkspaceSession with test clangd path
+    let clangd_path = crate::test_utils::get_test_clangd_path();
+    let workspace_session = WorkspaceSession::new(workspace.clone(), clangd_path);
+    let session = workspace_session
+        .get_or_create_session(test_project.build_dir.clone())
+        .await
+        .expect("Failed to create session");
+
+    let mut locked_session = session.lock().await;
+    let file_buffer_manager = Arc::new(Mutex::new(RealFileBufferManager::new_real()));
+    let mut locked_file_buffer = file_buffer_manager.lock().await;
+
+    // Wait for clangd indexing to complete before searching
+    crate::mcp_server::tools::utils::wait_for_indexing(locked_session.index_monitor(), None).await;
+
+    // Get Math class symbol
+    let symbol = get_matching_symbol("Math", &mut locked_session)
+        .await
+        .expect("Failed to find Math symbol");
+    let symbol_location = get_symbol_location(&symbol).expect("Symbol should have location");
+
+    // Test getting usage examples (unlimited)
+    let examples = get_examples(
+        &mut locked_session,
+        &mut locked_file_buffer,
+        &symbol_location,
+        None,
+    )
+    .await
+    .expect("Failed to get examples");
+
+    assert!(!examples.is_empty());
+    info!("Found {} usage examples for Math class", examples.len());
+
+    for (i, example) in examples.iter().enumerate() {
+        info!(
+            "Example {}: {} at {}:{}",
+            i + 1,
+            example.contents.trim(),
+            example.line.file_path.display(),
+            example.line.line_number
+        );
+        // Usage examples should reference the Math class
+        assert!(example.contents.contains("Math"));
+    }
+}
+
+#[cfg(feature = "clangd-integration-tests")]
+#[tokio::test]
+async fn test_examples_function_usage() {
+    // Create a test project first
+    let test_project = TestProject::new().await.unwrap();
+    test_project.cmake_configure().await.unwrap();
+
+    // Scan the test project to create a proper workspace with components
+    let scanner = ProjectScanner::with_default_providers();
+    let workspace = scanner
+        .scan_project(&test_project.project_root, 3, None)
+        .expect("Failed to scan test project");
+
+    // Create a WorkspaceSession with test clangd path
+    let clangd_path = crate::test_utils::get_test_clangd_path();
+    let workspace_session = WorkspaceSession::new(workspace.clone(), clangd_path);
+    let session = workspace_session
+        .get_or_create_session(test_project.build_dir.clone())
+        .await
+        .expect("Failed to create session");
+
+    let mut locked_session = session.lock().await;
+    let file_buffer_manager = Arc::new(Mutex::new(RealFileBufferManager::new_real()));
+    let mut locked_file_buffer = file_buffer_manager.lock().await;
+
+    // Wait for clangd indexing to complete before searching
+    crate::mcp_server::tools::utils::wait_for_indexing(locked_session.index_monitor(), None).await;
+
+    // Get factorial function symbol
+    let symbol = get_matching_symbol("factorial", &mut locked_session)
+        .await
+        .expect("Failed to find factorial symbol");
+    let symbol_location = get_symbol_location(&symbol).expect("Symbol should have location");
+
+    // Test getting usage examples (unlimited)
+    let examples = get_examples(
+        &mut locked_session,
+        &mut locked_file_buffer,
+        &symbol_location,
+        None,
+    )
+    .await
+    .expect("Failed to get examples");
+
+    assert!(!examples.is_empty());
+    info!(
+        "Found {} usage examples for factorial function",
+        examples.len()
+    );
+
+    for (i, example) in examples.iter().enumerate() {
+        info!(
+            "Example {}: {} at {}:{}",
+            i + 1,
+            example.contents.trim(),
+            example.line.file_path.display(),
+            example.line.line_number
+        );
+        // Usage examples should reference the factorial function
+        assert!(example.contents.contains("factorial"));
+    }
+}
+
+#[cfg(feature = "clangd-integration-tests")]
+#[tokio::test]
+async fn test_examples_with_max_limit() {
+    // Create a test project first
+    let test_project = TestProject::new().await.unwrap();
+    test_project.cmake_configure().await.unwrap();
+
+    // Scan the test project to create a proper workspace with components
+    let scanner = ProjectScanner::with_default_providers();
+    let workspace = scanner
+        .scan_project(&test_project.project_root, 3, None)
+        .expect("Failed to scan test project");
+
+    // Create a WorkspaceSession with test clangd path
+    let clangd_path = crate::test_utils::get_test_clangd_path();
+    let workspace_session = WorkspaceSession::new(workspace.clone(), clangd_path);
+    let session = workspace_session
+        .get_or_create_session(test_project.build_dir.clone())
+        .await
+        .expect("Failed to create session");
+
+    let mut locked_session = session.lock().await;
+    let file_buffer_manager = Arc::new(Mutex::new(RealFileBufferManager::new_real()));
+    let mut locked_file_buffer = file_buffer_manager.lock().await;
+
+    // Wait for clangd indexing to complete before searching
+    crate::mcp_server::tools::utils::wait_for_indexing(locked_session.index_monitor(), None).await;
+
+    // Get Math class symbol (should have multiple usage examples)
+    let symbol = get_matching_symbol("Math", &mut locked_session)
+        .await
+        .expect("Failed to find Math symbol");
+    let symbol_location = get_symbol_location(&symbol).expect("Symbol should have location");
+
+    // Test getting examples with max limit
+    const MAX_EXAMPLES: u32 = 2;
+    let examples = get_examples(
+        &mut locked_session,
+        &mut locked_file_buffer,
+        &symbol_location,
+        Some(MAX_EXAMPLES),
+    )
+    .await
+    .expect("Failed to get examples");
+
+    assert!(!examples.is_empty());
+    assert!(
+        examples.len() <= MAX_EXAMPLES as usize,
+        "Should have at most {} examples, but got {}",
+        MAX_EXAMPLES,
+        examples.len()
+    );
+
+    info!(
+        "Found {} usage examples for Math class (max was {})",
+        examples.len(),
+        MAX_EXAMPLES
+    );
+
+    for (i, example) in examples.iter().enumerate() {
+        info!(
+            "Example {}: {} at {}:{}",
+            i + 1,
+            example.contents.trim(),
+            example.line.file_path.display(),
+            example.line.line_number
+        );
+        assert!(example.contents.contains("Math"));
+    }
+}
+
+#[cfg(feature = "clangd-integration-tests")]
+#[tokio::test]
+async fn test_examples_method_usage() {
+    // Create a test project first
+    let test_project = TestProject::new().await.unwrap();
+    test_project.cmake_configure().await.unwrap();
+
+    // Scan the test project to create a proper workspace with components
+    let scanner = ProjectScanner::with_default_providers();
+    let workspace = scanner
+        .scan_project(&test_project.project_root, 3, None)
+        .expect("Failed to scan test project");
+
+    // Create a WorkspaceSession with test clangd path
+    let clangd_path = crate::test_utils::get_test_clangd_path();
+    let workspace_session = WorkspaceSession::new(workspace.clone(), clangd_path);
+    let session = workspace_session
+        .get_or_create_session(test_project.build_dir.clone())
+        .await
+        .expect("Failed to create session");
+
+    let mut locked_session = session.lock().await;
+    let file_buffer_manager = Arc::new(Mutex::new(RealFileBufferManager::new_real()));
+    let mut locked_file_buffer = file_buffer_manager.lock().await;
+
+    // Wait for clangd indexing to complete before searching
+    crate::mcp_server::tools::utils::wait_for_indexing(locked_session.index_monitor(), None).await;
+
+    // Get a method symbol
+    let symbol = get_matching_symbol("Math::Complex::add", &mut locked_session)
+        .await
+        .expect("Failed to find add method symbol");
+    let symbol_location = get_symbol_location(&symbol).expect("Symbol should have location");
+
+    // Test getting usage examples
+    let examples = get_examples(
+        &mut locked_session,
+        &mut locked_file_buffer,
+        &symbol_location,
+        Some(3),
+    )
+    .await
+    .expect("Failed to get examples");
+
+    assert!(!examples.is_empty());
+    info!("Found {} usage examples for add method", examples.len());
+
+    for (i, example) in examples.iter().enumerate() {
+        info!(
+            "Example {}: {} at {}:{}",
+            i + 1,
+            example.contents.trim(),
+            example.line.file_path.display(),
+            example.line.line_number
+        );
+        // Usage examples should reference the method
+        assert!(example.contents.contains("add"));
+    }
+}

@@ -6,25 +6,27 @@
 //! - project/: Extensible project/build system abstraction
 //! - io/: Process and transport management
 
-use lsp_types::WorkspaceSymbol;
 use rust_mcp_sdk::macros::{JsonSchema, mcp_tool};
 use rust_mcp_sdk::schema::{CallToolResult, TextContent, schema_utils::CallToolError};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::Mutex;
-use tracing::{debug, error, info, instrument, warn};
+use tracing::{error, info, instrument, warn};
 
-use crate::clangd::session::{ClangdSession, ClangdSessionTrait};
+use crate::clangd::session::ClangdSession;
 use crate::io::{file_buffer::FileBufferError, file_manager::RealFileBufferManager};
-use crate::lsp::traits::LspClientTrait;
 use crate::mcp_server::tools::lsp_helpers::{
     call_hierarchy::{CallHierarchy, get_call_hierarchy},
+    definitions::{get_declarations, get_definitions},
+    examples::get_examples,
+    hover::get_hover_info,
     members::{Members, get_members},
+    symbol_resolution::get_matching_symbol,
     type_hierarchy::{TypeHierarchy, get_type_hierarchy},
 };
 use crate::project::ProjectWorkspace;
-use crate::symbol::{FileLineWithContents, FileLocation, Symbol, get_symbol_location};
+use crate::symbol::{FileLineWithContents, Symbol, get_symbol_location};
 
 // ============================================================================
 // Analyzer Error Type
@@ -195,6 +197,188 @@ pub struct AnalyzerResult {
 const ANALYZER_INDEX_TIMEOUT: Duration = Duration::from_secs(20);
 
 impl AnalyzeSymbolContextTool {
+    /// Resolves the symbol and returns both the symbol and its location
+    async fn resolve_symbol(
+        &self,
+        locked_session: &mut ClangdSession,
+    ) -> Result<(Symbol, crate::symbol::FileLocation), CallToolError> {
+        let lsp_symbol = match get_matching_symbol(&self.symbol, locked_session).await {
+            Ok(symbol) => symbol,
+            Err(err) => {
+                error!("Failed to get matching symbol: {}", err);
+                return Err(CallToolError::from(err));
+            }
+        };
+
+        let symbol: Symbol = lsp_symbol.clone().into();
+        let symbol_location = get_symbol_location(&lsp_symbol);
+
+        match symbol_location {
+            Some(location) => Ok((symbol, location)),
+            None => {
+                error!("No location found for symbol '{}'", self.symbol);
+                Err(CallToolError::new(std::io::Error::new(
+                    std::io::ErrorKind::NotFound,
+                    format!("No location found for symbol '{}'", self.symbol),
+                )))
+            }
+        }
+    }
+
+    /// Retrieves definitions and declarations for the symbol
+    async fn get_definitions_and_declarations(
+        &self,
+        symbol_location: &crate::symbol::FileLocation,
+        locked_session: &mut ClangdSession,
+        locked_file_buffer: &mut RealFileBufferManager,
+    ) -> Result<(Vec<FileLineWithContents>, Vec<FileLineWithContents>), CallToolError> {
+        let definitions =
+            get_definitions(locked_session, locked_file_buffer, symbol_location).await?;
+        info!(
+            "Found {} definitions for '{}'",
+            definitions.len(),
+            self.symbol
+        );
+
+        let declarations =
+            get_declarations(locked_session, locked_file_buffer, symbol_location).await?;
+        info!(
+            "Found {} declarations for '{}'",
+            declarations.len(),
+            self.symbol
+        );
+
+        Ok((definitions, declarations))
+    }
+
+    /// Retrieves hover documentation for the symbol
+    async fn get_hover_documentation(
+        &self,
+        symbol_location: &crate::symbol::FileLocation,
+        locked_session: &mut ClangdSession,
+    ) -> Option<String> {
+        match get_hover_info(symbol_location, locked_session).await {
+            Ok(info) => Some(info),
+            Err(err) => {
+                warn!("Failed to get hover information: {}", err);
+                None
+            }
+        }
+    }
+
+    /// Retrieves usage examples for the symbol
+    async fn get_usage_examples(
+        &self,
+        symbol_location: &crate::symbol::FileLocation,
+        locked_session: &mut ClangdSession,
+        locked_file_buffer: &mut RealFileBufferManager,
+    ) -> Vec<FileLineWithContents> {
+        match get_examples(
+            locked_session,
+            locked_file_buffer,
+            symbol_location,
+            self.max_examples,
+        )
+        .await
+        {
+            Ok(examples) => {
+                info!("Found {} examples for '{}'", examples.len(), self.symbol);
+                examples
+            }
+            Err(err) => {
+                warn!("Failed to get usage examples: {}", err);
+                Vec::new()
+            }
+        }
+    }
+
+    /// Retrieves type and call hierarchies based on symbol type
+    async fn get_hierarchies(
+        &self,
+        symbol: &Symbol,
+        symbol_location: &crate::symbol::FileLocation,
+        locked_session: &mut ClangdSession,
+    ) -> (Option<TypeHierarchy>, Option<CallHierarchy>) {
+        let type_hierarchy = match symbol.kind {
+            lsp_types::SymbolKind::CLASS
+            | lsp_types::SymbolKind::STRUCT
+            | lsp_types::SymbolKind::INTERFACE => {
+                match get_type_hierarchy(symbol_location, locked_session).await {
+                    Ok(hierarchy) => {
+                        info!(
+                            "Found type hierarchy for '{}': {} supertypes, {} subtypes",
+                            self.symbol,
+                            hierarchy.supertypes.len(),
+                            hierarchy.subtypes.len()
+                        );
+                        Some(hierarchy)
+                    }
+                    Err(err) => {
+                        warn!("Failed to get type hierarchy: {}", err);
+                        None
+                    }
+                }
+            }
+            _ => None,
+        };
+
+        let call_hierarchy = match symbol.kind {
+            lsp_types::SymbolKind::FUNCTION
+            | lsp_types::SymbolKind::METHOD
+            | lsp_types::SymbolKind::CONSTRUCTOR => {
+                match get_call_hierarchy(symbol_location, locked_session).await {
+                    Ok(hierarchy) => {
+                        info!(
+                            "Found call hierarchy for '{}': {} callers, {} callees",
+                            self.symbol,
+                            hierarchy.callers.len(),
+                            hierarchy.callees.len()
+                        );
+                        Some(hierarchy)
+                    }
+                    Err(err) => {
+                        warn!("Failed to get call hierarchy: {}", err);
+                        None
+                    }
+                }
+            }
+            _ => None,
+        };
+
+        (type_hierarchy, call_hierarchy)
+    }
+
+    /// Retrieves members for classes and structs
+    async fn get_members(
+        &self,
+        symbol: &Symbol,
+        symbol_location: &crate::symbol::FileLocation,
+        locked_session: &mut ClangdSession,
+    ) -> Option<Members> {
+        match symbol.kind {
+            lsp_types::SymbolKind::CLASS | lsp_types::SymbolKind::STRUCT => {
+                match get_members(symbol_location, locked_session, &symbol.name).await {
+                    Ok(members) => {
+                        info!(
+                            "Found members for '{}': {} methods, {} constructors, {} operators, {} static methods",
+                            self.symbol,
+                            members.methods.len(),
+                            members.constructors.len(),
+                            members.operators.len(),
+                            members.static_methods.len()
+                        );
+                        Some(members)
+                    }
+                    Err(err) => {
+                        warn!("Failed to get members: {}", err);
+                        None
+                    }
+                }
+            }
+            _ => None,
+        }
+    }
+
     /// V2 entry point - uses shared ClangdSession from server
     #[instrument(
         name = "analyze_symbol_context",
@@ -217,163 +401,42 @@ impl AnalyzeSymbolContextTool {
         )
         .await;
 
-        // Get matching symbol and its location
-        let lsp_symbol = match self.get_matching_symbol(&mut locked_session).await {
-            Ok(symbol) => symbol,
-            Err(err) => {
-                error!("Failed to get matching symbol: {}", err);
-                return Err(CallToolError::from(err));
-            }
-        };
-        let symbol: Symbol = lsp_symbol.clone().into();
-        let symbol_location = get_symbol_location(&lsp_symbol);
-        if symbol_location.is_none() {
-            error!("No location found for symbol '{}'", self.symbol);
-            return Err(CallToolError::new(std::io::Error::new(
-                std::io::ErrorKind::NotFound,
-                format!("No location found for symbol '{}'", self.symbol),
-            )));
-        }
+        // Resolve symbol and get its location
+        let (symbol, symbol_location) = self.resolve_symbol(&mut locked_session).await?;
 
-        // Get symbol definition and declaration
+        // Get definitions and declarations
         let mut locked_file_buffer = file_buffer_manager.lock().await;
-        let definitions = Self::get_definitions(
-            &mut locked_session,
-            &mut locked_file_buffer,
-            symbol_location.as_ref().unwrap(),
-        )
-        .await?;
-        info!(
-            "Found {} definitions for '{}'",
-            definitions.len(),
-            self.symbol
-        );
-        let declarations = Self::get_declarations(
-            &mut locked_session,
-            &mut locked_file_buffer,
-            symbol_location.as_ref().unwrap(),
-        )
-        .await?;
-        info!(
-            "Found {} declarations for '{}'",
-            declarations.len(),
-            self.symbol
-        );
+        let (definitions, declarations) = self
+            .get_definitions_and_declarations(
+                &symbol_location,
+                &mut locked_session,
+                &mut locked_file_buffer,
+            )
+            .await?;
 
         // Get hover information
-        let hover = match Self::get_hover_info(
-            symbol_location.as_ref().unwrap(),
-            &mut locked_session,
-        )
-        .await
-        {
-            Ok(info) => Some(info),
-            Err(err) => {
-                warn!("Failed to get hover information: {}", err);
-                None
-            }
-        };
+        let hover = self
+            .get_hover_documentation(&symbol_location, &mut locked_session)
+            .await;
 
         // Get usage examples
-        let examples = match Self::get_examples(
-            &mut locked_session,
-            &mut locked_file_buffer,
-            symbol_location.as_ref().unwrap(),
-            self.max_examples,
-        )
-        .await
-        {
-            Ok(examples) => {
-                info!("Found {} examples for '{}'", examples.len(), self.symbol);
-                examples
-            }
-            Err(err) => {
-                warn!("Failed to get usage examples: {}", err);
-                Vec::new()
-            }
-        };
+        let examples = self
+            .get_usage_examples(
+                &symbol_location,
+                &mut locked_session,
+                &mut locked_file_buffer,
+            )
+            .await;
 
-        // Get type hierarchy for classes, structs, and interfaces
-        let type_hierarchy = match symbol.kind {
-            lsp_types::SymbolKind::CLASS
-            | lsp_types::SymbolKind::STRUCT
-            | lsp_types::SymbolKind::INTERFACE => {
-                match get_type_hierarchy(symbol_location.as_ref().unwrap(), &mut locked_session)
-                    .await
-                {
-                    Ok(hierarchy) => {
-                        info!(
-                            "Found type hierarchy for '{}': {} supertypes, {} subtypes",
-                            self.symbol,
-                            hierarchy.supertypes.len(),
-                            hierarchy.subtypes.len()
-                        );
-                        Some(hierarchy)
-                    }
-                    Err(err) => {
-                        warn!("Failed to get type hierarchy: {}", err);
-                        None
-                    }
-                }
-            }
-            _ => None,
-        };
-
-        // Get call hierarchy for functions and methods
-        let call_hierarchy = match symbol.kind {
-            lsp_types::SymbolKind::FUNCTION
-            | lsp_types::SymbolKind::METHOD
-            | lsp_types::SymbolKind::CONSTRUCTOR => {
-                match get_call_hierarchy(symbol_location.as_ref().unwrap(), &mut locked_session)
-                    .await
-                {
-                    Ok(hierarchy) => {
-                        info!(
-                            "Found call hierarchy for '{}': {} callers, {} callees",
-                            self.symbol,
-                            hierarchy.callers.len(),
-                            hierarchy.callees.len()
-                        );
-                        Some(hierarchy)
-                    }
-                    Err(err) => {
-                        warn!("Failed to get call hierarchy: {}", err);
-                        None
-                    }
-                }
-            }
-            _ => None,
-        };
+        // Get hierarchies based on symbol type
+        let (type_hierarchy, call_hierarchy) = self
+            .get_hierarchies(&symbol, &symbol_location, &mut locked_session)
+            .await;
 
         // Get members for classes and structs
-        let members = match symbol.kind {
-            lsp_types::SymbolKind::CLASS | lsp_types::SymbolKind::STRUCT => {
-                match get_members(
-                    symbol_location.as_ref().unwrap(),
-                    &mut locked_session,
-                    &symbol.name,
-                )
-                .await
-                {
-                    Ok(members) => {
-                        info!(
-                            "Found members for '{}': {} methods, {} constructors, {} operators, {} static methods",
-                            self.symbol,
-                            members.methods.len(),
-                            members.constructors.len(),
-                            members.operators.len(),
-                            members.static_methods.len()
-                        );
-                        Some(members)
-                    }
-                    Err(err) => {
-                        warn!("Failed to get members: {}", err);
-                        None
-                    }
-                }
-            }
-            _ => None,
-        };
+        let members = self
+            .get_members(&symbol, &symbol_location, &mut locked_session)
+            .await;
 
         let result = AnalyzerResult {
             symbol,
@@ -391,226 +454,6 @@ impl AnalyzeSymbolContextTool {
         Ok(CallToolResult::text_content(vec![TextContent::from(
             output,
         )]))
-    }
-
-    /// Get the first (best) matching symbol from the session based on the user query
-    async fn get_matching_symbol(
-        &self,
-        session: &mut ClangdSession,
-    ) -> Result<WorkspaceSymbol, AnalyzerError> {
-        // Use the LSP client to find symbols matching the provided name
-        let symbols = session
-            .client_mut()
-            .workspace_symbols(self.symbol.clone())
-            .await
-            .map_err(AnalyzerError::from)?;
-
-        if symbols.is_empty() {
-            return Err(AnalyzerError::NoSymbols(self.symbol.clone()));
-        }
-
-        debug!("Found {} symbols matching '{}'", symbols.len(), self.symbol);
-
-        // Return the first symbol as the best match
-        Ok(symbols[0].clone())
-    }
-
-    async fn get_declarations(
-        session: &mut ClangdSession,
-        file_buffer_manager: &mut RealFileBufferManager,
-        symbol_location: &FileLocation,
-    ) -> Result<Vec<FileLineWithContents>, AnalyzerError> {
-        let declarations_locations =
-            Self::get_symbol_declarations(symbol_location, session).await?;
-
-        let declarations = declarations_locations
-            .iter()
-            .map(|loc| {
-                let file_line = loc.to_file_line();
-                FileLineWithContents::new_from_file_line(&file_line, file_buffer_manager)
-                    .map_err(AnalyzerError::from)
-            })
-            .collect::<Result<Vec<_>, _>>()?;
-
-        Ok(declarations)
-    }
-
-    async fn get_definitions(
-        session: &mut ClangdSession,
-        file_buffer_manager: &mut RealFileBufferManager,
-        symbol_location: &FileLocation,
-    ) -> Result<Vec<FileLineWithContents>, AnalyzerError> {
-        let definitions_locations = Self::get_symbol_definitions(symbol_location, session).await?;
-
-        let definitions = definitions_locations
-            .iter()
-            .map(|loc| {
-                let file_line = loc.to_file_line();
-                FileLineWithContents::new_from_file_line(&file_line, file_buffer_manager)
-                    .map_err(AnalyzerError::from)
-            })
-            .collect::<Result<Vec<_>, _>>()?;
-
-        Ok(definitions)
-    }
-
-    fn goto_defdecl_response_to_file_locations(
-        response: lsp_types::GotoDefinitionResponse,
-    ) -> Result<Vec<FileLocation>, AnalyzerError> {
-        use lsp_types::GotoDefinitionResponse;
-        match response {
-            GotoDefinitionResponse::Scalar(loc) => Ok(vec![FileLocation::from(&loc)]),
-            GotoDefinitionResponse::Array(locs) => {
-                Ok(locs.iter().map(FileLocation::from).collect())
-            }
-            GotoDefinitionResponse::Link(links) => {
-                Ok(links.iter().map(FileLocation::from).collect())
-            }
-        }
-    }
-
-    /// Get the declaration locations of a symbol
-    async fn get_symbol_declarations(
-        symbol_location: &FileLocation,
-        session: &mut ClangdSession,
-    ) -> Result<Vec<FileLocation>, AnalyzerError> {
-        let file_path = symbol_location.file_path.to_str().ok_or_else(|| {
-            AnalyzerError::NoData("Invalid file path in symbol location".to_string())
-        })?;
-        let uri = format!("file://{}", file_path);
-        let position = symbol_location.range.start;
-
-        session
-            .ensure_file_ready(&symbol_location.file_path)
-            .await?;
-
-        let declaration = session
-            .client_mut()
-            .text_document_declaration(uri.to_string(), position.into())
-            .await
-            .map_err(AnalyzerError::from)?;
-
-        Self::goto_defdecl_response_to_file_locations(declaration)
-    }
-
-    /// Get the definition locations of a symbol
-    async fn get_symbol_definitions(
-        symbol_location: &FileLocation,
-        session: &mut ClangdSession,
-    ) -> Result<Vec<FileLocation>, AnalyzerError> {
-        let file_path = symbol_location.file_path.to_str().ok_or_else(|| {
-            AnalyzerError::NoData("Invalid file path in symbol location".to_string())
-        })?;
-        let uri = format!("file://{}", file_path);
-        let position = symbol_location.range.start;
-
-        session
-            .ensure_file_ready(&symbol_location.file_path)
-            .await?;
-
-        let definition = session
-            .client_mut()
-            .text_document_definition(uri.to_string(), position.into())
-            .await
-            .map_err(AnalyzerError::from)?;
-
-        Self::goto_defdecl_response_to_file_locations(definition)
-    }
-
-    /// Get hover information for a symbol
-    async fn get_hover_info(
-        symbol_location: &FileLocation,
-        session: &mut ClangdSession,
-    ) -> Result<String, AnalyzerError> {
-        let file_path = symbol_location.file_path.to_str().ok_or_else(|| {
-            AnalyzerError::NoData("Invalid file path in symbol location".to_string())
-        })?;
-        let uri = format!("file://{}", file_path);
-        let position = symbol_location.range.start;
-
-        session
-            .ensure_file_ready(&symbol_location.file_path)
-            .await?;
-
-        let client = session.client_mut();
-        let hover_info = client
-            .text_document_hover(uri.to_string(), position.into())
-            .await
-            .map_err(AnalyzerError::from)?;
-
-        let markup = match hover_info {
-            Some(lsp_types::Hover {
-                contents: lsp_types::HoverContents::Markup(markup),
-                ..
-            }) => Some(markup),
-            _ => None,
-        };
-
-        match markup {
-            Some(lsp_types::MarkupContent {
-                kind: lsp_types::MarkupKind::Markdown,
-                value,
-            }) => Ok(value),
-            Some(lsp_types::MarkupContent {
-                kind: lsp_types::MarkupKind::PlainText,
-                value,
-            }) => Ok(value),
-            _ => Err(AnalyzerError::NoData(
-                "No hover content available".to_string(),
-            )),
-        }
-    }
-
-    /// Get usage examples for a symbol
-    async fn get_examples(
-        session: &mut ClangdSession,
-        file_buffer_manager: &mut RealFileBufferManager,
-        symbol_location: &FileLocation,
-        max_examples: Option<u32>,
-    ) -> Result<Vec<FileLineWithContents>, AnalyzerError> {
-        let file_path = symbol_location.file_path.to_str().ok_or_else(|| {
-            AnalyzerError::NoData("Invalid file path in symbol location".to_string())
-        })?;
-        let uri = format!("file://{}", file_path);
-        let position = symbol_location.range.start;
-
-        session
-            .ensure_file_ready(&symbol_location.file_path)
-            .await?;
-
-        // Get references to the symbol (exclude declaration)
-        let references = session
-            .client_mut()
-            .text_document_references(uri.to_string(), position.into(), false)
-            .await
-            .map_err(AnalyzerError::from)?;
-
-        // Convert references to FileLocation
-        let reference_locations: Vec<FileLocation> =
-            references.iter().map(FileLocation::from).collect();
-
-        // Apply max_examples limit if specified
-        let locations_to_process = match max_examples {
-            Some(max) => reference_locations.into_iter().take(max as usize).collect(),
-            None => reference_locations,
-        };
-
-        // Extract code snippets for each reference (full line, trimmed)
-        let examples = locations_to_process
-            .iter()
-            .filter_map(|loc| {
-                let file_line = loc.to_file_line();
-                match FileLineWithContents::new_from_file_line(&file_line, file_buffer_manager) {
-                    Ok(line_with_contents) => Some(line_with_contents),
-                    Err(err) => {
-                        debug!("Failed to get contents for reference: {}", err);
-                        None
-                    }
-                }
-            })
-            .collect();
-
-        Ok(examples)
     }
 }
 
