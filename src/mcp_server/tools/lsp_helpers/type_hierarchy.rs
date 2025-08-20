@@ -32,12 +32,8 @@ pub async fn get_type_hierarchy(
     symbol_location: &FileLocation,
     session: &mut ClangdSession,
 ) -> Result<TypeHierarchy, AnalyzerError> {
-    let file_path = symbol_location
-        .file_path
-        .to_str()
-        .ok_or_else(|| AnalyzerError::NoData("Invalid file path in symbol location".to_string()))?;
-    let uri = format!("file://{}", file_path);
-    let position = symbol_location.range.start;
+    let uri = symbol_location.get_uri();
+    let lsp_position: lsp_types::Position = symbol_location.range.start.into();
 
     session
         .ensure_file_ready(&symbol_location.file_path)
@@ -47,7 +43,7 @@ pub async fn get_type_hierarchy(
 
     // Prepare type hierarchy at the symbol location
     let hierarchy_items = client
-        .text_document_prepare_type_hierarchy(uri.to_string(), position.into())
+        .text_document_prepare_type_hierarchy(uri, lsp_position)
         .await
         .map_err(AnalyzerError::from)?;
 

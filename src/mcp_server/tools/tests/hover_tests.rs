@@ -8,7 +8,6 @@ use crate::mcp_server::tools::lsp_helpers::{
     hover::get_hover_info, symbol_resolution::get_matching_symbol,
 };
 use crate::project::{ProjectScanner, WorkspaceSession};
-use crate::symbol::get_symbol_location;
 use crate::test_utils::integration::TestProject;
 use tracing::info;
 
@@ -42,10 +41,10 @@ async fn test_hover_info_class_symbol() {
     let symbol = get_matching_symbol("Math", &mut locked_session)
         .await
         .expect("Failed to find Math symbol");
-    let symbol_location = get_symbol_location(&symbol).expect("Symbol should have location");
+    let symbol_location = &symbol.location;
 
     // Test getting hover information
-    let hover_info = get_hover_info(&symbol_location, &mut locked_session)
+    let hover_info = get_hover_info(symbol_location, &mut locked_session)
         .await
         .expect("Failed to get hover info");
 
@@ -86,10 +85,10 @@ async fn test_hover_info_function_symbol() {
     let symbol = get_matching_symbol("factorial", &mut locked_session)
         .await
         .expect("Failed to find factorial symbol");
-    let symbol_location = get_symbol_location(&symbol).expect("Symbol should have location");
+    let symbol_location = &symbol.location;
 
     // Test getting hover information
-    let hover_info = get_hover_info(&symbol_location, &mut locked_session)
+    let hover_info = get_hover_info(symbol_location, &mut locked_session)
         .await
         .expect("Failed to get hover info");
 
@@ -134,10 +133,10 @@ async fn test_hover_info_method_symbol() {
     let symbol = get_matching_symbol("Math::Complex::add", &mut locked_session)
         .await
         .expect("Failed to find add method symbol");
-    let symbol_location = get_symbol_location(&symbol).expect("Symbol should have location");
+    let symbol_location = &symbol.location;
 
     // Test getting hover information
-    let hover_info = get_hover_info(&symbol_location, &mut locked_session)
+    let hover_info = get_hover_info(symbol_location, &mut locked_session)
         .await
         .expect("Failed to get hover info");
 
@@ -178,10 +177,10 @@ async fn test_hover_info_interface_symbol() {
     let symbol = get_matching_symbol("IStorageBackend", &mut locked_session)
         .await
         .expect("Failed to find IStorageBackend symbol");
-    let symbol_location = get_symbol_location(&symbol).expect("Symbol should have location");
+    let symbol_location = &symbol.location;
 
     // Test getting hover information
-    let hover_info = get_hover_info(&symbol_location, &mut locked_session)
+    let hover_info = get_hover_info(symbol_location, &mut locked_session)
         .await
         .expect("Failed to get hover info");
 

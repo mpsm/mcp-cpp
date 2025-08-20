@@ -169,7 +169,7 @@ impl<T: Transport + 'static> LspClientTrait for LspClient<T> {
             #[allow(deprecated)]
             root_path: None, // Deprecated
             #[allow(deprecated)]
-            root_uri: root_uri.map(|uri| uri.parse().unwrap()),
+            root_uri: root_uri.map(|uri| uri.parse::<lsp_types::Uri>().unwrap()),
             initialization_options: None,
             work_done_progress_params: lsp_types::WorkDoneProgressParams::default(),
             capabilities: ClientCapabilities {
@@ -295,7 +295,7 @@ impl<T: Transport + 'static> LspClientTrait for LspClient<T> {
 
     async fn open_text_document(
         &mut self,
-        uri: String,
+        uri: lsp_types::Uri,
         language_id: String,
         version: i32,
         text: String,
@@ -306,9 +306,7 @@ impl<T: Transport + 'static> LspClientTrait for LspClient<T> {
 
         let params = DidOpenTextDocumentParams {
             text_document: TextDocumentItem {
-                uri: uri
-                    .parse()
-                    .map_err(|e| LspError::Protocol(format!("Invalid URI: {}", e)))?,
+                uri,
                 language_id,
                 version,
                 text,
@@ -322,17 +320,13 @@ impl<T: Transport + 'static> LspClientTrait for LspClient<T> {
         Ok(())
     }
 
-    async fn close_text_document(&mut self, uri: String) -> Result<(), LspError> {
+    async fn close_text_document(&mut self, uri: lsp_types::Uri) -> Result<(), LspError> {
         if !self.initialized {
             return Err(LspError::NotInitialized);
         }
 
         let params = DidCloseTextDocumentParams {
-            text_document: TextDocumentIdentifier {
-                uri: uri
-                    .parse()
-                    .map_err(|e| LspError::Protocol(format!("Invalid URI: {}", e)))?,
-            },
+            text_document: TextDocumentIdentifier { uri },
         };
 
         debug!("Closing text document: {:?}", params.text_document.uri);
@@ -344,7 +338,7 @@ impl<T: Transport + 'static> LspClientTrait for LspClient<T> {
 
     async fn change_text_document(
         &mut self,
-        uri: String,
+        uri: lsp_types::Uri,
         version: i32,
         text: String,
     ) -> Result<(), LspError> {
@@ -353,12 +347,7 @@ impl<T: Transport + 'static> LspClientTrait for LspClient<T> {
         }
 
         let params = DidChangeTextDocumentParams {
-            text_document: VersionedTextDocumentIdentifier {
-                uri: uri
-                    .parse()
-                    .map_err(|e| LspError::Protocol(format!("Invalid URI: {}", e)))?,
-                version,
-            },
+            text_document: VersionedTextDocumentIdentifier { uri, version },
             content_changes: vec![TextDocumentContentChangeEvent {
                 range: None,
                 range_length: None,
@@ -424,7 +413,7 @@ impl<T: Transport + 'static> LspClientTrait for LspClient<T> {
 
     async fn text_document_definition(
         &mut self,
-        uri: String,
+        uri: lsp_types::Uri,
         position: Position,
     ) -> Result<GotoDefinitionResponse, LspError> {
         if !self.initialized {
@@ -433,11 +422,7 @@ impl<T: Transport + 'static> LspClientTrait for LspClient<T> {
 
         let params = GotoDefinitionParams {
             text_document_position_params: TextDocumentPositionParams {
-                text_document: TextDocumentIdentifier {
-                    uri: uri
-                        .parse()
-                        .map_err(|e| LspError::Protocol(format!("Invalid URI: {}", e)))?,
-                },
+                text_document: TextDocumentIdentifier { uri },
                 position,
             },
             work_done_progress_params: Default::default(),
@@ -458,7 +443,7 @@ impl<T: Transport + 'static> LspClientTrait for LspClient<T> {
 
     async fn text_document_declaration(
         &mut self,
-        uri: String,
+        uri: lsp_types::Uri,
         position: Position,
     ) -> Result<lsp_types::request::GotoDeclarationResponse, LspError> {
         if !self.initialized {
@@ -467,11 +452,7 @@ impl<T: Transport + 'static> LspClientTrait for LspClient<T> {
 
         let params = lsp_types::request::GotoDeclarationParams {
             text_document_position_params: TextDocumentPositionParams {
-                text_document: TextDocumentIdentifier {
-                    uri: uri
-                        .parse()
-                        .map_err(|e| LspError::Protocol(format!("Invalid URI: {}", e)))?,
-                },
+                text_document: TextDocumentIdentifier { uri },
                 position,
             },
             work_done_progress_params: Default::default(),
@@ -492,7 +473,7 @@ impl<T: Transport + 'static> LspClientTrait for LspClient<T> {
 
     async fn text_document_references(
         &mut self,
-        uri: String,
+        uri: lsp_types::Uri,
         position: Position,
         include_declaration: bool,
     ) -> Result<Vec<Location>, LspError> {
@@ -502,11 +483,7 @@ impl<T: Transport + 'static> LspClientTrait for LspClient<T> {
 
         let params = ReferenceParams {
             text_document_position: TextDocumentPositionParams {
-                text_document: TextDocumentIdentifier {
-                    uri: uri
-                        .parse()
-                        .map_err(|e| LspError::Protocol(format!("Invalid URI: {}", e)))?,
-                },
+                text_document: TextDocumentIdentifier { uri },
                 position,
             },
             context: ReferenceContext {
@@ -531,7 +508,7 @@ impl<T: Transport + 'static> LspClientTrait for LspClient<T> {
 
     async fn text_document_hover(
         &mut self,
-        uri: String,
+        uri: lsp_types::Uri,
         position: Position,
     ) -> Result<Option<lsp_types::Hover>, LspError> {
         if !self.initialized {
@@ -540,11 +517,7 @@ impl<T: Transport + 'static> LspClientTrait for LspClient<T> {
 
         let params = HoverParams {
             text_document_position_params: TextDocumentPositionParams {
-                text_document: TextDocumentIdentifier {
-                    uri: uri
-                        .parse()
-                        .map_err(|e| LspError::Protocol(format!("Invalid URI: {}", e)))?,
-                },
+                text_document: TextDocumentIdentifier { uri },
                 position,
             },
             work_done_progress_params: Default::default(),
@@ -564,18 +537,14 @@ impl<T: Transport + 'static> LspClientTrait for LspClient<T> {
 
     async fn text_document_document_symbol(
         &mut self,
-        uri: String,
+        uri: lsp_types::Uri,
     ) -> Result<DocumentSymbolResponse, LspError> {
         if !self.initialized {
             return Err(LspError::NotInitialized);
         }
 
         let params = DocumentSymbolParams {
-            text_document: TextDocumentIdentifier {
-                uri: uri
-                    .parse()
-                    .map_err(|e| LspError::Protocol(format!("Invalid URI: {}", e)))?,
-            },
+            text_document: TextDocumentIdentifier { uri },
             work_done_progress_params: Default::default(),
             partial_result_params: Default::default(),
         };
@@ -597,7 +566,7 @@ impl<T: Transport + 'static> LspClientTrait for LspClient<T> {
 
     async fn text_document_prepare_call_hierarchy(
         &mut self,
-        uri: String,
+        uri: lsp_types::Uri,
         position: Position,
     ) -> Result<Vec<CallHierarchyItem>, LspError> {
         if !self.initialized {
@@ -606,11 +575,7 @@ impl<T: Transport + 'static> LspClientTrait for LspClient<T> {
 
         let params = CallHierarchyPrepareParams {
             text_document_position_params: TextDocumentPositionParams {
-                text_document: TextDocumentIdentifier {
-                    uri: uri
-                        .parse()
-                        .map_err(|e| LspError::Protocol(format!("Invalid URI: {}", e)))?,
-                },
+                text_document: TextDocumentIdentifier { uri },
                 position,
             },
             work_done_progress_params: Default::default(),
@@ -678,7 +643,7 @@ impl<T: Transport + 'static> LspClientTrait for LspClient<T> {
 
     async fn text_document_prepare_type_hierarchy(
         &mut self,
-        uri: String,
+        uri: lsp_types::Uri,
         position: Position,
     ) -> Result<Option<Vec<TypeHierarchyItem>>, LspError> {
         if !self.initialized {
@@ -687,11 +652,7 @@ impl<T: Transport + 'static> LspClientTrait for LspClient<T> {
 
         let params = TypeHierarchyPrepareParams {
             text_document_position_params: TextDocumentPositionParams {
-                text_document: TextDocumentIdentifier {
-                    uri: uri
-                        .parse()
-                        .map_err(|e| LspError::Protocol(format!("Invalid URI: {}", e)))?,
-                },
+                text_document: TextDocumentIdentifier { uri },
                 position,
             },
             work_done_progress_params: Default::default(),
@@ -782,7 +743,7 @@ mod tests {
                             tags: None,
                             container_name: Some("MockClass".to_string()),
                             location: lsp_types::OneOf::Left(Location {
-                                uri: "file:///mock/file.cpp".parse().unwrap(),
+                                uri: "file:///mock/file.cpp".parse::<lsp_types::Uri>().unwrap(),
                                 range: Range {
                                     start: Position {
                                         line: 10,
@@ -802,7 +763,7 @@ mod tests {
                             tags: None,
                             container_name: None,
                             location: lsp_types::OneOf::Left(Location {
-                                uri: "file:///mock/file.cpp".parse().unwrap(),
+                                uri: "file:///mock/file.cpp".parse::<lsp_types::Uri>().unwrap(),
                                 range: Range {
                                     start: Position {
                                         line: 5,
@@ -854,12 +815,17 @@ mod tests {
 
         client
             .expect_text_document_definition()
-            .with(eq("file:///test.cpp".to_string()), eq(position))
+            .with(
+                eq("file:///test.cpp".parse::<lsp_types::Uri>().unwrap()),
+                eq(position),
+            )
             .times(1)
             .returning(|_, _| {
                 Box::pin(async {
                     Ok(GotoDefinitionResponse::Scalar(Location {
-                        uri: "file:///mock/definition.cpp".parse().unwrap(),
+                        uri: "file:///mock/definition.cpp"
+                            .parse::<lsp_types::Uri>()
+                            .unwrap(),
                         range: Range {
                             start: Position {
                                 line: 42,
@@ -875,7 +841,10 @@ mod tests {
             });
 
         let result = client
-            .text_document_definition("file:///test.cpp".to_string(), position)
+            .text_document_definition(
+                "file:///test.cpp".parse::<lsp_types::Uri>().unwrap(),
+                position,
+            )
             .await;
 
         assert!(result.is_ok());
@@ -899,13 +868,17 @@ mod tests {
 
         client
             .expect_text_document_references()
-            .with(eq("file:///test.cpp".to_string()), eq(position), eq(true))
+            .with(
+                eq("file:///test.cpp".parse::<lsp_types::Uri>().unwrap()),
+                eq(position),
+                eq(true),
+            )
             .times(1)
             .returning(|_, _, _| {
                 Box::pin(async {
                     Ok(vec![
                         Location {
-                            uri: "file:///mock/usage1.cpp".parse().unwrap(),
+                            uri: "file:///mock/usage1.cpp".parse::<lsp_types::Uri>().unwrap(),
                             range: Range {
                                 start: Position {
                                     line: 25,
@@ -918,7 +891,7 @@ mod tests {
                             },
                         },
                         Location {
-                            uri: "file:///mock/usage2.cpp".parse().unwrap(),
+                            uri: "file:///mock/usage2.cpp".parse::<lsp_types::Uri>().unwrap(),
                             range: Range {
                                 start: Position {
                                     line: 30,
@@ -935,7 +908,11 @@ mod tests {
             });
 
         let result = client
-            .text_document_references("file:///test.cpp".to_string(), position, true)
+            .text_document_references(
+                "file:///test.cpp".parse::<lsp_types::Uri>().unwrap(),
+                position,
+                true,
+            )
             .await;
 
         assert!(result.is_ok());
@@ -956,7 +933,7 @@ mod tests {
 
         client
             .expect_text_document_hover()
-            .with(eq("file:///test.cpp".to_string()), eq(position))
+            .with(eq("file:///test.cpp".parse::<lsp_types::Uri>().unwrap()), eq(position))
             .times(1)
             .returning(|_, _| {
                 Box::pin(async {
@@ -973,7 +950,10 @@ mod tests {
             });
 
         let result = client
-            .text_document_hover("file:///test.cpp".to_string(), position)
+            .text_document_hover(
+                "file:///test.cpp".parse::<lsp_types::Uri>().unwrap(),
+                position,
+            )
             .await;
 
         assert!(result.is_ok());
@@ -996,7 +976,7 @@ mod tests {
 
         client
             .expect_text_document_document_symbol()
-            .with(eq("file:///test.cpp".to_string()))
+            .with(eq("file:///test.cpp".parse::<lsp_types::Uri>().unwrap()))
             .times(1)
             .returning(|_| {
                 Box::pin(async {
@@ -1007,7 +987,7 @@ mod tests {
                         #[allow(deprecated)]
                         deprecated: None,
                         location: Location {
-                            uri: "file:///mock/file.cpp".parse().unwrap(),
+                            uri: "file:///mock/file.cpp".parse::<lsp_types::Uri>().unwrap(),
                             range: Range {
                                 start: Position {
                                     line: 5,
@@ -1025,7 +1005,7 @@ mod tests {
             });
 
         let result = client
-            .text_document_document_symbol("file:///test.cpp".to_string())
+            .text_document_document_symbol("file:///test.cpp".parse::<lsp_types::Uri>().unwrap())
             .await;
 
         assert!(result.is_ok());
@@ -1052,7 +1032,10 @@ mod tests {
 
         client
             .expect_text_document_prepare_call_hierarchy()
-            .with(eq("file:///test.cpp".to_string()), eq(position))
+            .with(
+                eq("file:///test.cpp".parse::<lsp_types::Uri>().unwrap()),
+                eq(position),
+            )
             .times(1)
             .returning(|_, _| {
                 Box::pin(async {
@@ -1061,7 +1044,7 @@ mod tests {
                         kind: SymbolKind::FUNCTION,
                         tags: None,
                         detail: Some("Mock function detail".to_string()),
-                        uri: "file:///mock/file.cpp".parse().unwrap(),
+                        uri: "file:///mock/file.cpp".parse::<lsp_types::Uri>().unwrap(),
                         range: Range {
                             start: Position {
                                 line: 10,
@@ -1088,7 +1071,10 @@ mod tests {
             });
 
         let result = client
-            .text_document_prepare_call_hierarchy("file:///test.cpp".to_string(), position)
+            .text_document_prepare_call_hierarchy(
+                "file:///test.cpp".parse::<lsp_types::Uri>().unwrap(),
+                position,
+            )
             .await;
 
         assert!(result.is_ok());
@@ -1109,7 +1095,7 @@ mod tests {
             kind: SymbolKind::FUNCTION,
             tags: None,
             detail: None,
-            uri: "file:///test.cpp".parse().unwrap(),
+            uri: "file:///test.cpp".parse::<lsp_types::Uri>().unwrap(),
             range: Range {
                 start: Position {
                     line: 0,
@@ -1144,7 +1130,7 @@ mod tests {
                             kind: SymbolKind::FUNCTION,
                             tags: None,
                             detail: None,
-                            uri: "file:///caller.cpp".parse().unwrap(),
+                            uri: "file:///caller.cpp".parse::<lsp_types::Uri>().unwrap(),
                             range: Range {
                                 start: Position {
                                     line: 5,
@@ -1200,7 +1186,7 @@ mod tests {
             kind: SymbolKind::FUNCTION,
             tags: None,
             detail: None,
-            uri: "file:///test.cpp".parse().unwrap(),
+            uri: "file:///test.cpp".parse::<lsp_types::Uri>().unwrap(),
             range: Range {
                 start: Position {
                     line: 0,
@@ -1235,7 +1221,7 @@ mod tests {
                             kind: SymbolKind::FUNCTION,
                             tags: None,
                             detail: None,
-                            uri: "file:///callee.cpp".parse().unwrap(),
+                            uri: "file:///callee.cpp".parse::<lsp_types::Uri>().unwrap(),
                             range: Range {
                                 start: Position {
                                     line: 15,
@@ -1335,42 +1321,60 @@ mod tests {
 
         assert!(matches!(
             client
-                .text_document_definition("file:///test.cpp".to_string(), position)
+                .text_document_definition(
+                    "file:///test.cpp".parse::<lsp_types::Uri>().unwrap(),
+                    position
+                )
                 .await,
             Err(LspError::NotInitialized)
         ));
 
         assert!(matches!(
             client
-                .text_document_declaration("file:///test.cpp".to_string(), position)
+                .text_document_declaration(
+                    "file:///test.cpp".parse::<lsp_types::Uri>().unwrap(),
+                    position
+                )
                 .await,
             Err(LspError::NotInitialized)
         ));
 
         assert!(matches!(
             client
-                .text_document_references("file:///test.cpp".to_string(), position, true)
+                .text_document_references(
+                    "file:///test.cpp".parse::<lsp_types::Uri>().unwrap(),
+                    position,
+                    true
+                )
                 .await,
             Err(LspError::NotInitialized)
         ));
 
         assert!(matches!(
             client
-                .text_document_hover("file:///test.cpp".to_string(), position)
+                .text_document_hover(
+                    "file:///test.cpp".parse::<lsp_types::Uri>().unwrap(),
+                    position
+                )
                 .await,
             Err(LspError::NotInitialized)
         ));
 
         assert!(matches!(
             client
-                .text_document_document_symbol("file:///test.cpp".to_string())
+                .text_document_document_symbol(
+                    "file:///test.cpp".parse::<lsp_types::Uri>().unwrap()
+                )
                 .await,
             Err(LspError::NotInitialized)
         ));
 
         assert!(matches!(
             client
-                .text_document_prepare_call_hierarchy("file:///test.cpp".to_string(), position)
+                .text_document_prepare_call_hierarchy(
+                    "file:///test.cpp".parse::<lsp_types::Uri>().unwrap(),
+                    position
+                )
                 .await,
             Err(LspError::NotInitialized)
         ));
@@ -1380,7 +1384,7 @@ mod tests {
             kind: SymbolKind::FUNCTION,
             tags: None,
             detail: None,
-            uri: "file:///test.cpp".parse().unwrap(),
+            uri: "file:///test.cpp".parse::<lsp_types::Uri>().unwrap(),
             range: Range {
                 start: Position {
                     line: 0,

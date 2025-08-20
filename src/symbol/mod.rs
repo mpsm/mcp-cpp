@@ -8,4 +8,4 @@ mod location;
 mod symbol;
 
 pub use location::{FileLineWithContents, FileLocation};
-pub use symbol::{Symbol, get_symbol_location};
+pub use symbol::Symbol;

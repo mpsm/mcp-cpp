@@ -64,12 +64,8 @@ pub async fn get_symbol_declarations(
     symbol_location: &FileLocation,
     session: &mut ClangdSession,
 ) -> Result<Vec<FileLocation>, AnalyzerError> {
-    let file_path = symbol_location
-        .file_path
-        .to_str()
-        .ok_or_else(|| AnalyzerError::NoData("Invalid file path in symbol location".to_string()))?;
-    let uri = format!("file://{}", file_path);
-    let position = symbol_location.range.start;
+    let uri = symbol_location.get_uri();
+    let lsp_position: lsp_types::Position = symbol_location.range.start.into();
 
     session
         .ensure_file_ready(&symbol_location.file_path)
@@ -77,7 +73,7 @@ pub async fn get_symbol_declarations(
 
     let declaration = session
         .client_mut()
-        .text_document_declaration(uri.to_string(), position.into())
+        .text_document_declaration(uri, lsp_position)
         .await
         .map_err(AnalyzerError::from)?;
 
@@ -89,12 +85,8 @@ pub async fn get_symbol_definitions(
     symbol_location: &FileLocation,
     session: &mut ClangdSession,
 ) -> Result<Vec<FileLocation>, AnalyzerError> {
-    let file_path = symbol_location
-        .file_path
-        .to_str()
-        .ok_or_else(|| AnalyzerError::NoData("Invalid file path in symbol location".to_string()))?;
-    let uri = format!("file://{}", file_path);
-    let position = symbol_location.range.start;
+    let uri = symbol_location.get_uri();
+    let lsp_position: lsp_types::Position = symbol_location.range.start.into();
 
     session
         .ensure_file_ready(&symbol_location.file_path)
@@ -102,7 +94,7 @@ pub async fn get_symbol_definitions(
 
     let definition = session
         .client_mut()
-        .text_document_definition(uri.to_string(), position.into())
+        .text_document_definition(uri, lsp_position)
         .await
         .map_err(AnalyzerError::from)?;
 

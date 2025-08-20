@@ -67,19 +67,19 @@ pub trait LspClientTrait: Send + Sync {
     /// Open a text document in the language server
     async fn open_text_document(
         &mut self,
-        uri: String,
+        uri: lsp_types::Uri,
         language_id: String,
         version: i32,
         text: String,
     ) -> Result<(), LspError>;
 
     /// Close a text document in the language server
-    async fn close_text_document(&mut self, uri: String) -> Result<(), LspError>;
+    async fn close_text_document(&mut self, uri: lsp_types::Uri) -> Result<(), LspError>;
 
     /// Notify the server that a text document has changed
     async fn change_text_document(
         &mut self,
-        uri: String,
+        uri: lsp_types::Uri,
         version: i32,
         text: String,
     ) -> Result<(), LspError>;
@@ -98,7 +98,7 @@ pub trait LspClientTrait: Send + Sync {
     #[allow(dead_code)]
     async fn text_document_definition(
         &mut self,
-        uri: String,
+        uri: lsp_types::Uri,
         position: lsp_types::Position,
     ) -> Result<lsp_types::GotoDefinitionResponse, LspError>;
 
@@ -106,7 +106,7 @@ pub trait LspClientTrait: Send + Sync {
     #[allow(dead_code)]
     async fn text_document_declaration(
         &mut self,
-        uri: String,
+        uri: lsp_types::Uri,
         position: lsp_types::Position,
     ) -> Result<lsp_types::request::GotoDeclarationResponse, LspError>;
 
@@ -114,7 +114,7 @@ pub trait LspClientTrait: Send + Sync {
     #[allow(dead_code)]
     async fn text_document_references(
         &mut self,
-        uri: String,
+        uri: lsp_types::Uri,
         position: lsp_types::Position,
         include_declaration: bool,
     ) -> Result<Vec<lsp_types::Location>, LspError>;
@@ -123,14 +123,14 @@ pub trait LspClientTrait: Send + Sync {
     #[allow(dead_code)]
     async fn text_document_hover(
         &mut self,
-        uri: String,
+        uri: lsp_types::Uri,
         position: lsp_types::Position,
     ) -> Result<Option<lsp_types::Hover>, LspError>;
 
     /// Get all symbols in a text document
     async fn text_document_document_symbol(
         &mut self,
-        uri: String,
+        uri: lsp_types::Uri,
     ) -> Result<lsp_types::DocumentSymbolResponse, LspError>;
 
     // ========================================================================
@@ -141,7 +141,7 @@ pub trait LspClientTrait: Send + Sync {
     #[allow(dead_code)]
     async fn text_document_prepare_call_hierarchy(
         &mut self,
-        uri: String,
+        uri: lsp_types::Uri,
         position: lsp_types::Position,
     ) -> Result<Vec<lsp_types::CallHierarchyItem>, LspError>;
 
@@ -167,7 +167,7 @@ pub trait LspClientTrait: Send + Sync {
     #[allow(dead_code)]
     async fn text_document_prepare_type_hierarchy(
         &mut self,
-        uri: String,
+        uri: lsp_types::Uri,
         position: lsp_types::Position,
     ) -> Result<Option<Vec<lsp_types::TypeHierarchyItem>>, LspError>;
 

@@ -23,12 +23,8 @@ pub async fn get_examples(
     symbol_location: &FileLocation,
     max_examples: Option<u32>,
 ) -> Result<Vec<FileLineWithContents>, AnalyzerError> {
-    let file_path = symbol_location
-        .file_path
-        .to_str()
-        .ok_or_else(|| AnalyzerError::NoData("Invalid file path in symbol location".to_string()))?;
-    let uri = format!("file://{}", file_path);
-    let position = symbol_location.range.start;
+    let uri = symbol_location.get_uri();
+    let lsp_position: lsp_types::Position = symbol_location.range.start.into();
 
     session
         .ensure_file_ready(&symbol_location.file_path)
@@ -37,7 +33,7 @@ pub async fn get_examples(
     // Get references to the symbol (exclude declaration)
     let references = session
         .client_mut()
-        .text_document_references(uri.to_string(), position.into(), false)
+        .text_document_references(uri, lsp_position, false)
         .await
         .map_err(AnalyzerError::from)?;
 

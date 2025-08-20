@@ -26,7 +26,7 @@ use crate::mcp_server::tools::lsp_helpers::{
     type_hierarchy::{TypeHierarchy, get_type_hierarchy},
 };
 use crate::project::ProjectWorkspace;
-use crate::symbol::{FileLineWithContents, Symbol, get_symbol_location};
+use crate::symbol::{FileLineWithContents, Symbol};
 
 // ============================================================================
 // Analyzer Error Type
@@ -197,30 +197,16 @@ pub struct AnalyzerResult {
 const ANALYZER_INDEX_TIMEOUT: Duration = Duration::from_secs(20);
 
 impl AnalyzeSymbolContextTool {
-    /// Resolves the symbol and returns both the symbol and its location
+    /// Resolves the symbol
     async fn resolve_symbol(
         &self,
         locked_session: &mut ClangdSession,
-    ) -> Result<(Symbol, crate::symbol::FileLocation), CallToolError> {
-        let lsp_symbol = match get_matching_symbol(&self.symbol, locked_session).await {
-            Ok(symbol) => symbol,
+    ) -> Result<Symbol, CallToolError> {
+        match get_matching_symbol(&self.symbol, locked_session).await {
+            Ok(symbol) => Ok(symbol),
             Err(err) => {
                 error!("Failed to get matching symbol: {}", err);
-                return Err(CallToolError::from(err));
-            }
-        };
-
-        let symbol: Symbol = lsp_symbol.clone().into();
-        let symbol_location = get_symbol_location(&lsp_symbol);
-
-        match symbol_location {
-            Some(location) => Ok((symbol, location)),
-            None => {
-                error!("No location found for symbol '{}'", self.symbol);
-                Err(CallToolError::new(std::io::Error::new(
-                    std::io::ErrorKind::NotFound,
-                    format!("No location found for symbol '{}'", self.symbol),
-                )))
+                Err(CallToolError::from(err))
             }
         }
     }
@@ -401,14 +387,14 @@ impl AnalyzeSymbolContextTool {
         )
         .await;
 
-        // Resolve symbol and get its location
-        let (symbol, symbol_location) = self.resolve_symbol(&mut locked_session).await?;
+        // Resolve symbol
+        let symbol = self.resolve_symbol(&mut locked_session).await?;
 
         // Get definitions and declarations
         let mut locked_file_buffer = file_buffer_manager.lock().await;
         let (definitions, declarations) = self
             .get_definitions_and_declarations(
-                &symbol_location,
+                &symbol.location,
                 &mut locked_session,
                 &mut locked_file_buffer,
             )
@@ -416,13 +402,13 @@ impl AnalyzeSymbolContextTool {
 
         // Get hover information
         let hover = self
-            .get_hover_documentation(&symbol_location, &mut locked_session)
+            .get_hover_documentation(&symbol.location, &mut locked_session)
             .await;
 
         // Get usage examples
         let examples = self
             .get_usage_examples(
-                &symbol_location,
+                &symbol.location,
                 &mut locked_session,
                 &mut locked_file_buffer,
             )
@@ -430,12 +416,12 @@ impl AnalyzeSymbolContextTool {
 
         // Get hierarchies based on symbol type
         let (type_hierarchy, call_hierarchy) = self
-            .get_hierarchies(&symbol, &symbol_location, &mut locked_session)
+            .get_hierarchies(&symbol, &symbol.location, &mut locked_session)
             .await;
 
         // Get members for classes and structs
         let members = self
-            .get_members(&symbol, &symbol_location, &mut locked_session)
+            .get_members(&symbol, &symbol.location, &mut locked_session)
             .await;
 
         let result = AnalyzerResult {

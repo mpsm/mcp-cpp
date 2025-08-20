@@ -52,11 +52,7 @@ pub async fn get_members(
     session: &mut ClangdSession,
     target_name: &str,
 ) -> Result<Members, AnalyzerError> {
-    let file_path = symbol_location
-        .file_path
-        .to_str()
-        .ok_or_else(|| AnalyzerError::NoData("Invalid file path in symbol location".to_string()))?;
-    let uri = format!("file://{}", file_path);
+    let uri = symbol_location.get_uri();
 
     session
         .ensure_file_ready(&symbol_location.file_path)

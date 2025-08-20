@@ -93,7 +93,10 @@ impl ClangdFileManager {
         let content_hash = Self::compute_hash(&content);
 
         // Generate file URI
-        let uri = format!("file://{}", abs_path.display());
+        let uri_string = format!("file://{}", abs_path.display());
+        let uri: lsp_types::Uri = uri_string
+            .parse()
+            .map_err(|e| FileManagerError::InvalidPath(format!("Invalid URI: {}", e)))?;
 
         // Check if file is already open
         if let Some(entry) = self.opened_files.get(&abs_path) {
@@ -120,7 +123,7 @@ impl ClangdFileManager {
             self.opened_files.insert(
                 abs_path,
                 FileEntry {
-                    uri,
+                    uri: uri_string.clone(),
                     content_hash,
                     version: new_version,
                 },
@@ -136,14 +139,14 @@ impl ClangdFileManager {
             let language_id = Self::get_language_id(&abs_path);
 
             client
-                .open_text_document(uri.clone(), language_id.to_string(), version, content)
+                .open_text_document(uri, language_id.to_string(), version, content)
                 .await?;
 
             // Track the opened file
             self.opened_files.insert(
                 abs_path,
                 FileEntry {
-                    uri,
+                    uri: uri_string.clone(),
                     content_hash,
                     version,
                 },
@@ -166,7 +169,11 @@ impl ClangdFileManager {
 
         if let Some(entry) = self.opened_files.remove(&abs_path) {
             info!("Closing file {}", abs_path.display());
-            client.close_text_document(entry.uri).await?;
+            let uri: lsp_types::Uri = entry
+                .uri
+                .parse()
+                .map_err(|e| FileManagerError::InvalidPath(format!("Invalid URI: {}", e)))?;
+            client.close_text_document(uri).await?;
             Ok(())
         } else {
             debug!("File {} was not open", abs_path.display());

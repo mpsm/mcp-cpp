@@ -32,12 +32,8 @@ pub async fn get_call_hierarchy(
     symbol_location: &FileLocation,
     session: &mut ClangdSession,
 ) -> Result<CallHierarchy, AnalyzerError> {
-    let file_path = symbol_location
-        .file_path
-        .to_str()
-        .ok_or_else(|| AnalyzerError::NoData("Invalid file path in symbol location".to_string()))?;
-    let uri = format!("file://{}", file_path);
-    let position = symbol_location.range.start;
+    let uri = symbol_location.get_uri();
+    let lsp_position: lsp_types::Position = symbol_location.range.start.into();
 
     session
         .ensure_file_ready(&symbol_location.file_path)
@@ -47,7 +43,7 @@ pub async fn get_call_hierarchy(
 
     // Prepare call hierarchy at the symbol location
     let call_hierarchy_items = client
-        .text_document_prepare_call_hierarchy(uri.to_string(), position.into())
+        .text_document_prepare_call_hierarchy(uri, lsp_position)
         .await
         .map_err(AnalyzerError::from)?;
 

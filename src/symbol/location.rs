@@ -60,6 +60,17 @@ impl FileLocation {
             line_number: self.get_start_line(),
         }
     }
+
+    /// Get the LSP URI for this file location
+    pub fn get_uri(&self) -> lsp_types::Uri {
+        let path_str = self.file_path.to_string_lossy();
+        let uri_str = if path_str.starts_with('/') {
+            format!("file://{}", path_str)
+        } else {
+            format!("file:///{}", path_str)
+        };
+        uri_str.parse().expect("Failed to parse URI from file path")
+    }
 }
 
 impl From<Position> for FileBufPosition {

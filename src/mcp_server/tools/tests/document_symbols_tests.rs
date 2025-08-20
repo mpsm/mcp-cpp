@@ -33,7 +33,8 @@ async fn test_find_specific_symbol_in_document() {
         "Math.hpp should exist in test project"
     );
 
-    let file_uri = format!("file://{}", math_header.display());
+    let file_uri_str = format!("file://{}", math_header.display());
+    let file_uri: lsp_types::Uri = file_uri_str.parse().unwrap();
 
     // Get document symbols for Math.hpp
     let symbols = get_document_symbols(&mut session, file_uri.clone())
@@ -85,7 +86,8 @@ async fn test_list_all_methods_for_class() {
     let (test_project, mut session) = create_integration_test_session().await.unwrap();
 
     let math_header = test_project.project_root.join("include/Math.hpp");
-    let file_uri = format!("file://{}", math_header.display());
+    let file_uri_str = format!("file://{}", math_header.display());
+    let file_uri: lsp_types::Uri = file_uri_str.parse().unwrap();
 
     let symbols = get_document_symbols(&mut session, file_uri).await.unwrap();
 
@@ -133,7 +135,8 @@ async fn test_nested_class_symbol_traversal() {
     let (test_project, mut session) = create_integration_test_session().await.unwrap();
 
     let math_header = test_project.project_root.join("include/Math.hpp");
-    let file_uri = format!("file://{}", math_header.display());
+    let file_uri_str = format!("file://{}", math_header.display());
+    let file_uri: lsp_types::Uri = file_uri_str.parse().unwrap();
 
     let symbols = get_document_symbols(&mut session, file_uri).await.unwrap();
 
@@ -188,7 +191,8 @@ async fn test_template_class_symbol_detection() {
     let (test_project, mut session) = create_integration_test_session().await.unwrap();
 
     let math_header = test_project.project_root.join("include/Math.hpp");
-    let file_uri = format!("file://{}", math_header.display());
+    let file_uri_str = format!("file://{}", math_header.display());
+    let file_uri: lsp_types::Uri = file_uri_str.parse().unwrap();
 
     let symbols = get_document_symbols(&mut session, file_uri).await.unwrap();
 
@@ -305,7 +309,8 @@ async fn test_hierarchical_vs_flat_response_handling() {
     let (test_project, mut session) = create_integration_test_session().await.unwrap();
 
     let math_header = test_project.project_root.join("include/Math.hpp");
-    let file_uri = format!("file://{}", math_header.display());
+    let file_uri_str = format!("file://{}", math_header.display());
+    let file_uri: lsp_types::Uri = file_uri_str.parse().unwrap();
 
     // This should always succeed due to our hierarchicalDocumentSymbolSupport: true
     let symbols = get_document_symbols(&mut session, file_uri).await;
@@ -330,10 +335,11 @@ async fn test_hierarchical_vs_flat_response_handling() {
     );
 
     // Test with non-existent file - should get appropriate error
-    let bad_file_uri = format!(
+    let bad_file_uri_str = format!(
         "file://{}",
         test_project.project_root.join("nonexistent.hpp").display()
     );
+    let bad_file_uri: lsp_types::Uri = bad_file_uri_str.parse().unwrap();
     let bad_result = get_document_symbols(&mut session, bad_file_uri).await;
 
     // Should get an error for non-existent file

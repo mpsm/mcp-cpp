@@ -232,14 +232,15 @@ impl Default for SymbolSearchBuilder {
 #[allow(dead_code)]
 pub async fn get_document_symbols(
     session: &mut ClangdSession,
-    file_uri: String,
+    file_uri: lsp_types::Uri,
 ) -> Result<Vec<DocumentSymbol>, AnalyzerError> {
-    trace!("Requesting document symbols for URI: {}", file_uri);
+    trace!("Requesting document symbols for URI: {:?}", file_uri);
 
     // Ensure file is ready in clangd session
-    let file_path = file_uri.strip_prefix("file://").unwrap_or(&file_uri);
+    let uri_str = file_uri.to_string();
+    let file_path_str = uri_str.strip_prefix("file://").unwrap_or(&uri_str);
 
-    session.ensure_file_ready(Path::new(file_path)).await?;
+    session.ensure_file_ready(Path::new(file_path_str)).await?;
 
     let client = session.client_mut();
 
@@ -268,14 +269,14 @@ pub async fn get_document_symbols(
         }
         DocumentSymbolResponse::Flat(flat_symbols) => {
             warn!(
-                "Received flat document symbols response for '{}' despite hierarchical support enabled. \
+                "Received flat document symbols response for '{:?}' despite hierarchical support enabled. \
                  This is unexpected and may indicate a clangd configuration issue. \
                  Flat response contains {} symbols.",
                 file_uri,
                 flat_symbols.len()
             );
             Err(AnalyzerError::NoData(format!(
-                "Unexpected flat document symbols response for '{}' despite hierarchical client capability. Expected nested DocumentSymbol format.",
+                "Unexpected flat document symbols response for '{:?}' despite hierarchical client capability. Expected nested DocumentSymbol format.",
                 file_uri
             )))
         }

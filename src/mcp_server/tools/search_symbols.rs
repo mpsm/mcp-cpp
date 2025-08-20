@@ -230,7 +230,10 @@ impl SearchSymbolsTool {
         client: &mut impl LspClientTrait,
         file_path: &str,
     ) -> Result<Vec<serde_json::Value>, String> {
-        let file_uri = self.normalize_file_uri(file_path);
+        let file_uri_str = self.normalize_file_uri(file_path);
+        let file_uri: lsp_types::Uri = file_uri_str
+            .parse()
+            .map_err(|e| format!("Invalid URI: {}", e))?;
 
         let response = client
             .text_document_document_symbol(file_uri)

@@ -10,7 +10,6 @@ use crate::mcp_server::tools::lsp_helpers::{
     symbol_resolution::get_matching_symbol,
 };
 use crate::project::{ProjectScanner, WorkspaceSession};
-use crate::symbol::get_symbol_location;
 use crate::test_utils::integration::TestProject;
 use std::sync::Arc;
 use tokio::sync::Mutex;
@@ -48,13 +47,12 @@ async fn test_definitions_class_symbol() {
     let symbol = get_matching_symbol("Math", &mut locked_session)
         .await
         .expect("Failed to find Math symbol");
-    let symbol_location = get_symbol_location(&symbol).expect("Symbol should have location");
 
     // Test getting definitions
     let definitions = get_definitions(
         &mut locked_session,
         &mut locked_file_buffer,
-        &symbol_location,
+        &symbol.location,
     )
     .await
     .expect("Failed to get definitions");
@@ -106,13 +104,12 @@ async fn test_declarations_class_symbol() {
     let symbol = get_matching_symbol("Math", &mut locked_session)
         .await
         .expect("Failed to find Math symbol");
-    let symbol_location = get_symbol_location(&symbol).expect("Symbol should have location");
 
     // Test getting declarations
     let declarations = get_declarations(
         &mut locked_session,
         &mut locked_file_buffer,
-        &symbol_location,
+        &symbol.location,
     )
     .await
     .expect("Failed to get declarations");
@@ -164,13 +161,12 @@ async fn test_definitions_function_symbol() {
     let symbol = get_matching_symbol("factorial", &mut locked_session)
         .await
         .expect("Failed to find factorial symbol");
-    let symbol_location = get_symbol_location(&symbol).expect("Symbol should have location");
 
     // Test getting definitions
     let definitions = get_definitions(
         &mut locked_session,
         &mut locked_file_buffer,
-        &symbol_location,
+        &symbol.location,
     )
     .await
     .expect("Failed to get definitions");
@@ -229,13 +225,12 @@ async fn test_definitions_method_symbol() {
     let symbol = get_matching_symbol("Math::Complex::add", &mut locked_session)
         .await
         .expect("Failed to find add method symbol");
-    let symbol_location = get_symbol_location(&symbol).expect("Symbol should have location");
 
     // Test getting definitions
     let definitions = get_definitions(
         &mut locked_session,
         &mut locked_file_buffer,
-        &symbol_location,
+        &symbol.location,
     )
     .await
     .expect("Failed to get definitions");
