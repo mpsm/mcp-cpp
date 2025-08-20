@@ -19,26 +19,22 @@ use crate::mcp_server::tools::analyze_symbols::AnalyzerError;
 
 /// Trait for types that can check if they contain a position
 pub trait PositionContains {
-    /// Check if this range/symbol contains the given position
-    fn contains_position(&self, line: u32, character: u32) -> bool;
-
     /// Check if this range/symbol contains the given Position
-    #[allow(dead_code)]
-    fn contains(&self, position: &Position) -> bool {
-        self.contains_position(position.line, position.character)
-    }
+    fn contains(&self, position: &Position) -> bool;
 }
 
 impl PositionContains for Range {
-    fn contains_position(&self, line: u32, character: u32) -> bool {
-        (line > self.start.line || (line == self.start.line && character >= self.start.character))
-            && (line < self.end.line || (line == self.end.line && character <= self.end.character))
+    fn contains(&self, position: &Position) -> bool {
+        (position.line > self.start.line
+            || (position.line == self.start.line && position.character >= self.start.character))
+            && (position.line < self.end.line
+                || (position.line == self.end.line && position.character <= self.end.character))
     }
 }
 
 impl PositionContains for DocumentSymbol {
-    fn contains_position(&self, line: u32, character: u32) -> bool {
-        self.selection_range.contains_position(line, character)
+    fn contains(&self, position: &Position) -> bool {
+        self.selection_range.contains(position)
     }
 }
 
@@ -191,7 +187,7 @@ impl<'a> Iterator for DocumentSymbolIterator<'a> {
 /// Builder pattern for flexible symbol searching
 #[derive(Debug, Clone)]
 pub struct SymbolSearchBuilder {
-    position: Option<(u32, u32)>,
+    position: Option<Position>,
     name: Option<String>,
     kind: Option<lsp_types::SymbolKind>,
     path_contains: Option<String>,
@@ -209,8 +205,8 @@ impl SymbolSearchBuilder {
     }
 
     /// Search for symbol at specific position
-    pub fn at_position(mut self, line: u32, character: u32) -> Self {
-        self.position = Some((line, character));
+    pub fn at_position(mut self, position: Position) -> Self {
+        self.position = Some(position);
         self
     }
 
@@ -281,8 +277,8 @@ impl SymbolSearchBuilder {
     /// Check if a symbol matches the search criteria
     fn matches_symbol(&self, symbol: &DocumentSymbol, path: &[&str]) -> bool {
         // Position matching
-        if let Some((line, character)) = self.position
-            && !symbol.contains_position(line, character)
+        if let Some(ref position) = self.position
+            && !symbol.contains(position)
         {
             return false;
         }
@@ -335,6 +331,44 @@ impl Default for SymbolSearchBuilder {
 // ============================================================================
 // Public API
 // ============================================================================
+
+/// Get document symbols for a symbol and find the matching DocumentSymbol
+///
+/// This function retrieves document symbols for the file containing the symbol,
+/// then searches the hierarchical structure to find the matching DocumentSymbol
+/// based on the symbol's name and location.
+///
+/// # Arguments
+/// * `session` - Active clangd session
+/// * `symbol_name` - Name of the symbol to find
+/// * `symbol_location` - Location of the symbol
+///
+/// # Returns
+/// * `Ok(Some(DocumentSymbol))` - The matching document symbol
+/// * `Ok(None)` - No matching symbol found
+/// * `Err(AnalyzerError)` - LSP error
+pub async fn get_symbol_document_symbol(
+    session: &mut ClangdSession,
+    symbol_name: &str,
+    symbol_location: &crate::symbol::FileLocation,
+) -> Result<Option<lsp_types::DocumentSymbol>, AnalyzerError> {
+    let uri = symbol_location.get_uri();
+
+    // Get all document symbols for the file
+    let document_symbols = get_document_symbols(session, uri).await?;
+
+    // Search for the matching symbol by name and location
+    let matched_symbol = SymbolSearchBuilder::new()
+        .with_name(symbol_name)
+        .at_position(Position {
+            line: symbol_location.range.start.line,
+            character: symbol_location.range.start.column,
+        })
+        .find_first(&document_symbols)
+        .cloned();
+
+    Ok(matched_symbol)
+}
 
 /// Get document symbols for a file URI, returning only hierarchical symbols
 ///
@@ -421,13 +455,12 @@ pub async fn get_document_symbols(
 /// * `Some(&DocumentSymbol)` - Found symbol reference
 /// * `None` - No symbol found at the target position
 #[allow(dead_code)]
-pub fn find_symbol_at_position(
-    symbols: &[DocumentSymbol],
-    target_line: u32,
-    target_character: u32,
-) -> Option<&DocumentSymbol> {
+pub fn find_symbol_at_position<'a>(
+    symbols: &'a [DocumentSymbol],
+    position: &Position,
+) -> Option<&'a DocumentSymbol> {
     SymbolSearchBuilder::new()
-        .at_position(target_line, target_character)
+        .at_position(*position)
         .find_first(symbols)
 }
 
@@ -624,15 +657,24 @@ mod tests {
         };
 
         // Test position within range
-        assert!(range.contains_position(10, 5));
+        assert!(range.contains(&Position {
+            line: 10,
+            character: 5
+        }));
         assert!(range.contains(&Position {
             line: 10,
             character: 5
         }));
 
         // Test position outside range
-        assert!(!range.contains_position(11, 5));
-        assert!(!range.contains_position(10, 15));
+        assert!(!range.contains(&Position {
+            line: 11,
+            character: 5
+        }));
+        assert!(!range.contains(&Position {
+            line: 10,
+            character: 15
+        }));
     }
 
     #[test]
@@ -661,14 +703,20 @@ mod tests {
 
         // Position within selection range
         let found = SymbolSearchBuilder::new()
-            .at_position(10, 5)
+            .at_position(Position {
+                line: 10,
+                character: 5,
+            })
             .find_first(&symbols);
         assert!(found.is_some());
         assert_eq!(found.unwrap().name, "TestClass");
 
         // Position outside range
         let not_found = SymbolSearchBuilder::new()
-            .at_position(25, 0)
+            .at_position(Position {
+                line: 25,
+                character: 0,
+            })
             .find_first(&symbols);
         assert!(not_found.is_none());
     }
@@ -731,12 +779,24 @@ mod tests {
         let symbols = vec![symbol];
 
         // Position within selection range
-        let found = find_symbol_at_position(&symbols, 10, 5);
+        let found = find_symbol_at_position(
+            &symbols,
+            &Position {
+                line: 10,
+                character: 5,
+            },
+        );
         assert!(found.is_some());
         assert_eq!(found.unwrap().name, "TestClass");
 
         // Position outside range
-        let not_found = find_symbol_at_position(&symbols, 25, 0);
+        let not_found = find_symbol_at_position(
+            &symbols,
+            &Position {
+                line: 25,
+                character: 0,
+            },
+        );
         assert!(not_found.is_none());
     }
 

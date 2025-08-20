@@ -109,6 +109,7 @@ pub async fn get_members(
 ///
 /// # Returns
 /// * `Members` - Categorized member information including methods, constructors, and operators
+#[allow(dead_code)]
 pub fn get_members_from_symbols(
     document_symbols: &[lsp_types::DocumentSymbol],
     target_name: &str,
@@ -124,6 +125,45 @@ pub fn get_members_from_symbols(
 
     debug!(
         "Found {} callable members for class '{}'",
+        member_symbols.len(),
+        target_name
+    );
+
+    // Convert document symbols to structured member information
+    categorize_members_from_symbols(member_symbols, target_name)
+}
+
+/// Extract members directly from a single matched document symbol
+///
+/// This function extracts callable members directly from a matched document symbol,
+/// avoiding the need to traverse all document symbols again when we already have
+/// the target symbol. This is more efficient for analyzer workflows where the
+/// matched document symbol is already available.
+///
+/// # Arguments
+/// * `document_symbol` - The matched document symbol for the class/struct
+/// * `target_name` - Name of the class or struct (used for categorization logic)
+///
+/// # Returns
+/// * `Members` - Categorized member information including methods, constructors, and operators
+pub fn get_members_from_document_symbol(
+    document_symbol: &lsp_types::DocumentSymbol,
+    target_name: &str,
+) -> Members {
+    debug!(
+        "Extracting members directly from document symbol for class '{}'",
+        target_name
+    );
+
+    // Get the children of the document symbol (these are the members)
+    let member_symbols: Vec<&lsp_types::DocumentSymbol> = document_symbol
+        .children
+        .as_ref()
+        .map(|children| children.iter().collect())
+        .unwrap_or_default();
+
+    debug!(
+        "Found {} direct members for class '{}'",
         member_symbols.len(),
         target_name
     );

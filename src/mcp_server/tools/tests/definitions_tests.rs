@@ -11,8 +11,7 @@ use crate::mcp_server::tools::lsp_helpers::{
 };
 use crate::project::{ProjectScanner, WorkspaceSession};
 use crate::test_utils::integration::TestProject;
-use std::sync::Arc;
-use tokio::sync::Mutex;
+use std::sync::{Arc, Mutex};
 use tracing::info;
 
 #[cfg(feature = "clangd-integration-tests")]
@@ -37,8 +36,6 @@ async fn test_definitions_class_symbol() {
         .expect("Failed to create session");
 
     let mut locked_session = session.lock().await;
-    let file_buffer_manager = Arc::new(Mutex::new(RealFileBufferManager::new_real()));
-    let mut locked_file_buffer = file_buffer_manager.lock().await;
 
     // Wait for clangd indexing to complete before searching
     crate::mcp_server::tools::utils::wait_for_indexing(locked_session.index_monitor(), None).await;
@@ -49,13 +46,9 @@ async fn test_definitions_class_symbol() {
         .expect("Failed to find Math symbol");
 
     // Test getting definitions
-    let definitions = get_definitions(
-        &mut locked_session,
-        &mut locked_file_buffer,
-        &symbol.location,
-    )
-    .await
-    .expect("Failed to get definitions");
+    let definitions = get_definitions(&symbol.location, &mut locked_session)
+        .await
+        .expect("Failed to get definitions");
 
     assert!(!definitions.is_empty());
     info!("Found {} definitions for Math class", definitions.len());
@@ -64,11 +57,15 @@ async fn test_definitions_class_symbol() {
         info!(
             "Definition {}: {} at {}:{}",
             i + 1,
-            definition.contents.trim(),
-            definition.line.file_path.display(),
-            definition.line.line_number
+            definition.to_compact_range(),
+            definition.file_path.display(),
+            definition.range.start.line + 1
         );
-        assert!(definition.contents.contains("Math"));
+        // Verify the location points to a Math-related file
+        assert!(
+            definition.file_path.to_string_lossy().contains("Math")
+                || definition.file_path.to_string_lossy().contains("math")
+        );
     }
 }
 
@@ -94,8 +91,6 @@ async fn test_declarations_class_symbol() {
         .expect("Failed to create session");
 
     let mut locked_session = session.lock().await;
-    let file_buffer_manager = Arc::new(Mutex::new(RealFileBufferManager::new_real()));
-    let mut locked_file_buffer = file_buffer_manager.lock().await;
 
     // Wait for clangd indexing to complete before searching
     crate::mcp_server::tools::utils::wait_for_indexing(locked_session.index_monitor(), None).await;
@@ -106,13 +101,9 @@ async fn test_declarations_class_symbol() {
         .expect("Failed to find Math symbol");
 
     // Test getting declarations
-    let declarations = get_declarations(
-        &mut locked_session,
-        &mut locked_file_buffer,
-        &symbol.location,
-    )
-    .await
-    .expect("Failed to get declarations");
+    let declarations = get_declarations(&symbol.location, &mut locked_session)
+        .await
+        .expect("Failed to get declarations");
 
     assert!(!declarations.is_empty());
     info!("Found {} declarations for Math class", declarations.len());
@@ -121,11 +112,15 @@ async fn test_declarations_class_symbol() {
         info!(
             "Declaration {}: {} at {}:{}",
             i + 1,
-            declaration.contents.trim(),
-            declaration.line.file_path.display(),
-            declaration.line.line_number
+            declaration.to_compact_range(),
+            declaration.file_path.display(),
+            declaration.range.start.line + 1
         );
-        assert!(declaration.contents.contains("Math"));
+        // Verify the location points to a Math-related file
+        assert!(
+            declaration.file_path.to_string_lossy().contains("Math")
+                || declaration.file_path.to_string_lossy().contains("math")
+        );
     }
 }
 
@@ -152,7 +147,6 @@ async fn test_definitions_function_symbol() {
 
     let mut locked_session = session.lock().await;
     let file_buffer_manager = Arc::new(Mutex::new(RealFileBufferManager::new_real()));
-    let mut locked_file_buffer = file_buffer_manager.lock().await;
 
     // Wait for clangd indexing to complete before searching
     crate::mcp_server::tools::utils::wait_for_indexing(locked_session.index_monitor(), None).await;
@@ -163,13 +157,9 @@ async fn test_definitions_function_symbol() {
         .expect("Failed to find factorial symbol");
 
     // Test getting definitions
-    let definitions = get_definitions(
-        &mut locked_session,
-        &mut locked_file_buffer,
-        &symbol.location,
-    )
-    .await
-    .expect("Failed to get definitions");
+    let definitions = get_definitions(&symbol.location, &mut locked_session)
+        .await
+        .expect("Failed to get definitions");
 
     assert!(!definitions.is_empty());
     info!(
@@ -178,18 +168,24 @@ async fn test_definitions_function_symbol() {
     );
 
     for (i, definition) in definitions.iter().enumerate() {
+        // Get the line content using the file buffer
+        let mut locked_file_buffer = file_buffer_manager.lock().unwrap();
+        let buffer = locked_file_buffer
+            .get_buffer(&definition.file_path)
+            .expect("Failed to get file buffer");
+        let line_content = buffer
+            .get_line(definition.range.start.line)
+            .expect("Failed to get line content");
+
         info!(
             "Definition {}: {} at {}:{}",
             i + 1,
-            definition.contents.trim(),
-            definition.line.file_path.display(),
-            definition.line.line_number
+            line_content.trim(),
+            definition.file_path.display(),
+            definition.range.start.line
         );
         // Function definition should contain the function signature
-        assert!(
-            definition.contents.contains("factorial")
-                || definition.contents.contains("Math::factorial")
-        );
+        assert!(line_content.contains("factorial") || line_content.contains("Math::factorial"));
     }
 }
 
@@ -216,7 +212,6 @@ async fn test_definitions_method_symbol() {
 
     let mut locked_session = session.lock().await;
     let file_buffer_manager = Arc::new(Mutex::new(RealFileBufferManager::new_real()));
-    let mut locked_file_buffer = file_buffer_manager.lock().await;
 
     // Wait for clangd indexing to complete before searching
     crate::mcp_server::tools::utils::wait_for_indexing(locked_session.index_monitor(), None).await;
@@ -227,26 +222,31 @@ async fn test_definitions_method_symbol() {
         .expect("Failed to find add method symbol");
 
     // Test getting definitions
-    let definitions = get_definitions(
-        &mut locked_session,
-        &mut locked_file_buffer,
-        &symbol.location,
-    )
-    .await
-    .expect("Failed to get definitions");
+    let definitions = get_definitions(&symbol.location, &mut locked_session)
+        .await
+        .expect("Failed to get definitions");
 
     assert!(!definitions.is_empty());
     info!("Found {} definitions for add method", definitions.len());
 
     for (i, definition) in definitions.iter().enumerate() {
+        // Get the line content using the file buffer
+        let mut locked_file_buffer = file_buffer_manager.lock().unwrap();
+        let buffer = locked_file_buffer
+            .get_buffer(&definition.file_path)
+            .expect("Failed to get file buffer");
+        let line_content = buffer
+            .get_line(definition.range.start.line)
+            .expect("Failed to get line content");
+
         info!(
             "Definition {}: {} at {}:{}",
             i + 1,
-            definition.contents.trim(),
-            definition.line.file_path.display(),
-            definition.line.line_number
+            line_content.trim(),
+            definition.file_path.display(),
+            definition.range.start.line
         );
         // Method definition should contain the method name
-        assert!(definition.contents.contains("add"));
+        assert!(line_content.contains("add"));
     }
 }

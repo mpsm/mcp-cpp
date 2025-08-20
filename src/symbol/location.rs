@@ -9,7 +9,7 @@ use lsp_types::{
     Location as LspLocation, LocationLink as LspLocationLink, Position as LspPosition,
     Range as LspRange,
 };
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Serialize, Serializer};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Position {
@@ -29,10 +29,122 @@ pub struct FilePosition {
     pub file_path: PathBuf,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FileLocation {
     pub range: Range,
     pub file_path: PathBuf,
+}
+
+impl Serialize for FileLocation {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        // Serialize to compact LSP-style format
+        serializer.serialize_str(&self.to_compact_range())
+    }
+}
+
+impl<'de> Deserialize<'de> for FileLocation {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        use serde::de::{self, Visitor};
+        use std::fmt;
+
+        struct FileLocationVisitor;
+
+        impl<'de> Visitor<'de> for FileLocationVisitor {
+            type Value = FileLocation;
+
+            fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
+                formatter.write_str("a compact location string or FileLocation object")
+            }
+
+            fn visit_str<E>(self, value: &str) -> Result<Self::Value, E>
+            where
+                E: de::Error,
+            {
+                // Parse compact format: file.cpp:23:5-25:10
+                let parts: Vec<&str> = value.splitn(2, ':').collect();
+                if parts.len() != 2 {
+                    return Err(E::custom("Invalid compact location format"));
+                }
+
+                let file_path = PathBuf::from(parts[0]);
+                let range_part = parts[1];
+
+                // Parse range part: 23:5-25:10 or 23:5-20 or 23:5
+                let range_parts: Vec<&str> = range_part.split('-').collect();
+
+                let start_parts: Vec<&str> = range_parts[0].split(':').collect();
+                if start_parts.len() < 2 {
+                    return Err(E::custom("Invalid start position format"));
+                }
+
+                let start_line: u32 = start_parts[0].parse().map_err(E::custom)?;
+                let start_col: u32 = start_parts[1].parse().map_err(E::custom)?;
+
+                let (end_line, end_col) = if range_parts.len() > 1 {
+                    let end_parts: Vec<&str> = range_parts[1].split(':').collect();
+                    if end_parts.len() == 2 {
+                        // Multi-line: 23:5-25:10
+                        let end_line: u32 = end_parts[0].parse().map_err(E::custom)?;
+                        let end_col: u32 = end_parts[1].parse().map_err(E::custom)?;
+                        (end_line, end_col)
+                    } else {
+                        // Same line: 23:5-20
+                        let end_col: u32 = end_parts[0].parse().map_err(E::custom)?;
+                        (start_line, end_col)
+                    }
+                } else {
+                    // Point location: 23:5
+                    (start_line, start_col)
+                };
+
+                // Convert from 1-based to 0-based
+                Ok(FileLocation {
+                    file_path,
+                    range: Range {
+                        start: Position {
+                            line: start_line.saturating_sub(1),
+                            column: start_col.saturating_sub(1),
+                        },
+                        end: Position {
+                            line: end_line.saturating_sub(1),
+                            column: end_col.saturating_sub(1),
+                        },
+                    },
+                })
+            }
+
+            fn visit_map<A>(self, mut map: A) -> Result<Self::Value, A::Error>
+            where
+                A: de::MapAccess<'de>,
+            {
+                let mut range = None;
+                let mut file_path = None;
+
+                while let Some(key) = map.next_key::<String>()? {
+                    match key.as_str() {
+                        "range" => range = Some(map.next_value()?),
+                        "file_path" => file_path = Some(map.next_value()?),
+                        _ => {
+                            let _: serde::de::IgnoredAny = map.next_value()?;
+                        }
+                    }
+                }
+
+                Ok(FileLocation {
+                    range: range.ok_or_else(|| de::Error::missing_field("range"))?,
+                    file_path: file_path.ok_or_else(|| de::Error::missing_field("file_path"))?,
+                })
+            }
+        }
+
+        deserializer.deserialize_any(FileLocationVisitor)
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -49,11 +161,13 @@ impl fmt::Display for FileLine {
 
 impl FileLocation {
     /// Get the start line number (0-based) from the range
+    #[allow(dead_code)]
     pub fn get_start_line(&self) -> u32 {
         self.range.start.line
     }
 
     /// Convert FileLocation to FileLine using the start line
+    #[allow(dead_code)]
     pub fn to_file_line(&self) -> FileLine {
         FileLine {
             file_path: self.file_path.clone(),
@@ -70,6 +184,39 @@ impl FileLocation {
             format!("file:///{}", path_str)
         };
         uri_str.parse().expect("Failed to parse URI from file path")
+    }
+
+    /// Convert FileLocation to compact LSP-style range format
+    /// Examples:
+    /// - Point location: "file.cpp:23:5"
+    /// - Same line range: "file.cpp:23:5-20"
+    /// - Multi-line range: "file.cpp:23:5-25:10"
+    pub fn to_compact_range(&self) -> String {
+        let path = self.file_path.to_string_lossy();
+        let start = &self.range.start;
+        let end = &self.range.end;
+
+        // Convert from 0-based to 1-based for human readability
+        let start_line = start.line + 1;
+        let start_col = start.column + 1;
+        let end_line = end.line + 1;
+        let end_col = end.column + 1;
+
+        if start_line == end_line {
+            if start_col == end_col {
+                // Point location
+                format!("{}:{}:{}", path, start_line, start_col)
+            } else {
+                // Same line range
+                format!("{}:{}:{}-{}", path, start_line, start_col, end_col)
+            }
+        } else {
+            // Multi-line range
+            format!(
+                "{}:{}:{}-{}:{}",
+                path, start_line, start_col, end_line, end_col
+            )
+        }
     }
 }
 
@@ -208,6 +355,7 @@ impl FileLocationWithContents {
 
 impl FileLineWithContents {
     /// Create FileLineWithContents from a FileLine, getting the full line content trimmed
+    #[allow(dead_code)]
     pub fn new_from_file_line<T: FileSystemTrait>(
         file_line: &FileLine,
         file_buf_manager: &mut FileBufferManager<T>,
@@ -217,5 +365,152 @@ impl FileLineWithContents {
             line: file_line.clone(),
             contents: file_buffer.get_line(file_line.line_number)?,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_compact_range_point_location() {
+        let loc = FileLocation {
+            file_path: PathBuf::from("/path/to/file.cpp"),
+            range: Range {
+                start: Position {
+                    line: 22,
+                    column: 4,
+                },
+                end: Position {
+                    line: 22,
+                    column: 4,
+                },
+            },
+        };
+        assert_eq!(loc.to_compact_range(), "/path/to/file.cpp:23:5");
+    }
+
+    #[test]
+    fn test_compact_range_same_line() {
+        let loc = FileLocation {
+            file_path: PathBuf::from("/path/to/file.cpp"),
+            range: Range {
+                start: Position {
+                    line: 22,
+                    column: 4,
+                },
+                end: Position {
+                    line: 22,
+                    column: 19,
+                },
+            },
+        };
+        assert_eq!(loc.to_compact_range(), "/path/to/file.cpp:23:5-20");
+    }
+
+    #[test]
+    fn test_compact_range_multi_line() {
+        let loc = FileLocation {
+            file_path: PathBuf::from("/path/to/file.cpp"),
+            range: Range {
+                start: Position {
+                    line: 22,
+                    column: 4,
+                },
+                end: Position {
+                    line: 24,
+                    column: 9,
+                },
+            },
+        };
+        assert_eq!(loc.to_compact_range(), "/path/to/file.cpp:23:5-25:10");
+    }
+
+    #[test]
+    fn test_serialize_file_location() {
+        let loc = FileLocation {
+            file_path: PathBuf::from("/test/file.cpp"),
+            range: Range {
+                start: Position { line: 9, column: 2 },
+                end: Position {
+                    line: 9,
+                    column: 15,
+                },
+            },
+        };
+        let serialized = serde_json::to_string(&loc).unwrap();
+        assert_eq!(serialized, "\"/test/file.cpp:10:3-16\"");
+    }
+
+    #[test]
+    fn test_deserialize_compact_point_location() {
+        let json = "\"/test/file.cpp:10:3\"";
+        let loc: FileLocation = serde_json::from_str(json).unwrap();
+        assert_eq!(loc.file_path, PathBuf::from("/test/file.cpp"));
+        assert_eq!(loc.range.start.line, 9);
+        assert_eq!(loc.range.start.column, 2);
+        assert_eq!(loc.range.end.line, 9);
+        assert_eq!(loc.range.end.column, 2);
+    }
+
+    #[test]
+    fn test_deserialize_compact_same_line() {
+        let json = "\"/test/file.cpp:10:3-16\"";
+        let loc: FileLocation = serde_json::from_str(json).unwrap();
+        assert_eq!(loc.file_path, PathBuf::from("/test/file.cpp"));
+        assert_eq!(loc.range.start.line, 9);
+        assert_eq!(loc.range.start.column, 2);
+        assert_eq!(loc.range.end.line, 9);
+        assert_eq!(loc.range.end.column, 15);
+    }
+
+    #[test]
+    fn test_deserialize_compact_multi_line() {
+        let json = "\"/test/file.cpp:10:3-12:7\"";
+        let loc: FileLocation = serde_json::from_str(json).unwrap();
+        assert_eq!(loc.file_path, PathBuf::from("/test/file.cpp"));
+        assert_eq!(loc.range.start.line, 9);
+        assert_eq!(loc.range.start.column, 2);
+        assert_eq!(loc.range.end.line, 11);
+        assert_eq!(loc.range.end.column, 6);
+    }
+
+    #[test]
+    fn test_deserialize_object_format() {
+        let json = r#"{
+            "file_path": "/test/file.cpp",
+            "range": {
+                "start": {"line": 9, "column": 2},
+                "end": {"line": 11, "column": 6}
+            }
+        }"#;
+        let loc: FileLocation = serde_json::from_str(json).unwrap();
+        assert_eq!(loc.file_path, PathBuf::from("/test/file.cpp"));
+        assert_eq!(loc.range.start.line, 9);
+        assert_eq!(loc.range.start.column, 2);
+        assert_eq!(loc.range.end.line, 11);
+        assert_eq!(loc.range.end.column, 6);
+    }
+
+    #[test]
+    fn test_roundtrip_serialization() {
+        let original = FileLocation {
+            file_path: PathBuf::from("/path/to/test.cpp"),
+            range: Range {
+                start: Position {
+                    line: 99,
+                    column: 14,
+                },
+                end: Position {
+                    line: 102,
+                    column: 8,
+                },
+            },
+        };
+
+        let serialized = serde_json::to_string(&original).unwrap();
+        let deserialized: FileLocation = serde_json::from_str(&serialized).unwrap();
+
+        assert_eq!(original, deserialized);
     }
 }

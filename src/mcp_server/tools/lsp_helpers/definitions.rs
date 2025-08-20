@@ -5,62 +5,17 @@
 //! multiple locations and various LSP response formats.
 
 use crate::clangd::session::{ClangdSession, ClangdSessionTrait};
-use crate::io::file_manager::RealFileBufferManager;
 use crate::lsp::traits::LspClientTrait;
 use crate::mcp_server::tools::analyze_symbols::AnalyzerError;
-use crate::symbol::{FileLineWithContents, FileLocation};
+use crate::symbol::FileLocation;
 use tracing::trace;
 
 // ============================================================================
 // Public API
 // ============================================================================
 
-/// Get declarations for a symbol with file contents
-pub async fn get_declarations(
-    session: &mut ClangdSession,
-    file_buffer_manager: &mut RealFileBufferManager,
-    symbol_location: &FileLocation,
-) -> Result<Vec<FileLineWithContents>, AnalyzerError> {
-    let declarations_locations = get_symbol_declarations(symbol_location, session).await?;
-
-    let declarations = declarations_locations
-        .iter()
-        .map(|loc| {
-            let file_line = loc.to_file_line();
-            FileLineWithContents::new_from_file_line(&file_line, file_buffer_manager)
-                .map_err(AnalyzerError::from)
-        })
-        .collect::<Result<Vec<_>, _>>()?;
-
-    Ok(declarations)
-}
-
-/// Get definitions for a symbol with file contents
-pub async fn get_definitions(
-    session: &mut ClangdSession,
-    file_buffer_manager: &mut RealFileBufferManager,
-    symbol_location: &FileLocation,
-) -> Result<Vec<FileLineWithContents>, AnalyzerError> {
-    let definitions_locations = get_symbol_definitions(symbol_location, session).await?;
-
-    let definitions = definitions_locations
-        .iter()
-        .map(|loc| {
-            let file_line = loc.to_file_line();
-            FileLineWithContents::new_from_file_line(&file_line, file_buffer_manager)
-                .map_err(AnalyzerError::from)
-        })
-        .collect::<Result<Vec<_>, _>>()?;
-
-    Ok(definitions)
-}
-
-// ============================================================================
-// LSP Operation Helpers
-// ============================================================================
-
 /// Get the declaration locations of a symbol
-pub async fn get_symbol_declarations(
+pub async fn get_declarations(
     symbol_location: &FileLocation,
     session: &mut ClangdSession,
 ) -> Result<Vec<FileLocation>, AnalyzerError> {
@@ -81,7 +36,7 @@ pub async fn get_symbol_declarations(
 }
 
 /// Get the definition locations of a symbol
-pub async fn get_symbol_definitions(
+pub async fn get_definitions(
     symbol_location: &FileLocation,
     session: &mut ClangdSession,
 ) -> Result<Vec<FileLocation>, AnalyzerError> {

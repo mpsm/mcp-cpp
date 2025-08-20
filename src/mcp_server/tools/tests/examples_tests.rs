@@ -37,7 +37,6 @@ async fn test_examples_class_usage() {
 
     let mut locked_session = session.lock().await;
     let file_buffer_manager = Arc::new(Mutex::new(RealFileBufferManager::new_real()));
-    let mut locked_file_buffer = file_buffer_manager.lock().await;
 
     // Wait for clangd indexing to complete before searching
     crate::mcp_server::tools::utils::wait_for_indexing(locked_session.index_monitor(), None).await;
@@ -49,28 +48,32 @@ async fn test_examples_class_usage() {
     let symbol_location = &symbol.location;
 
     // Test getting usage examples (unlimited)
-    let examples = get_examples(
-        &mut locked_session,
-        &mut locked_file_buffer,
-        symbol_location,
-        None,
-    )
-    .await
-    .expect("Failed to get examples");
+    let examples = get_examples(&mut locked_session, symbol_location, None)
+        .await
+        .expect("Failed to get examples");
 
     assert!(!examples.is_empty());
     info!("Found {} usage examples for Math class", examples.len());
 
     for (i, example) in examples.iter().enumerate() {
+        // Get the line content using the file buffer
+        let mut locked_file_buffer = file_buffer_manager.lock().await;
+        let buffer = locked_file_buffer
+            .get_buffer(&example.file_path)
+            .expect("Failed to get file buffer");
+        let line_content = buffer
+            .get_line(example.range.start.line)
+            .expect("Failed to get line content");
+
         info!(
             "Example {}: {} at {}:{}",
             i + 1,
-            example.contents.trim(),
-            example.line.file_path.display(),
-            example.line.line_number
+            line_content.trim(),
+            example.file_path.display(),
+            example.range.start.line
         );
         // Usage examples should reference the Math class
-        assert!(example.contents.contains("Math"));
+        assert!(line_content.contains("Math"));
     }
 }
 
@@ -97,7 +100,6 @@ async fn test_examples_function_usage() {
 
     let mut locked_session = session.lock().await;
     let file_buffer_manager = Arc::new(Mutex::new(RealFileBufferManager::new_real()));
-    let mut locked_file_buffer = file_buffer_manager.lock().await;
 
     // Wait for clangd indexing to complete before searching
     crate::mcp_server::tools::utils::wait_for_indexing(locked_session.index_monitor(), None).await;
@@ -109,14 +111,9 @@ async fn test_examples_function_usage() {
     let symbol_location = &symbol.location;
 
     // Test getting usage examples (unlimited)
-    let examples = get_examples(
-        &mut locked_session,
-        &mut locked_file_buffer,
-        symbol_location,
-        None,
-    )
-    .await
-    .expect("Failed to get examples");
+    let examples = get_examples(&mut locked_session, symbol_location, None)
+        .await
+        .expect("Failed to get examples");
 
     assert!(!examples.is_empty());
     info!(
@@ -125,15 +122,24 @@ async fn test_examples_function_usage() {
     );
 
     for (i, example) in examples.iter().enumerate() {
+        // Get the line content using the file buffer
+        let mut locked_file_buffer = file_buffer_manager.lock().await;
+        let buffer = locked_file_buffer
+            .get_buffer(&example.file_path)
+            .expect("Failed to get file buffer");
+        let line_content = buffer
+            .get_line(example.range.start.line)
+            .expect("Failed to get line content");
+
         info!(
             "Example {}: {} at {}:{}",
             i + 1,
-            example.contents.trim(),
-            example.line.file_path.display(),
-            example.line.line_number
+            line_content.trim(),
+            example.file_path.display(),
+            example.range.start.line
         );
         // Usage examples should reference the factorial function
-        assert!(example.contents.contains("factorial"));
+        assert!(line_content.contains("factorial"));
     }
 }
 
@@ -160,7 +166,6 @@ async fn test_examples_with_max_limit() {
 
     let mut locked_session = session.lock().await;
     let file_buffer_manager = Arc::new(Mutex::new(RealFileBufferManager::new_real()));
-    let mut locked_file_buffer = file_buffer_manager.lock().await;
 
     // Wait for clangd indexing to complete before searching
     crate::mcp_server::tools::utils::wait_for_indexing(locked_session.index_monitor(), None).await;
@@ -173,14 +178,9 @@ async fn test_examples_with_max_limit() {
 
     // Test getting examples with max limit
     const MAX_EXAMPLES: u32 = 2;
-    let examples = get_examples(
-        &mut locked_session,
-        &mut locked_file_buffer,
-        symbol_location,
-        Some(MAX_EXAMPLES),
-    )
-    .await
-    .expect("Failed to get examples");
+    let examples = get_examples(&mut locked_session, symbol_location, Some(MAX_EXAMPLES))
+        .await
+        .expect("Failed to get examples");
 
     assert!(!examples.is_empty());
     assert!(
@@ -197,14 +197,23 @@ async fn test_examples_with_max_limit() {
     );
 
     for (i, example) in examples.iter().enumerate() {
+        // Get the line content using the file buffer
+        let mut locked_file_buffer = file_buffer_manager.lock().await;
+        let buffer = locked_file_buffer
+            .get_buffer(&example.file_path)
+            .expect("Failed to get file buffer");
+        let line_content = buffer
+            .get_line(example.range.start.line)
+            .expect("Failed to get line content");
+
         info!(
             "Example {}: {} at {}:{}",
             i + 1,
-            example.contents.trim(),
-            example.line.file_path.display(),
-            example.line.line_number
+            line_content.trim(),
+            example.file_path.display(),
+            example.range.start.line
         );
-        assert!(example.contents.contains("Math"));
+        assert!(line_content.contains("Math"));
     }
 }
 
@@ -231,7 +240,6 @@ async fn test_examples_method_usage() {
 
     let mut locked_session = session.lock().await;
     let file_buffer_manager = Arc::new(Mutex::new(RealFileBufferManager::new_real()));
-    let mut locked_file_buffer = file_buffer_manager.lock().await;
 
     // Wait for clangd indexing to complete before searching
     crate::mcp_server::tools::utils::wait_for_indexing(locked_session.index_monitor(), None).await;
@@ -243,27 +251,31 @@ async fn test_examples_method_usage() {
     let symbol_location = &symbol.location;
 
     // Test getting usage examples
-    let examples = get_examples(
-        &mut locked_session,
-        &mut locked_file_buffer,
-        symbol_location,
-        Some(3),
-    )
-    .await
-    .expect("Failed to get examples");
+    let examples = get_examples(&mut locked_session, symbol_location, Some(3))
+        .await
+        .expect("Failed to get examples");
 
     assert!(!examples.is_empty());
     info!("Found {} usage examples for add method", examples.len());
 
     for (i, example) in examples.iter().enumerate() {
+        // Get the line content using the file buffer
+        let mut locked_file_buffer = file_buffer_manager.lock().await;
+        let buffer = locked_file_buffer
+            .get_buffer(&example.file_path)
+            .expect("Failed to get file buffer");
+        let line_content = buffer
+            .get_line(example.range.start.line)
+            .expect("Failed to get line content");
+
         info!(
             "Example {}: {} at {}:{}",
             i + 1,
-            example.contents.trim(),
-            example.line.file_path.display(),
-            example.line.line_number
+            line_content.trim(),
+            example.file_path.display(),
+            example.range.start.line
         );
         // Usage examples should reference the method
-        assert!(example.contents.contains("add"));
+        assert!(line_content.contains("add"));
     }
 }

@@ -15,19 +15,19 @@ use tokio::sync::Mutex;
 use tracing::{error, info, instrument, warn};
 
 use crate::clangd::session::ClangdSession;
-use crate::io::{file_buffer::FileBufferError, file_manager::RealFileBufferManager};
+use crate::io::file_buffer::FileBufferError;
 use crate::mcp_server::tools::lsp_helpers::{
     call_hierarchy::{CallHierarchy, get_call_hierarchy},
     definitions::{get_declarations, get_definitions},
-    document_symbols::get_document_symbols,
+    document_symbols::get_symbol_document_symbol,
     examples::get_examples,
     hover::get_hover_info,
-    members::{Members, get_members_from_symbols},
+    members::{Members, get_members_from_document_symbol},
     symbol_resolution::get_matching_symbol,
     type_hierarchy::{TypeHierarchy, get_type_hierarchy},
 };
 use crate::project::ProjectWorkspace;
-use crate::symbol::{FileLineWithContents, Symbol};
+use crate::symbol::{FileLocation, Symbol};
 
 // ============================================================================
 // Analyzer Error Type
@@ -173,14 +173,20 @@ pub struct AnalyzeSymbolContextTool {
 pub struct AnalyzerResult {
     pub symbol: Symbol,
     pub query: String,
-    pub definitions: Vec<FileLineWithContents>,
-    pub declarations: Vec<FileLineWithContents>,
+    pub definitions: Vec<FileLocation>,
+
+    #[serde(skip_serializing_if = "Vec::is_empty", default)]
+    pub declarations: Vec<FileLocation>,
 
     #[serde(skip_serializing_if = "Option::is_none")]
     pub hover_documentation: Option<String>,
 
+    /// Detail information from DocumentSymbol (signature, type info, etc.)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub detail: Option<String>,
+
     /// Usage examples showing how the symbol is used throughout the codebase
-    pub examples: Vec<FileLineWithContents>,
+    pub examples: Vec<FileLocation>,
 
     /// Type hierarchy information for classes, structs, and interfaces
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -204,6 +210,33 @@ impl AnalyzeSymbolContextTool {
             symbol_kind,
             lsp_types::SymbolKind::CLASS | lsp_types::SymbolKind::STRUCT
         )
+    }
+
+    /// Extract members from structural types if applicable
+    fn extract_members_if_structural(
+        symbol: &Symbol,
+        matched_document_symbol: &Option<lsp_types::DocumentSymbol>,
+        query_name: &str,
+    ) -> Option<Members> {
+        if Self::is_structural_type(symbol.kind) {
+            if let Some(matched_ds) = matched_document_symbol {
+                let members = get_members_from_document_symbol(matched_ds, &symbol.name);
+                info!(
+                    "Found members for '{}': {} methods, {} constructors, {} destructors, {} operators",
+                    query_name,
+                    members.methods.len(),
+                    members.constructors.len(),
+                    members.destructors.len(),
+                    members.operators.len()
+                );
+                Some(members)
+            } else {
+                warn!("No matched document symbol available for member extraction");
+                None
+            }
+        } else {
+            None
+        }
     }
 
     /// Check if a symbol represents a type that supports type hierarchies
@@ -235,18 +268,15 @@ impl AnalyzeSymbolContextTool {
         &self,
         symbol_location: &crate::symbol::FileLocation,
         locked_session: &mut ClangdSession,
-        locked_file_buffer: &mut RealFileBufferManager,
-    ) -> Result<(Vec<FileLineWithContents>, Vec<FileLineWithContents>), CallToolError> {
-        let definitions =
-            get_definitions(locked_session, locked_file_buffer, symbol_location).await?;
+    ) -> Result<(Vec<FileLocation>, Vec<FileLocation>), CallToolError> {
+        let definitions = get_definitions(symbol_location, locked_session).await?;
         info!(
             "Found {} definitions for '{}'",
             definitions.len(),
             self.symbol
         );
 
-        let declarations =
-            get_declarations(locked_session, locked_file_buffer, symbol_location).await?;
+        let declarations = get_declarations(symbol_location, locked_session).await?;
         info!(
             "Found {} declarations for '{}'",
             declarations.len(),
@@ -276,16 +306,8 @@ impl AnalyzeSymbolContextTool {
         &self,
         symbol_location: &crate::symbol::FileLocation,
         locked_session: &mut ClangdSession,
-        locked_file_buffer: &mut RealFileBufferManager,
-    ) -> Vec<FileLineWithContents> {
-        match get_examples(
-            locked_session,
-            locked_file_buffer,
-            symbol_location,
-            self.max_examples,
-        )
-        .await
-        {
+    ) -> Vec<FileLocation> {
+        match get_examples(locked_session, symbol_location, self.max_examples).await {
             Ok(examples) => {
                 info!("Found {} examples for '{}'", examples.len(), self.symbol);
                 examples
@@ -350,49 +372,16 @@ impl AnalyzeSymbolContextTool {
         (type_hierarchy, call_hierarchy)
     }
 
-    /// Extract members from structural types using document symbols
-    async fn get_members_for_structural_types(
-        &self,
-        symbol: &Symbol,
-        locked_session: &mut ClangdSession,
-    ) -> Option<Members> {
-        if !Self::is_structural_type(symbol.kind) {
-            return None;
-        }
-
-        match get_document_symbols(locked_session, symbol.location.get_uri()).await {
-            Ok(document_symbols) => {
-                let members = get_members_from_symbols(&document_symbols, &symbol.name);
-                info!(
-                    "Found members for '{}': {} methods, {} constructors, {} destructors, {} operators",
-                    self.symbol,
-                    members.methods.len(),
-                    members.constructors.len(),
-                    members.destructors.len(),
-                    members.operators.len()
-                );
-                Some(members)
-            }
-            Err(err) => {
-                warn!(
-                    "Failed to get document symbols for member analysis: {}",
-                    err
-                );
-                None
-            }
-        }
-    }
-
     /// V2 entry point - uses shared ClangdSession from server
     #[instrument(
         name = "analyze_symbol_context",
-        skip(self, session, _workspace, file_buffer_manager)
+        skip(self, session, _workspace, _file_buffer_manager)
     )]
     pub async fn call_tool(
         &self,
         session: Arc<Mutex<ClangdSession>>,
         _workspace: &ProjectWorkspace,
-        file_buffer_manager: Arc<Mutex<RealFileBufferManager>>,
+        _file_buffer_manager: Arc<Mutex<crate::io::file_manager::RealFileBufferManager>>,
     ) -> Result<CallToolResult, CallToolError> {
         info!("Starting symbol analysis for '{}'", self.symbol);
 
@@ -409,14 +398,15 @@ impl AnalyzeSymbolContextTool {
         let symbol = self.resolve_symbol(&mut locked_session).await?;
 
         // Get definitions and declarations
-        let mut locked_file_buffer = file_buffer_manager.lock().await;
-        let (definitions, declarations) = self
-            .get_definitions_and_declarations(
-                &symbol.location,
-                &mut locked_session,
-                &mut locked_file_buffer,
-            )
+        let (definitions, mut declarations) = self
+            .get_definitions_and_declarations(&symbol.location, &mut locked_session)
             .await?;
+
+        // Deduplicate: if definitions == declarations, clear declarations
+        if definitions == declarations {
+            info!("Definitions and declarations are identical, clearing declarations");
+            declarations.clear();
+        }
 
         // Get hover information
         let hover = self
@@ -425,11 +415,7 @@ impl AnalyzeSymbolContextTool {
 
         // Get usage examples
         let examples = self
-            .get_usage_examples(
-                &symbol.location,
-                &mut locked_session,
-                &mut locked_file_buffer,
-            )
+            .get_usage_examples(&symbol.location, &mut locked_session)
             .await;
 
         // Get hierarchies based on symbol type
@@ -437,15 +423,36 @@ impl AnalyzeSymbolContextTool {
             .get_hierarchies(&symbol, &symbol.location, &mut locked_session)
             .await;
 
-        // Extract members from structural types (classes and structs)
-        let members = self
-            .get_members_for_structural_types(&symbol, &mut locked_session)
-            .await;
+        // Get matching document symbol for detail extraction and member analysis
+        let matched_document_symbol =
+            match get_symbol_document_symbol(&mut locked_session, &symbol.name, &symbol.location)
+                .await
+            {
+                Ok(symbol) => symbol,
+                Err(err) => {
+                    warn!("Failed to get document symbol: {}", err);
+                    None
+                }
+            };
+
+        // Extract detail from matched document symbol
+        let detail = matched_document_symbol
+            .as_ref()
+            .and_then(|ds| ds.detail.clone());
+
+        if let Some(ref d) = detail {
+            info!("Found detail for '{}': {}", self.symbol, d);
+        }
+
+        // Extract members from structural types using the matched document symbol
+        let members =
+            Self::extract_members_if_structural(&symbol, &matched_document_symbol, &self.symbol);
 
         let result = AnalyzerResult {
             symbol,
             query: self.symbol.clone(),
             hover_documentation: hover,
+            detail,
             definitions,
             declarations,
             examples,
@@ -534,16 +541,23 @@ mod tests {
         }
 
         assert!(!analyzer_result.definitions.is_empty());
-        assert!(!analyzer_result.declarations.is_empty());
+        // Note: declarations may be empty if they are identical to definitions
 
         for definition in &analyzer_result.definitions {
-            info!("Definition: {} at {}", definition.contents, definition.line);
+            info!(
+                "Definition: {} at {}:{}",
+                definition.to_compact_range(),
+                definition.file_path.display(),
+                definition.range.start.line + 1
+            );
         }
 
         for declaration in &analyzer_result.declarations {
             info!(
-                "Declaration: {} at {}",
-                declaration.contents, declaration.line
+                "Declaration: {} at {}:{}",
+                declaration.to_compact_range(),
+                declaration.file_path.display(),
+                declaration.range.start.line + 1
             );
         }
 
@@ -551,10 +565,11 @@ mod tests {
         info!("Found {} usage examples", analyzer_result.examples.len());
         for (i, example) in analyzer_result.examples.iter().enumerate() {
             info!(
-                "Example {}: {} at {}",
+                "Example {}: {} at {}:{}",
                 i + 1,
-                example.contents,
-                example.line
+                example.to_compact_range(),
+                example.file_path.display(),
+                example.range.start.line + 1
             );
         }
 

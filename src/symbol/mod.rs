@@ -7,5 +7,5 @@ mod location;
 #[allow(clippy::module_inception)]
 mod symbol;
 
-pub use location::{FileLineWithContents, FileLocation};
+pub use location::FileLocation;
 pub use symbol::Symbol;
