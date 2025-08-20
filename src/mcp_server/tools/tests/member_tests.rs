@@ -66,20 +66,58 @@ async fn test_analyzer_members_math() {
     assert!(analyzer_result.members.is_some());
     let members = analyzer_result.members.unwrap();
 
-    info!("Math class members:");
+    info!("Math class members analysis:");
     info!(
-        "  Methods: {} (e.g., {:?})",
+        "  Total: {} methods, {} constructors, {} destructors, {} operators",
         members.methods.len(),
-        members
-            .methods
-            .iter()
-            .take(3)
-            .map(|m| &m.name)
-            .collect::<Vec<_>>()
+        members.constructors.len(),
+        members.destructors.len(),
+        members.operators.len()
     );
-    info!("  Constructors: {}", members.constructors.len());
-    info!("  Operators: {}", members.operators.len());
-    info!("  Static methods: {}", members.static_methods.len());
+
+    info!("  Methods ({}):", members.methods.len());
+    for (i, method) in members.methods.iter().enumerate() {
+        info!(
+            "    {}: {} (type: {}, signature: {})",
+            i + 1,
+            method.name,
+            method.member_type,
+            method.signature
+        );
+    }
+
+    info!("  Constructors ({}):", members.constructors.len());
+    for (i, constructor) in members.constructors.iter().enumerate() {
+        info!(
+            "    {}: {} (type: {}, signature: {})",
+            i + 1,
+            constructor.name,
+            constructor.member_type,
+            constructor.signature
+        );
+    }
+
+    info!("  Destructors ({}):", members.destructors.len());
+    for (i, destructor) in members.destructors.iter().enumerate() {
+        info!(
+            "    {}: {} (type: {}, signature: {})",
+            i + 1,
+            destructor.name,
+            destructor.member_type,
+            destructor.signature
+        );
+    }
+
+    info!("  Operators ({}):", members.operators.len());
+    for (i, operator) in members.operators.iter().enumerate() {
+        info!(
+            "    {}: {} (type: {}, signature: {})",
+            i + 1,
+            operator.name,
+            operator.member_type,
+            operator.signature
+        );
+    }
 
     // Math should have methods like factorial, power, etc.
     assert!(!members.methods.is_empty());
@@ -143,20 +181,58 @@ async fn test_analyzer_members_interface() {
     assert!(analyzer_result.members.is_some());
     let members = analyzer_result.members.unwrap();
 
-    info!("IStorageBackend interface members:");
+    info!("IStorageBackend interface members analysis:");
     info!(
-        "  Methods: {} (e.g., {:?})",
+        "  Total: {} methods, {} constructors, {} destructors, {} operators",
         members.methods.len(),
-        members
-            .methods
-            .iter()
-            .take(3)
-            .map(|m| &m.name)
-            .collect::<Vec<_>>()
+        members.constructors.len(),
+        members.destructors.len(),
+        members.operators.len()
     );
-    info!("  Constructors: {}", members.constructors.len());
-    info!("  Operators: {}", members.operators.len());
-    info!("  Static methods: {}", members.static_methods.len());
+
+    info!("  Methods ({}):", members.methods.len());
+    for (i, method) in members.methods.iter().enumerate() {
+        info!(
+            "    {}: {} (type: {}, signature: {})",
+            i + 1,
+            method.name,
+            method.member_type,
+            method.signature
+        );
+    }
+
+    info!("  Constructors ({}):", members.constructors.len());
+    for (i, constructor) in members.constructors.iter().enumerate() {
+        info!(
+            "    {}: {} (type: {}, signature: {})",
+            i + 1,
+            constructor.name,
+            constructor.member_type,
+            constructor.signature
+        );
+    }
+
+    info!("  Destructors ({}):", members.destructors.len());
+    for (i, destructor) in members.destructors.iter().enumerate() {
+        info!(
+            "    {}: {} (type: {}, signature: {})",
+            i + 1,
+            destructor.name,
+            destructor.member_type,
+            destructor.signature
+        );
+    }
+
+    info!("  Operators ({}):", members.operators.len());
+    for (i, operator) in members.operators.iter().enumerate() {
+        info!(
+            "    {}: {} (type: {}, signature: {})",
+            i + 1,
+            operator.name,
+            operator.member_type,
+            operator.signature
+        );
+    }
 
     // IStorageBackend should have virtual methods like store, retrieve, remove
     assert!(!members.methods.is_empty());

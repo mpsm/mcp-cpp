@@ -48,6 +48,83 @@ pub trait SymbolMatcher {
     fn matches(&self, symbol: &DocumentSymbol) -> bool;
 }
 
+/// Specialized matcher for class member symbols with filtering capabilities
+#[allow(dead_code)]
+pub struct MemberMatcher {
+    /// Target class name to extract members from
+    pub class_name: String,
+    /// Optional filter by member kinds (method, constructor, etc.)
+    pub member_kinds: Option<Vec<lsp_types::SymbolKind>>,
+    /// Filter for static methods only
+    pub static_only: bool,
+}
+
+#[allow(dead_code)]
+impl MemberMatcher {
+    /// Create a new member matcher for the specified class
+    pub fn for_class(class_name: &str) -> Self {
+        Self {
+            class_name: class_name.to_string(),
+            member_kinds: None,
+            static_only: false,
+        }
+    }
+
+    /// Filter by specific member kinds (METHOD, CONSTRUCTOR, etc.)
+    pub fn with_kinds(mut self, kinds: Vec<lsp_types::SymbolKind>) -> Self {
+        self.member_kinds = Some(kinds);
+        self
+    }
+
+    /// Filter for static methods only
+    pub fn static_only(mut self) -> Self {
+        self.static_only = true;
+        self
+    }
+
+    /// Check if a symbol represents a callable member
+    fn is_callable_member(symbol: &DocumentSymbol) -> bool {
+        matches!(
+            symbol.kind,
+            lsp_types::SymbolKind::METHOD
+                | lsp_types::SymbolKind::FUNCTION
+                | lsp_types::SymbolKind::CONSTRUCTOR
+        )
+    }
+
+    /// Determine if this is a static method based on symbol detail
+    fn is_static_method(symbol: &DocumentSymbol) -> bool {
+        if let Some(detail) = &symbol.detail {
+            detail.contains("static") || detail.starts_with("static ")
+        } else {
+            false
+        }
+    }
+}
+
+impl SymbolMatcher for MemberMatcher {
+    fn matches(&self, symbol: &DocumentSymbol) -> bool {
+        // Only match callable members
+        if !Self::is_callable_member(symbol) {
+            return false;
+        }
+
+        // Filter by member kinds if specified
+        if let Some(ref kinds) = self.member_kinds
+            && !kinds.contains(&symbol.kind)
+        {
+            return false;
+        }
+
+        // Filter for static methods if requested
+        if self.static_only && !Self::is_static_method(symbol) {
+            return false;
+        }
+
+        true
+    }
+}
+
 // ============================================================================
 // Iterator for Tree Traversal
 // ============================================================================
@@ -171,6 +248,36 @@ impl SymbolSearchBuilder {
             .collect()
     }
 
+    /// Filter for class members only (methods, constructors, operators)
+    #[allow(dead_code)]
+    pub fn class_members_only(mut self) -> Self {
+        self.kind = None; // Reset single kind filter
+        self
+    }
+
+    /// Filter for static methods only
+    #[allow(dead_code)]
+    pub fn static_methods_only(mut self) -> Self {
+        self.kind = Some(lsp_types::SymbolKind::METHOD);
+        self
+    }
+
+    /// Filter for constructors only
+    #[allow(dead_code)]
+    pub fn constructors_only(mut self) -> Self {
+        self.kind = Some(lsp_types::SymbolKind::CONSTRUCTOR);
+        self
+    }
+
+    /// Filter for methods within a specific class (by path)
+    #[allow(dead_code)]
+    pub fn methods_in_class<S: Into<String>>(mut self, class_name: S) -> Self {
+        let class_name = class_name.into();
+        self.path_contains = Some(class_name.clone());
+        self.kind = Some(lsp_types::SymbolKind::METHOD);
+        self
+    }
+
     /// Check if a symbol matches the search criteria
     fn matches_symbol(&self, symbol: &DocumentSymbol, path: &[&str]) -> bool {
         // Position matching
@@ -198,6 +305,19 @@ impl SymbolSearchBuilder {
         if let Some(ref path_contains) = self.path_contains {
             let full_path = path.join("::");
             if !full_path.contains(path_contains) {
+                return false;
+            }
+        }
+
+        // Additional class member filtering for class_members_only
+        if self.kind.is_none() && self.path_contains.is_some() {
+            // When class_members_only is used, filter for callable members
+            if !matches!(
+                symbol.kind,
+                lsp_types::SymbolKind::METHOD
+                    | lsp_types::SymbolKind::FUNCTION
+                    | lsp_types::SymbolKind::CONSTRUCTOR
+            ) {
                 return false;
             }
         }
@@ -386,6 +506,52 @@ pub fn get_symbol_paths(symbols: &[DocumentSymbol]) -> Vec<(String, String)> {
     DocumentSymbolIterator::new(symbols)
         .map(|(symbol, path)| (symbol.name.clone(), path.join("::")))
         .collect()
+}
+
+/// Extract class members from hierarchical document symbols using the builder pattern
+///
+/// This function provides a higher-level interface for extracting class members
+/// by finding the target class and collecting its callable members (methods, constructors, operators).
+/// The search leverages the document symbol hierarchy for comprehensive member discovery.
+///
+/// # Arguments
+/// * `symbols` - Hierarchical document symbols to search
+/// * `class_name` - Name of the class to extract members from
+///
+/// # Returns
+/// * `Vec<&DocumentSymbol>` - All callable members found within the specified class
+#[allow(dead_code)]
+pub fn extract_class_members<'a>(
+    symbols: &'a [DocumentSymbol],
+    class_name: &str,
+) -> Vec<&'a DocumentSymbol> {
+    // First find the target class
+    if let Some(target_class) = SymbolSearchBuilder::new()
+        .with_name(class_name)
+        .with_kind(lsp_types::SymbolKind::CLASS)
+        .find_first(symbols)
+    {
+        // Extract callable members from the class's children
+        if let Some(children) = &target_class.children {
+            return SymbolSearchBuilder::new()
+                .class_members_only()
+                .find_all(children);
+        }
+    }
+
+    // Also search for struct types
+    if let Some(target_struct) = SymbolSearchBuilder::new()
+        .with_name(class_name)
+        .with_kind(lsp_types::SymbolKind::STRUCT)
+        .find_first(symbols)
+        && let Some(children) = &target_struct.children
+    {
+        return SymbolSearchBuilder::new()
+            .class_members_only()
+            .find_all(children);
+    }
+
+    Vec::new()
 }
 
 #[cfg(test)]

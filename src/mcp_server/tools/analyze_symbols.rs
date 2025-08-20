@@ -19,9 +19,10 @@ use crate::io::{file_buffer::FileBufferError, file_manager::RealFileBufferManage
 use crate::mcp_server::tools::lsp_helpers::{
     call_hierarchy::{CallHierarchy, get_call_hierarchy},
     definitions::{get_declarations, get_definitions},
+    document_symbols::get_document_symbols,
     examples::get_examples,
     hover::get_hover_info,
-    members::{Members, get_members},
+    members::{Members, get_members_from_symbols},
     symbol_resolution::get_matching_symbol,
     type_hierarchy::{TypeHierarchy, get_type_hierarchy},
 };
@@ -197,6 +198,24 @@ pub struct AnalyzerResult {
 const ANALYZER_INDEX_TIMEOUT: Duration = Duration::from_secs(20);
 
 impl AnalyzeSymbolContextTool {
+    /// Check if a symbol represents a structural type (class or struct) that can contain members
+    fn is_structural_type(symbol_kind: lsp_types::SymbolKind) -> bool {
+        matches!(
+            symbol_kind,
+            lsp_types::SymbolKind::CLASS | lsp_types::SymbolKind::STRUCT
+        )
+    }
+
+    /// Check if a symbol represents a type that supports type hierarchies
+    fn supports_type_hierarchy(symbol_kind: lsp_types::SymbolKind) -> bool {
+        matches!(
+            symbol_kind,
+            lsp_types::SymbolKind::CLASS
+                | lsp_types::SymbolKind::STRUCT
+                | lsp_types::SymbolKind::INTERFACE
+        )
+    }
+
     /// Resolves the symbol
     async fn resolve_symbol(
         &self,
@@ -285,27 +304,24 @@ impl AnalyzeSymbolContextTool {
         symbol_location: &crate::symbol::FileLocation,
         locked_session: &mut ClangdSession,
     ) -> (Option<TypeHierarchy>, Option<CallHierarchy>) {
-        let type_hierarchy = match symbol.kind {
-            lsp_types::SymbolKind::CLASS
-            | lsp_types::SymbolKind::STRUCT
-            | lsp_types::SymbolKind::INTERFACE => {
-                match get_type_hierarchy(symbol_location, locked_session).await {
-                    Ok(hierarchy) => {
-                        info!(
-                            "Found type hierarchy for '{}': {} supertypes, {} subtypes",
-                            self.symbol,
-                            hierarchy.supertypes.len(),
-                            hierarchy.subtypes.len()
-                        );
-                        Some(hierarchy)
-                    }
-                    Err(err) => {
-                        warn!("Failed to get type hierarchy: {}", err);
-                        None
-                    }
+        let type_hierarchy = if Self::supports_type_hierarchy(symbol.kind) {
+            match get_type_hierarchy(symbol_location, locked_session).await {
+                Ok(hierarchy) => {
+                    info!(
+                        "Found type hierarchy for '{}': {} supertypes, {} subtypes",
+                        self.symbol,
+                        hierarchy.supertypes.len(),
+                        hierarchy.subtypes.len()
+                    );
+                    Some(hierarchy)
+                }
+                Err(err) => {
+                    warn!("Failed to get type hierarchy: {}", err);
+                    None
                 }
             }
-            _ => None,
+        } else {
+            None
         };
 
         let call_hierarchy = match symbol.kind {
@@ -334,34 +350,36 @@ impl AnalyzeSymbolContextTool {
         (type_hierarchy, call_hierarchy)
     }
 
-    /// Retrieves members for classes and structs
-    async fn get_members(
+    /// Extract members from structural types using document symbols
+    async fn get_members_for_structural_types(
         &self,
         symbol: &Symbol,
-        symbol_location: &crate::symbol::FileLocation,
         locked_session: &mut ClangdSession,
     ) -> Option<Members> {
-        match symbol.kind {
-            lsp_types::SymbolKind::CLASS | lsp_types::SymbolKind::STRUCT => {
-                match get_members(symbol_location, locked_session, &symbol.name).await {
-                    Ok(members) => {
-                        info!(
-                            "Found members for '{}': {} methods, {} constructors, {} operators, {} static methods",
-                            self.symbol,
-                            members.methods.len(),
-                            members.constructors.len(),
-                            members.operators.len(),
-                            members.static_methods.len()
-                        );
-                        Some(members)
-                    }
-                    Err(err) => {
-                        warn!("Failed to get members: {}", err);
-                        None
-                    }
-                }
+        if !Self::is_structural_type(symbol.kind) {
+            return None;
+        }
+
+        match get_document_symbols(locked_session, symbol.location.get_uri()).await {
+            Ok(document_symbols) => {
+                let members = get_members_from_symbols(&document_symbols, &symbol.name);
+                info!(
+                    "Found members for '{}': {} methods, {} constructors, {} destructors, {} operators",
+                    self.symbol,
+                    members.methods.len(),
+                    members.constructors.len(),
+                    members.destructors.len(),
+                    members.operators.len()
+                );
+                Some(members)
             }
-            _ => None,
+            Err(err) => {
+                warn!(
+                    "Failed to get document symbols for member analysis: {}",
+                    err
+                );
+                None
+            }
         }
     }
 
@@ -419,9 +437,9 @@ impl AnalyzeSymbolContextTool {
             .get_hierarchies(&symbol, &symbol.location, &mut locked_session)
             .await;
 
-        // Get members for classes and structs
+        // Extract members from structural types (classes and structs)
         let members = self
-            .get_members(&symbol, &symbol.location, &mut locked_session)
+            .get_members_for_structural_types(&symbol, &mut locked_session)
             .await;
 
         let result = AnalyzerResult {

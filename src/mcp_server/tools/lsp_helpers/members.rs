@@ -2,15 +2,17 @@
 //!
 //! This module provides LSP-based member extraction capabilities that work with
 //! clangd to analyze class and struct members including methods, constructors,
-//! operators, and nested types.
+//! operators, and nested types. The implementation leverages the sophisticated
+//! document symbols infrastructure for efficient hierarchical symbol analysis.
 
-use lsp_types::DocumentSymbolResponse;
 use serde::{Deserialize, Serialize};
-use tracing::{debug, trace};
+use tracing::{debug, info};
 
-use crate::clangd::session::{ClangdSession, ClangdSessionTrait};
-use crate::lsp::traits::LspClientTrait;
+use crate::clangd::session::ClangdSession;
 use crate::mcp_server::tools::analyze_symbols::AnalyzerError;
+use crate::mcp_server::tools::lsp_helpers::document_symbols::{
+    extract_class_members, get_document_symbols,
+};
 use crate::symbol::FileLocation;
 
 // ============================================================================
@@ -32,21 +34,38 @@ pub struct Member {
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Members {
-    /// Instance methods
+    /// Methods (both instance and static methods)
     pub methods: Vec<Member>,
-    /// Constructors and destructors
+    /// Constructors
     pub constructors: Vec<Member>,
+    /// Destructors
+    pub destructors: Vec<Member>,
     /// Operator overloads
     pub operators: Vec<Member>,
-    /// Static methods and functions
-    pub static_methods: Vec<Member>,
 }
 
 // ============================================================================
 // Public API
 // ============================================================================
 
-/// Get callable members for a class or struct symbol
+/// Extract callable members for a class or struct symbol using hierarchical document symbol analysis
+///
+/// This function performs comprehensive member extraction by analyzing the document symbol hierarchy
+/// to identify methods, constructors, operators, and static functions within the specified class.
+/// The analysis leverages clangd's hierarchical document symbols for efficient member discovery.
+///
+/// Note: For analyzer workflows, consider using `get_members_from_symbols` with pre-fetched
+/// document symbols to avoid redundant LSP calls when the symbols are already available.
+///
+/// # Arguments
+/// * `symbol_location` - Location information for the target symbol
+/// * `session` - Active clangd session for LSP communication
+/// * `target_name` - Name of the class or struct to analyze
+///
+/// # Returns
+/// * `Ok(Members)` - Categorized member information including methods, constructors, and operators
+/// * `Err(AnalyzerError)` - LSP error or symbol resolution failure
+#[allow(dead_code)]
 pub async fn get_members(
     symbol_location: &FileLocation,
     session: &mut ClangdSession,
@@ -54,204 +73,121 @@ pub async fn get_members(
 ) -> Result<Members, AnalyzerError> {
     let uri = symbol_location.get_uri();
 
-    session
-        .ensure_file_ready(&symbol_location.file_path)
-        .await?;
+    // Get hierarchical document symbols using the advanced document symbols infrastructure
+    let document_symbols = get_document_symbols(session, uri).await?;
 
-    let client = session.client_mut();
+    info!(
+        "Analyzing {} document symbols for class '{}' members",
+        document_symbols.len(),
+        target_name
+    );
 
-    // Get document symbols for the file containing the class/struct
-    let document_symbols = client
-        .text_document_document_symbol(uri)
-        .await
-        .map_err(AnalyzerError::from)?;
+    // Extract members using the sophisticated document symbol analysis
+    let member_symbols = extract_class_members(&document_symbols, target_name);
 
-    trace!("Document symbols response: {:?}", document_symbols);
+    debug!(
+        "Found {} callable members for class '{}'",
+        member_symbols.len(),
+        target_name
+    );
 
-    // Extract members from the document symbols
-    let members = extract_members_from_symbols(document_symbols, target_name)?;
+    // Convert document symbols to structured member information
+    let members = categorize_members_from_symbols(member_symbols, target_name);
 
     Ok(members)
 }
 
+/// Extract callable members from document symbols without LSP communication
+///
+/// This function performs comprehensive member extraction using document symbols that have
+/// already been retrieved from the LSP server. The analysis operates entirely on the provided
+/// symbol hierarchy without requiring active LSP communication or session management.
+///
+/// # Arguments
+/// * `document_symbols` - Pre-fetched hierarchical document symbols from LSP
+/// * `target_name` - Name of the class or struct to analyze
+///
+/// # Returns
+/// * `Members` - Categorized member information including methods, constructors, and operators
+pub fn get_members_from_symbols(
+    document_symbols: &[lsp_types::DocumentSymbol],
+    target_name: &str,
+) -> Members {
+    info!(
+        "Analyzing {} document symbols for class '{}' members",
+        document_symbols.len(),
+        target_name
+    );
+
+    // Extract members using the sophisticated document symbol analysis
+    let member_symbols = extract_class_members(document_symbols, target_name);
+
+    debug!(
+        "Found {} callable members for class '{}'",
+        member_symbols.len(),
+        target_name
+    );
+
+    // Convert document symbols to structured member information
+    categorize_members_from_symbols(member_symbols, target_name)
+}
+
 // ============================================================================
-// Member Extraction Logic
+// Member Categorization Logic
 // ============================================================================
 
-/// Extract members from DocumentSymbolResponse
-fn extract_members_from_symbols(
-    symbols: DocumentSymbolResponse,
+/// Convert document symbols to categorized member information using modern symbol analysis
+///
+/// This function processes the hierarchical document symbols extracted by the advanced
+/// document symbols infrastructure and categorizes them into structured member types
+/// (methods, constructors, destructors, operators) for comprehensive class analysis.
+fn categorize_members_from_symbols(
+    member_symbols: Vec<&lsp_types::DocumentSymbol>,
     target_name: &str,
-) -> Result<Members, AnalyzerError> {
+) -> Members {
     let mut methods = Vec::new();
     let mut constructors = Vec::new();
+    let mut destructors = Vec::new();
     let mut operators = Vec::new();
-    let static_methods = Vec::new();
 
-    match symbols {
-        DocumentSymbolResponse::Nested(nested_symbols) => {
-            debug!(
-                "Processing nested document symbols, looking for type '{}'",
-                target_name
-            );
-            debug!("Found {} top-level symbols", nested_symbols.len());
+    debug!(
+        "Categorizing {} member symbols for class '{}'",
+        member_symbols.len(),
+        target_name
+    );
 
-            // Recursively search for the target type in the nested hierarchy
-            search_nested_symbols_for_members(
-                &nested_symbols,
-                target_name,
-                &mut methods,
-                &mut constructors,
-                &mut operators,
-            );
-        }
-        DocumentSymbolResponse::Flat(flat_symbols) => {
-            debug!(
-                "Processing flat document symbols, looking for members of type '{}'",
-                target_name
-            );
-            debug!("Found {} flat symbols", flat_symbols.len());
+    for symbol in member_symbols {
+        debug!(
+            "Processing member: '{}' (kind: {:?}, detail: {:?})",
+            symbol.name, symbol.kind, symbol.detail
+        );
 
-            // For flat symbols, find members by container name
-            for symbol in flat_symbols {
-                if let Some(container) = &symbol.container_name {
-                    debug!("Symbol '{}' has container '{}'", symbol.name, container);
-                    if container == target_name
-                        || container.ends_with(&format!("::{}", target_name))
-                    {
-                        debug!("Found member '{}' for type '{}'", symbol.name, target_name);
-                        let member = create_member_from_symbol_info(&symbol);
-                        categorize_member(member, &mut methods, &mut constructors, &mut operators);
-                    }
-                } else {
-                    debug!("Symbol '{}' has no container", symbol.name);
-                }
-            }
-        }
+        let member = create_member_from_document_symbol(symbol);
+
+        // Categorize member into appropriate type
+        categorize_member(
+            member,
+            &mut methods,
+            &mut constructors,
+            &mut destructors,
+            &mut operators,
+        );
     }
 
     debug!(
-        "Final counts: {} methods, {} constructors, {} operators, {} static methods",
+        "Member categorization complete for '{}': {} methods, {} constructors, {} destructors, {} operators",
+        target_name,
         methods.len(),
         constructors.len(),
-        operators.len(),
-        static_methods.len()
+        destructors.len(),
+        operators.len()
     );
 
-    Ok(Members {
+    Members {
         methods,
         constructors,
+        destructors,
         operators,
-        static_methods,
-    })
-}
-
-/// Recursively search nested document symbols to find the target type and extract its members
-fn search_nested_symbols_for_members(
-    symbols: &[lsp_types::DocumentSymbol],
-    target_name: &str,
-    methods: &mut Vec<Member>,
-    constructors: &mut Vec<Member>,
-    operators: &mut Vec<Member>,
-) {
-    use lsp_types::SymbolKind;
-
-    for symbol in symbols {
-        debug!(
-            "Checking symbol: '{}' (kind: {:?})",
-            symbol.name, symbol.kind
-        );
-
-        // If this is the target type, extract its members
-        if symbol.name == target_name
-            && matches!(symbol.kind, SymbolKind::CLASS | SymbolKind::STRUCT)
-        {
-            debug!("Found target type '{}', extracting members", target_name);
-
-            if let Some(children) = &symbol.children {
-                debug!("Type '{}' has {} children", target_name, children.len());
-
-                for child in children {
-                    debug!("Checking child: '{}' (kind: {:?})", child.name, child.kind);
-
-                    // Only process callable members
-                    if matches!(
-                        child.kind,
-                        SymbolKind::METHOD
-                            | SymbolKind::FUNCTION
-                            | SymbolKind::CONSTRUCTOR
-                            | SymbolKind::CLASS // Nested classes
-                            | SymbolKind::STRUCT // Nested structs
-                    ) {
-                        let member = create_member_from_document_symbol(child);
-                        debug!(
-                            "Adding member: '{}' (type: '{}')",
-                            member.name, member.member_type
-                        );
-                        categorize_member(member, methods, constructors, operators);
-
-                        // If this is a nested class/struct, recursively process its members too
-                        if matches!(child.kind, SymbolKind::CLASS | SymbolKind::STRUCT)
-                            && let Some(nested_children) = &child.children
-                        {
-                            debug!(
-                                "Processing nested type '{}' with {} children",
-                                child.name,
-                                nested_children.len()
-                            );
-                            for nested_child in nested_children {
-                                if matches!(
-                                    nested_child.kind,
-                                    SymbolKind::METHOD
-                                        | SymbolKind::FUNCTION
-                                        | SymbolKind::CONSTRUCTOR
-                                ) {
-                                    let mut nested_member =
-                                        create_member_from_document_symbol(nested_child);
-                                    // Prefix with the nested type name for clarity
-                                    nested_member.name =
-                                        format!("{}::{}", child.name, nested_member.name);
-                                    debug!(
-                                        "Adding nested member: '{}' (type: '{}')",
-                                        nested_member.name, nested_member.member_type
-                                    );
-                                    categorize_member(
-                                        nested_member,
-                                        methods,
-                                        constructors,
-                                        operators,
-                                    );
-                                }
-                            }
-                        }
-                    } else {
-                        debug!(
-                            "Skipping non-callable member: '{}' (kind: {:?})",
-                            child.name, child.kind
-                        );
-                    }
-                }
-            } else {
-                debug!("Type '{}' has no children", target_name);
-            }
-            return; // Found the target type, no need to continue searching
-        }
-
-        // Recursively search nested symbols (e.g., inside namespaces)
-        if let Some(children) = &symbol.children {
-            debug!(
-                "Recursively searching in '{}' namespace/container with {} children",
-                symbol.name,
-                children.len()
-            );
-            search_nested_symbols_for_members(
-                children,
-                target_name,
-                methods,
-                constructors,
-                operators,
-            );
-        }
     }
 }
 
@@ -259,7 +195,11 @@ fn search_nested_symbols_for_members(
 // Member Creation and Classification
 // ============================================================================
 
-/// Create a Member from a DocumentSymbol (nested format)
+/// Create a Member from a DocumentSymbol using hierarchical symbol information
+///
+/// This function converts a hierarchical document symbol into a structured Member
+/// representation, extracting the symbol name, type classification, signature details,
+/// and other relevant member characteristics for C++ class analysis.
 fn create_member_from_document_symbol(symbol: &lsp_types::DocumentSymbol) -> Member {
     let member_type = classify_member_kind(&symbol.name, symbol.kind);
 
@@ -267,28 +207,26 @@ fn create_member_from_document_symbol(symbol: &lsp_types::DocumentSymbol) -> Mem
         name: symbol.name.clone(),
         member_type,
         signature: symbol.detail.clone().unwrap_or_else(|| symbol.name.clone()),
-        access: None, // Access level not typically available in DocumentSymbol
+        access: None, // Access level information is not typically available in DocumentSymbol
     }
 }
 
-/// Create a Member from a SymbolInformation (flat format)
-fn create_member_from_symbol_info(symbol: &lsp_types::SymbolInformation) -> Member {
-    let member_type = classify_member_kind(&symbol.name, symbol.kind);
-
-    Member {
-        name: symbol.name.clone(),
-        member_type,
-        signature: symbol.name.clone(), // SymbolInformation doesn't have detail
-        access: None,
-    }
-}
-
-/// Classify member kind based on name and SymbolKind
+/// Classify member kind based on symbol name and LSP SymbolKind
+///
+/// This function analyzes the symbol name and LSP type information to determine
+/// the appropriate member classification (method, constructor, operator) for
+/// structured member categorization in C++ class analysis.
 fn classify_member_kind(name: &str, symbol_kind: lsp_types::SymbolKind) -> String {
     use lsp_types::SymbolKind;
 
     match symbol_kind {
-        SymbolKind::CONSTRUCTOR => "constructor".to_string(),
+        SymbolKind::CONSTRUCTOR => {
+            if name.starts_with("~") {
+                "destructor".to_string()
+            } else {
+                "constructor".to_string()
+            }
+        }
         SymbolKind::METHOD => {
             if name.starts_with("operator") {
                 "operator".to_string()
@@ -296,22 +234,28 @@ fn classify_member_kind(name: &str, symbol_kind: lsp_types::SymbolKind) -> Strin
                 "method".to_string()
             }
         }
-        SymbolKind::FUNCTION => "method".to_string(), // Simplify: treat as regular method
-        _ => "method".to_string(),                    // Fallback: treat as regular method
+        SymbolKind::FUNCTION => "method".to_string(), // Treat function symbols as regular methods
+        _ => "method".to_string(),                    // Default fallback to method classification
     }
 }
 
-/// Categorize a Member into the appropriate vector
+/// Categorize a Member into the appropriate collection based on member type
+///
+/// This function distributes Member objects into their respective categories
+/// (methods, constructors, destructors, operators) based on the classified member type,
+/// providing structured organization for comprehensive class member analysis.
 fn categorize_member(
     member: Member,
     methods: &mut Vec<Member>,
     constructors: &mut Vec<Member>,
+    destructors: &mut Vec<Member>,
     operators: &mut Vec<Member>,
 ) {
     match member.member_type.as_str() {
         "method" => methods.push(member),
         "constructor" => constructors.push(member),
+        "destructor" => destructors.push(member),
         "operator" => operators.push(member),
-        _ => methods.push(member), // Default to methods for unknown types
+        _ => methods.push(member), // Default to methods for unknown member types
     }
 }
