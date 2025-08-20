@@ -5,6 +5,7 @@
 
 pub mod call_hierarchy;
 pub mod definitions;
+pub mod document_symbols;
 pub mod examples;
 pub mod hover;
 pub mod members;

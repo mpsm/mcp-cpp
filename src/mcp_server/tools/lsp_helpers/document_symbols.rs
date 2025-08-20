@@ -1,0 +1,643 @@
+//! Document symbols extraction functionality for C++ files
+//!
+//! This module provides LSP-based document symbol extraction that works with
+//! clangd to get hierarchical symbol information from C++ files. Expects only
+//! nested (hierarchical) responses due to client capabilities configuration.
+
+use lsp_types::{DocumentSymbol, DocumentSymbolResponse, Position, Range};
+use std::collections::VecDeque;
+use std::path::Path;
+use tracing::{trace, warn};
+
+use crate::clangd::session::{ClangdSession, ClangdSessionTrait};
+use crate::lsp::traits::LspClientTrait;
+use crate::mcp_server::tools::analyze_symbols::AnalyzerError;
+
+// ============================================================================
+// Traits for Idiomatic Symbol Tree Operations
+// ============================================================================
+
+/// Trait for types that can check if they contain a position
+pub trait PositionContains {
+    /// Check if this range/symbol contains the given position
+    fn contains_position(&self, line: u32, character: u32) -> bool;
+
+    /// Check if this range/symbol contains the given Position
+    #[allow(dead_code)]
+    fn contains(&self, position: &Position) -> bool {
+        self.contains_position(position.line, position.character)
+    }
+}
+
+impl PositionContains for Range {
+    fn contains_position(&self, line: u32, character: u32) -> bool {
+        (line > self.start.line || (line == self.start.line && character >= self.start.character))
+            && (line < self.end.line || (line == self.end.line && character <= self.end.character))
+    }
+}
+
+impl PositionContains for DocumentSymbol {
+    fn contains_position(&self, line: u32, character: u32) -> bool {
+        self.selection_range.contains_position(line, character)
+    }
+}
+
+/// Trait for symbol matching strategies - extensible for future use
+#[allow(dead_code)]
+pub trait SymbolMatcher {
+    fn matches(&self, symbol: &DocumentSymbol) -> bool;
+}
+
+// ============================================================================
+// Iterator for Tree Traversal
+// ============================================================================
+
+/// Iterator over document symbols with path context
+pub struct DocumentSymbolIterator<'a> {
+    stack: VecDeque<(&'a DocumentSymbol, Vec<&'a str>)>,
+}
+
+impl<'a> DocumentSymbolIterator<'a> {
+    /// Create a new iterator starting from root symbols
+    pub fn new(symbols: &'a [DocumentSymbol]) -> Self {
+        let mut stack = VecDeque::new();
+        for symbol in symbols {
+            stack.push_back((symbol, vec![]));
+        }
+        Self { stack }
+    }
+
+    /// Create iterator with depth-first traversal order
+    #[allow(dead_code)]
+    pub fn depth_first(symbols: &'a [DocumentSymbol]) -> Self {
+        Self::new(symbols)
+    }
+
+    /// Create iterator with breadth-first traversal order
+    #[allow(dead_code)]
+    pub fn breadth_first(symbols: &'a [DocumentSymbol]) -> Self {
+        let mut stack = VecDeque::new();
+        for symbol in symbols {
+            stack.push_front((symbol, vec![]));
+        }
+        Self { stack }
+    }
+}
+
+impl<'a> Iterator for DocumentSymbolIterator<'a> {
+    type Item = (&'a DocumentSymbol, Vec<&'a str>);
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if let Some((symbol, path)) = self.stack.pop_front() {
+            // Add children to stack for future iteration (depth-first by default)
+            if let Some(children) = &symbol.children {
+                let mut new_path = path.clone();
+                new_path.push(&symbol.name);
+
+                // Insert children in reverse order for depth-first (or normal order for breadth-first)
+                for child in children.iter().rev() {
+                    self.stack.push_front((child, new_path.clone()));
+                }
+            }
+
+            Some((symbol, path))
+        } else {
+            None
+        }
+    }
+}
+
+// ============================================================================
+// Symbol Search Builder
+// ============================================================================
+
+/// Builder pattern for flexible symbol searching
+#[derive(Debug, Clone)]
+pub struct SymbolSearchBuilder {
+    position: Option<(u32, u32)>,
+    name: Option<String>,
+    kind: Option<lsp_types::SymbolKind>,
+    path_contains: Option<String>,
+}
+
+impl SymbolSearchBuilder {
+    /// Create a new search builder
+    pub fn new() -> Self {
+        Self {
+            position: None,
+            name: None,
+            kind: None,
+            path_contains: None,
+        }
+    }
+
+    /// Search for symbol at specific position
+    pub fn at_position(mut self, line: u32, character: u32) -> Self {
+        self.position = Some((line, character));
+        self
+    }
+
+    /// Search for symbol by name
+    pub fn with_name<S: Into<String>>(mut self, name: S) -> Self {
+        self.name = Some(name.into());
+        self
+    }
+
+    /// Search for symbol by kind
+    pub fn with_kind(mut self, kind: lsp_types::SymbolKind) -> Self {
+        self.kind = Some(kind);
+        self
+    }
+
+    /// Search for symbols whose path contains the given string
+    #[allow(dead_code)]
+    pub fn path_contains<S: Into<String>>(mut self, path_part: S) -> Self {
+        self.path_contains = Some(path_part.into());
+        self
+    }
+
+    /// Find the first matching symbol
+    pub fn find_first(self, symbols: &[DocumentSymbol]) -> Option<&DocumentSymbol> {
+        DocumentSymbolIterator::new(symbols)
+            .find(|(symbol, path)| self.matches_symbol(symbol, path))
+            .map(|(symbol, _)| symbol)
+    }
+
+    /// Find all matching symbols
+    pub fn find_all(self, symbols: &[DocumentSymbol]) -> Vec<&DocumentSymbol> {
+        DocumentSymbolIterator::new(symbols)
+            .filter(|(symbol, path)| self.matches_symbol(symbol, path))
+            .map(|(symbol, _)| symbol)
+            .collect()
+    }
+
+    /// Check if a symbol matches the search criteria
+    fn matches_symbol(&self, symbol: &DocumentSymbol, path: &[&str]) -> bool {
+        // Position matching
+        if let Some((line, character)) = self.position
+            && !symbol.contains_position(line, character)
+        {
+            return false;
+        }
+
+        // Name matching
+        if let Some(ref name) = self.name
+            && symbol.name != *name
+        {
+            return false;
+        }
+
+        // Kind matching
+        if let Some(kind) = self.kind
+            && symbol.kind != kind
+        {
+            return false;
+        }
+
+        // Path matching
+        if let Some(ref path_contains) = self.path_contains {
+            let full_path = path.join("::");
+            if !full_path.contains(path_contains) {
+                return false;
+            }
+        }
+
+        true
+    }
+}
+
+impl Default for SymbolSearchBuilder {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+// ============================================================================
+// Public API
+// ============================================================================
+
+/// Get document symbols for a file URI, returning only hierarchical symbols
+///
+/// This function calls the LSP `textDocument/documentSymbol` method and expects
+/// a hierarchical response due to our client capabilities. If a flat response
+/// is received, it logs a warning and returns an error.
+///
+/// # Arguments
+/// * `session` - Active clangd session
+/// * `file_uri` - URI of the file to analyze
+///
+/// # Returns
+/// * `Ok(Vec<DocumentSymbol>)` - Hierarchical document symbols
+/// * `Err(AnalyzerError)` - LSP error or unexpected flat response
+#[allow(dead_code)]
+pub async fn get_document_symbols(
+    session: &mut ClangdSession,
+    file_uri: String,
+) -> Result<Vec<DocumentSymbol>, AnalyzerError> {
+    trace!("Requesting document symbols for URI: {}", file_uri);
+
+    // Ensure file is ready in clangd session
+    let file_path = file_uri.strip_prefix("file://").unwrap_or(&file_uri);
+
+    session.ensure_file_ready(Path::new(file_path)).await?;
+
+    let client = session.client_mut();
+
+    // Get document symbols from LSP
+    let document_symbols = client
+        .text_document_document_symbol(file_uri.clone())
+        .await
+        .map_err(AnalyzerError::from)?;
+
+    trace!(
+        "Document symbols response type: {:?}",
+        match &document_symbols {
+            DocumentSymbolResponse::Nested(_) => "Nested (hierarchical)",
+            DocumentSymbolResponse::Flat(_) => "Flat (legacy)",
+        }
+    );
+
+    // Extract hierarchical symbols or warn about flat response
+    match document_symbols {
+        DocumentSymbolResponse::Nested(nested_symbols) => {
+            trace!(
+                "Successfully received {} top-level hierarchical symbols",
+                nested_symbols.len()
+            );
+            Ok(nested_symbols)
+        }
+        DocumentSymbolResponse::Flat(flat_symbols) => {
+            warn!(
+                "Received flat document symbols response for '{}' despite hierarchical support enabled. \
+                 This is unexpected and may indicate a clangd configuration issue. \
+                 Flat response contains {} symbols.",
+                file_uri,
+                flat_symbols.len()
+            );
+            Err(AnalyzerError::NoData(format!(
+                "Unexpected flat document symbols response for '{}' despite hierarchical client capability. Expected nested DocumentSymbol format.",
+                file_uri
+            )))
+        }
+    }
+}
+
+// ============================================================================
+// Utility Functions
+// ============================================================================
+
+/// Find a specific symbol within the hierarchical document symbols using position
+///
+/// This is a convenience function that uses the builder pattern internally.
+/// For more complex searches, use `SymbolSearchBuilder` directly.
+///
+/// # Arguments
+/// * `symbols` - Hierarchical document symbols to search
+/// * `target_line` - Target line number (0-based)
+/// * `target_character` - Target character position (0-based)
+///
+/// # Returns
+/// * `Some(&DocumentSymbol)` - Found symbol reference
+/// * `None` - No symbol found at the target position
+#[allow(dead_code)]
+pub fn find_symbol_at_position(
+    symbols: &[DocumentSymbol],
+    target_line: u32,
+    target_character: u32,
+) -> Option<&DocumentSymbol> {
+    SymbolSearchBuilder::new()
+        .at_position(target_line, target_character)
+        .find_first(symbols)
+}
+
+/// Find symbols by name using idiomatic iterator approach
+///
+/// # Arguments
+/// * `symbols` - Hierarchical document symbols to search
+/// * `name` - Symbol name to search for
+///
+/// # Returns
+/// * `Vec<&DocumentSymbol>` - All symbols with matching name
+#[allow(dead_code)]
+pub fn find_symbols_by_name<'a>(
+    symbols: &'a [DocumentSymbol],
+    name: &str,
+) -> Vec<&'a DocumentSymbol> {
+    SymbolSearchBuilder::new().with_name(name).find_all(symbols)
+}
+
+/// Find symbols by kind using idiomatic iterator approach
+///
+/// # Arguments
+/// * `symbols` - Hierarchical document symbols to search
+/// * `kind` - Symbol kind to search for
+///
+/// # Returns
+/// * `Vec<&DocumentSymbol>` - All symbols with matching kind
+#[allow(dead_code)]
+pub fn find_symbols_by_kind(
+    symbols: &[DocumentSymbol],
+    kind: lsp_types::SymbolKind,
+) -> Vec<&DocumentSymbol> {
+    SymbolSearchBuilder::new().with_kind(kind).find_all(symbols)
+}
+
+/// Count total symbols in hierarchical document symbols using iterator
+///
+/// Uses functional programming approach with iterator combinators.
+///
+/// # Arguments
+/// * `symbols` - Hierarchical document symbols
+///
+/// # Returns
+/// * `usize` - Total count of all symbols in the hierarchy
+#[allow(dead_code)]
+pub fn count_total_symbols(symbols: &[DocumentSymbol]) -> usize {
+    DocumentSymbolIterator::new(symbols).count()
+}
+
+/// Count symbols by kind using iterator approach
+///
+/// # Arguments
+/// * `symbols` - Hierarchical document symbols
+/// * `kind` - Symbol kind to count
+///
+/// # Returns
+/// * `usize` - Count of symbols with matching kind
+#[allow(dead_code)]
+pub fn count_symbols_by_kind(symbols: &[DocumentSymbol], kind: lsp_types::SymbolKind) -> usize {
+    DocumentSymbolIterator::new(symbols)
+        .filter(|(symbol, _)| symbol.kind == kind)
+        .count()
+}
+
+/// Get all symbol names with their paths
+///
+/// Returns a vector of (symbol_name, path) tuples for all symbols in the hierarchy.
+///
+/// # Arguments
+/// * `symbols` - Hierarchical document symbols
+///
+/// # Returns
+/// * `Vec<(String, String)>` - Vector of (name, path) tuples
+#[allow(dead_code)]
+pub fn get_symbol_paths(symbols: &[DocumentSymbol]) -> Vec<(String, String)> {
+    DocumentSymbolIterator::new(symbols)
+        .map(|(symbol, path)| (symbol.name.clone(), path.join("::")))
+        .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use lsp_types::{Position, Range, SymbolKind};
+
+    fn create_test_symbol(
+        name: &str,
+        start_line: u32,
+        start_char: u32,
+        end_line: u32,
+        end_char: u32,
+    ) -> DocumentSymbol {
+        DocumentSymbol {
+            name: name.to_string(),
+            detail: None,
+            kind: SymbolKind::CLASS,
+            tags: None,
+            #[allow(deprecated)]
+            deprecated: None,
+            range: Range {
+                start: Position {
+                    line: start_line,
+                    character: start_char,
+                },
+                end: Position {
+                    line: end_line,
+                    character: end_char,
+                },
+            },
+            selection_range: Range {
+                start: Position {
+                    line: start_line,
+                    character: start_char,
+                },
+                end: Position {
+                    line: start_line,
+                    character: start_char + name.len() as u32,
+                },
+            },
+            children: None,
+        }
+    }
+
+    fn create_test_symbol_with_kind(
+        name: &str,
+        kind: SymbolKind,
+        start_line: u32,
+        start_char: u32,
+        end_line: u32,
+        end_char: u32,
+    ) -> DocumentSymbol {
+        let mut symbol = create_test_symbol(name, start_line, start_char, end_line, end_char);
+        symbol.kind = kind;
+        symbol
+    }
+
+    #[test]
+    fn test_position_contains_trait() {
+        let range = Range {
+            start: Position {
+                line: 10,
+                character: 0,
+            },
+            end: Position {
+                line: 10,
+                character: 10,
+            },
+        };
+
+        // Test position within range
+        assert!(range.contains_position(10, 5));
+        assert!(range.contains(&Position {
+            line: 10,
+            character: 5
+        }));
+
+        // Test position outside range
+        assert!(!range.contains_position(11, 5));
+        assert!(!range.contains_position(10, 15));
+    }
+
+    #[test]
+    fn test_document_symbol_iterator() {
+        let mut parent = create_test_symbol("Parent", 0, 0, 10, 0);
+        let child1 = create_test_symbol("Child1", 2, 4, 4, 0);
+        let child2 = create_test_symbol("Child2", 6, 4, 8, 0);
+
+        parent.children = Some(vec![child1, child2]);
+        let symbols = vec![parent];
+
+        let collected: Vec<_> = DocumentSymbolIterator::new(&symbols)
+            .map(|(symbol, path)| (symbol.name.clone(), path.join("::")))
+            .collect();
+
+        assert_eq!(collected.len(), 3);
+        assert_eq!(collected[0], ("Parent".to_string(), "".to_string()));
+        assert_eq!(collected[1], ("Child1".to_string(), "Parent".to_string()));
+        assert_eq!(collected[2], ("Child2".to_string(), "Parent".to_string()));
+    }
+
+    #[test]
+    fn test_symbol_search_builder_position() {
+        let symbol = create_test_symbol("TestClass", 10, 0, 20, 0);
+        let symbols = vec![symbol];
+
+        // Position within selection range
+        let found = SymbolSearchBuilder::new()
+            .at_position(10, 5)
+            .find_first(&symbols);
+        assert!(found.is_some());
+        assert_eq!(found.unwrap().name, "TestClass");
+
+        // Position outside range
+        let not_found = SymbolSearchBuilder::new()
+            .at_position(25, 0)
+            .find_first(&symbols);
+        assert!(not_found.is_none());
+    }
+
+    #[test]
+    fn test_symbol_search_builder_name() {
+        let symbol1 = create_test_symbol("ClassA", 0, 0, 5, 0);
+        let symbol2 = create_test_symbol("ClassB", 6, 0, 10, 0);
+        let symbols = vec![symbol1, symbol2];
+
+        let found = SymbolSearchBuilder::new()
+            .with_name("ClassB")
+            .find_first(&symbols);
+        assert!(found.is_some());
+        assert_eq!(found.unwrap().name, "ClassB");
+    }
+
+    #[test]
+    fn test_symbol_search_builder_kind() {
+        let class_symbol = create_test_symbol_with_kind("MyClass", SymbolKind::CLASS, 0, 0, 5, 0);
+        let function_symbol =
+            create_test_symbol_with_kind("myFunction", SymbolKind::FUNCTION, 6, 0, 8, 0);
+        let symbols = vec![class_symbol, function_symbol];
+
+        let functions = SymbolSearchBuilder::new()
+            .with_kind(SymbolKind::FUNCTION)
+            .find_all(&symbols);
+        assert_eq!(functions.len(), 1);
+        assert_eq!(functions[0].name, "myFunction");
+    }
+
+    #[test]
+    fn test_symbol_search_builder_combined() {
+        let mut parent = create_test_symbol_with_kind("Parent", SymbolKind::CLASS, 0, 0, 10, 0);
+        let child = create_test_symbol_with_kind("method", SymbolKind::METHOD, 2, 4, 4, 0);
+
+        parent.children = Some(vec![child]);
+        let symbols = vec![parent];
+
+        // Search for method by name and kind
+        let found = SymbolSearchBuilder::new()
+            .with_name("method")
+            .with_kind(SymbolKind::METHOD)
+            .find_first(&symbols);
+        assert!(found.is_some());
+        assert_eq!(found.unwrap().name, "method");
+
+        // Search for method in specific path
+        let found_with_path = SymbolSearchBuilder::new()
+            .with_name("method")
+            .path_contains("Parent")
+            .find_first(&symbols);
+        assert!(found_with_path.is_some());
+        assert_eq!(found_with_path.unwrap().name, "method");
+    }
+
+    #[test]
+    fn test_find_symbol_at_position() {
+        let symbol = create_test_symbol("TestClass", 10, 0, 20, 0);
+        let symbols = vec![symbol];
+
+        // Position within selection range
+        let found = find_symbol_at_position(&symbols, 10, 5);
+        assert!(found.is_some());
+        assert_eq!(found.unwrap().name, "TestClass");
+
+        // Position outside range
+        let not_found = find_symbol_at_position(&symbols, 25, 0);
+        assert!(not_found.is_none());
+    }
+
+    #[test]
+    fn test_find_symbols_by_name() {
+        let symbol1 = create_test_symbol("Test", 0, 0, 5, 0);
+        let symbol2 = create_test_symbol("Other", 6, 0, 10, 0);
+        let symbol3 = create_test_symbol("Test", 11, 0, 15, 0);
+        let symbols = vec![symbol1, symbol2, symbol3];
+
+        let found = find_symbols_by_name(&symbols, "Test");
+        assert_eq!(found.len(), 2);
+        assert!(found.iter().all(|s| s.name == "Test"));
+    }
+
+    #[test]
+    fn test_find_symbols_by_kind() {
+        let class_symbol = create_test_symbol_with_kind("MyClass", SymbolKind::CLASS, 0, 0, 5, 0);
+        let function_symbol =
+            create_test_symbol_with_kind("myFunction", SymbolKind::FUNCTION, 6, 0, 8, 0);
+        let symbols = vec![class_symbol, function_symbol];
+
+        let classes = find_symbols_by_kind(&symbols, SymbolKind::CLASS);
+        assert_eq!(classes.len(), 1);
+        assert_eq!(classes[0].name, "MyClass");
+    }
+
+    #[test]
+    fn test_count_total_symbols() {
+        let mut parent = create_test_symbol("Parent", 0, 0, 10, 0);
+        let child1 = create_test_symbol("Child1", 2, 4, 4, 0);
+        let child2 = create_test_symbol("Child2", 6, 4, 8, 0);
+
+        parent.children = Some(vec![child1, child2]);
+        let symbols = vec![parent];
+
+        // Should count parent + 2 children = 3 total
+        assert_eq!(count_total_symbols(&symbols), 3);
+    }
+
+    #[test]
+    fn test_count_symbols_by_kind() {
+        let class1 = create_test_symbol_with_kind("Class1", SymbolKind::CLASS, 0, 0, 5, 0);
+        let class2 = create_test_symbol_with_kind("Class2", SymbolKind::CLASS, 6, 0, 10, 0);
+        let function = create_test_symbol_with_kind("func", SymbolKind::FUNCTION, 11, 0, 13, 0);
+        let symbols = vec![class1, class2, function];
+
+        assert_eq!(count_symbols_by_kind(&symbols, SymbolKind::CLASS), 2);
+        assert_eq!(count_symbols_by_kind(&symbols, SymbolKind::FUNCTION), 1);
+        assert_eq!(count_symbols_by_kind(&symbols, SymbolKind::VARIABLE), 0);
+    }
+
+    #[test]
+    fn test_get_symbol_paths() {
+        let mut parent = create_test_symbol("Namespace", 0, 0, 10, 0);
+        let mut child_class = create_test_symbol("MyClass", 2, 0, 8, 0);
+        let child_method = create_test_symbol("method", 4, 4, 6, 0);
+
+        child_class.children = Some(vec![child_method]);
+        parent.children = Some(vec![child_class]);
+        let symbols = vec![parent];
+
+        let paths = get_symbol_paths(&symbols);
+        assert_eq!(paths.len(), 3);
+
+        // Check paths
+        assert!(paths.contains(&("Namespace".to_string(), "".to_string())));
+        assert!(paths.contains(&("MyClass".to_string(), "Namespace".to_string())));
+        assert!(paths.contains(&("method".to_string(), "Namespace::MyClass".to_string())));
+    }
+}

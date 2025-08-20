@@ -9,6 +9,7 @@ use crate::io::file_manager::RealFileBufferManager;
 use crate::lsp::traits::LspClientTrait;
 use crate::mcp_server::tools::analyze_symbols::AnalyzerError;
 use crate::symbol::{FileLineWithContents, FileLocation};
+use tracing::trace;
 
 // ============================================================================
 // Public API
@@ -117,6 +118,7 @@ pub fn goto_defdecl_response_to_file_locations(
     response: lsp_types::GotoDefinitionResponse,
 ) -> Result<Vec<FileLocation>, AnalyzerError> {
     use lsp_types::GotoDefinitionResponse;
+    trace!("Parsing GotoDefinitionReponse: {:?}", response);
     match response {
         GotoDefinitionResponse::Scalar(loc) => Ok(vec![FileLocation::from(&loc)]),
         GotoDefinitionResponse::Array(locs) => Ok(locs.iter().map(FileLocation::from).collect()),

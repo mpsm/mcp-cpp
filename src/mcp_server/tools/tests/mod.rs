@@ -8,6 +8,8 @@ pub mod call_hierarchy_tests;
 #[cfg(all(test, feature = "clangd-integration-tests"))]
 pub mod definitions_tests;
 #[cfg(all(test, feature = "clangd-integration-tests"))]
+pub mod document_symbols_tests;
+#[cfg(all(test, feature = "clangd-integration-tests"))]
 pub mod examples_tests;
 #[cfg(all(test, feature = "clangd-integration-tests"))]
 pub mod hover_tests;

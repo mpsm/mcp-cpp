@@ -6,7 +6,7 @@
 
 use lsp_types::DocumentSymbolResponse;
 use serde::{Deserialize, Serialize};
-use tracing::debug;
+use tracing::{debug, trace};
 
 use crate::clangd::session::{ClangdSession, ClangdSessionTrait};
 use crate::lsp::traits::LspClientTrait;
@@ -69,6 +69,8 @@ pub async fn get_members(
         .text_document_document_symbol(uri)
         .await
         .map_err(AnalyzerError::from)?;
+
+    trace!("Document symbols response: {:?}", document_symbols);
 
     // Extract members from the document symbols
     let members = extract_members_from_symbols(document_symbols, target_name)?;

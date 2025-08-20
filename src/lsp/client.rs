@@ -69,6 +69,41 @@ impl<T: Transport + 'static> LspClient<T> {
             server_capabilities: None,
         }
     }
+
+    /// Supported symbol kinds for document symbol requests.
+    /// Includes all current LSP symbol kinds (1-26) for comprehensive C++ semantic analysis.
+    fn supported_symbol_kinds() -> Vec<lsp_types::SymbolKind> {
+        vec![
+            // Basic symbol kinds (1-18) - original LSP 1.0 baseline
+            lsp_types::SymbolKind::FILE,        // 1
+            lsp_types::SymbolKind::MODULE,      // 2
+            lsp_types::SymbolKind::NAMESPACE,   // 3
+            lsp_types::SymbolKind::PACKAGE,     // 4
+            lsp_types::SymbolKind::CLASS,       // 5
+            lsp_types::SymbolKind::METHOD,      // 6
+            lsp_types::SymbolKind::PROPERTY,    // 7
+            lsp_types::SymbolKind::FIELD,       // 8
+            lsp_types::SymbolKind::CONSTRUCTOR, // 9
+            lsp_types::SymbolKind::ENUM,        // 10
+            lsp_types::SymbolKind::INTERFACE,   // 11
+            lsp_types::SymbolKind::FUNCTION,    // 12
+            lsp_types::SymbolKind::VARIABLE,    // 13
+            lsp_types::SymbolKind::CONSTANT,    // 14
+            lsp_types::SymbolKind::STRING,      // 15
+            lsp_types::SymbolKind::NUMBER,      // 16
+            lsp_types::SymbolKind::BOOLEAN,     // 17
+            lsp_types::SymbolKind::ARRAY,       // 18
+            // Extended symbol kinds (19-26) - added in later LSP versions
+            lsp_types::SymbolKind::OBJECT,         // 19
+            lsp_types::SymbolKind::KEY,            // 20
+            lsp_types::SymbolKind::NULL,           // 21
+            lsp_types::SymbolKind::ENUM_MEMBER,    // 22
+            lsp_types::SymbolKind::STRUCT,         // 23 - C++ struct types
+            lsp_types::SymbolKind::EVENT,          // 24
+            lsp_types::SymbolKind::OPERATOR,       // 25 - C++ operator overloads
+            lsp_types::SymbolKind::TYPE_PARAMETER, // 26 - C++ template parameters
+        ]
+    }
     /// Executes typed LSP requests using the lsp-types Request trait.
     /// Provides compile-time method validation and eliminates hardcoded strings,
     /// reducing protocol violation risks and improving maintainability.
@@ -149,14 +184,34 @@ impl<T: Transport + 'static> LspClientTrait for LspClient<T> {
                     }),
                     definition: Some(lsp_types::GotoCapability {
                         dynamic_registration: Some(false),
-                        link_support: Some(false),
+                        // NOTE: clangd (as of LLVM 20) ignores linkSupport and always returns
+                        // Location[] instead of LocationLink[]. This is a clangd limitation:
+                        // the callback signature is hardcoded to Callback<std::vector<Location>>
+                        // in ClangdLSPServer.cpp despite supporting LSP 3.17 (LocationLink was
+                        // introduced in 3.14). Our code handles both formats correctly.
+                        link_support: Some(true),
+                    }),
+                    declaration: Some(lsp_types::GotoCapability {
+                        dynamic_registration: Some(false),
+                        link_support: Some(true),
+                    }),
+                    type_definition: Some(lsp_types::GotoCapability {
+                        dynamic_registration: Some(false),
+                        link_support: Some(true),
+                    }),
+                    implementation: Some(lsp_types::GotoCapability {
+                        dynamic_registration: Some(false),
+                        link_support: Some(true),
                     }),
                     references: Some(lsp_types::ReferenceClientCapabilities {
                         dynamic_registration: Some(false),
                     }),
                     document_symbol: Some(lsp_types::DocumentSymbolClientCapabilities {
                         dynamic_registration: Some(false),
-                        symbol_kind: None,
+                        // Support extended symbol kinds for better C++ semantics and graceful fallback
+                        symbol_kind: Some(lsp_types::SymbolKindCapability {
+                            value_set: Some(Self::supported_symbol_kinds()),
+                        }),
                         hierarchical_document_symbol_support: Some(true),
                         tag_support: None,
                     }),
