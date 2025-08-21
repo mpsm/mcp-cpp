@@ -19,7 +19,7 @@ use crate::io::file_buffer::FileBufferError;
 use crate::mcp_server::tools::lsp_helpers::{
     call_hierarchy::{CallHierarchy, get_call_hierarchy},
     definitions::{get_declarations, get_definitions},
-    document_symbols::get_symbol_document_symbol,
+    document_symbols::{SymbolContext, find_symbol_at_position_with_path, get_document_symbols},
     examples::get_examples,
     hover::get_hover_info,
     members::{Members, get_members_from_document_symbol},
@@ -167,6 +167,25 @@ pub struct AnalyzeSymbolContextTool {
     /// They are collected from references to the symbol, excluding the declaration itself.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_examples: Option<u32>,
+
+    /// Location hint for disambiguating overloaded symbols. OPTIONAL.
+    ///
+    /// FORMAT: Compact LSP-style location string with 1-based line/column numbers:
+    /// • "/absolute/path/to/file.cpp:line:column"
+    /// • Example: "/home/project/src/Math.cpp:89:8"
+    ///
+    /// BEHAVIOR:
+    /// • None: Uses workspace symbol resolution (fuzzy matching across project)
+    /// • Some(location): Finds document symbol at the specified location
+    ///
+    /// USE CASES:
+    /// • Disambiguating function overloads with same name but different signatures
+    /// • Targeting specific template specializations
+    /// • Precise symbol selection in files with multiple symbols of same name
+    ///
+    /// NOTE: Column number is required. Use editor or LSP tools to get exact position.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub location_hint: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -249,18 +268,73 @@ impl AnalyzeSymbolContextTool {
         )
     }
 
-    /// Resolves the symbol
-    async fn resolve_symbol(
+    async fn resolve_symbol_via_workspace_with_context(
         &self,
         locked_session: &mut ClangdSession,
-    ) -> Result<Symbol, CallToolError> {
-        match get_matching_symbol(&self.symbol, locked_session).await {
-            Ok(symbol) => Ok(symbol),
-            Err(err) => {
-                error!("Failed to get matching symbol: {}", err);
-                Err(CallToolError::from(err))
-            }
-        }
+    ) -> Result<(Symbol, SymbolContext), CallToolError> {
+        let workspace_symbol = get_matching_symbol(&self.symbol, locked_session)
+            .await
+            .map_err(|err| {
+                error!("Failed to get matching workspace symbol: {}", err);
+                CallToolError::from(err)
+            })?;
+
+        let symbol = workspace_symbol.clone();
+
+        let file_uri = crate::symbol::uri_from_pathbuf(&symbol.location.file_path);
+
+        let document_symbols = get_document_symbols(locked_session, file_uri)
+            .await
+            .map_err(CallToolError::from)?;
+
+        let position: lsp_types::Position = symbol.location.range.start.into();
+
+        let (doc_symbol, container_path) =
+            find_symbol_at_position_with_path(&document_symbols, &position).ok_or_else(|| {
+                CallToolError::new(std::io::Error::other(format!(
+                    "Could not find document symbol for workspace symbol '{}'",
+                    self.symbol
+                )))
+            })?;
+
+        let context = SymbolContext {
+            document_symbol: doc_symbol.clone(),
+            container_path,
+        };
+
+        Ok((symbol, context))
+    }
+
+    async fn resolve_symbol_context_at_location(
+        &self,
+        location: &FileLocation,
+        locked_session: &mut ClangdSession,
+    ) -> Result<(Symbol, SymbolContext), CallToolError> {
+        let file_uri = crate::symbol::uri_from_pathbuf(&location.file_path);
+
+        let document_symbols = get_document_symbols(locked_session, file_uri)
+            .await
+            .map_err(CallToolError::from)?;
+
+        let position: lsp_types::Position = location.range.start.into();
+
+        let (doc_symbol, container_path) =
+            find_symbol_at_position_with_path(&document_symbols, &position).ok_or_else(|| {
+                CallToolError::new(std::io::Error::other(format!(
+                    "No symbol found at location {}",
+                    location.to_compact_range()
+                )))
+            })?;
+
+        let mut symbol = Symbol::from((doc_symbol, location.file_path.as_path()));
+        symbol.container_name = container_path.last().cloned();
+
+        let context = SymbolContext {
+            document_symbol: doc_symbol.clone(),
+            container_path,
+        };
+
+        Ok((symbol, context))
     }
 
     /// Retrieves definitions and declarations for the symbol
@@ -394,8 +468,22 @@ impl AnalyzeSymbolContextTool {
         )
         .await;
 
-        // Resolve symbol
-        let symbol = self.resolve_symbol(&mut locked_session).await?;
+        let (symbol, symbol_context) = match &self.location_hint {
+            None => {
+                self.resolve_symbol_via_workspace_with_context(&mut locked_session)
+                    .await?
+            }
+            Some(location_str) => {
+                let location: FileLocation = location_str.parse().map_err(|e| {
+                    CallToolError::new(std::io::Error::other(format!(
+                        "Invalid location format '{}': {}",
+                        location_str, e
+                    )))
+                })?;
+                self.resolve_symbol_context_at_location(&location, &mut locked_session)
+                    .await?
+            }
+        };
 
         // Get definitions and declarations
         let (definitions, mut declarations) = self
@@ -423,30 +511,17 @@ impl AnalyzeSymbolContextTool {
             .get_hierarchies(&symbol, &symbol.location, &mut locked_session)
             .await;
 
-        // Get matching document symbol for detail extraction and member analysis
-        let matched_document_symbol =
-            match get_symbol_document_symbol(&mut locked_session, &symbol.name, &symbol.location)
-                .await
-            {
-                Ok(symbol) => symbol,
-                Err(err) => {
-                    warn!("Failed to get document symbol: {}", err);
-                    None
-                }
-            };
-
-        // Extract detail from matched document symbol
-        let detail = matched_document_symbol
-            .as_ref()
-            .and_then(|ds| ds.detail.clone());
+        let detail = symbol_context.document_symbol.detail.clone();
 
         if let Some(ref d) = detail {
             info!("Found detail for '{}': {}", self.symbol, d);
         }
 
-        // Extract members from structural types using the matched document symbol
-        let members =
-            Self::extract_members_if_structural(&symbol, &matched_document_symbol, &self.symbol);
+        let members = Self::extract_members_if_structural(
+            &symbol,
+            &Some(symbol_context.document_symbol.clone()),
+            &self.symbol,
+        );
 
         let result = AnalyzerResult {
             symbol,
@@ -504,6 +579,7 @@ mod tests {
             symbol: "Math".to_string(),
             build_directory: None,
             max_examples: None,
+            location_hint: None,
         };
 
         let result = tool
@@ -615,6 +691,7 @@ mod tests {
             symbol: "Math".to_string(),
             build_directory: None,
             max_examples: Some(2),
+            location_hint: None,
         };
 
         let result = tool

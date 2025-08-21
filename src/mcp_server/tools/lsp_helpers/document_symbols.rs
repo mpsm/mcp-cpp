@@ -14,6 +14,20 @@ use crate::lsp::traits::LspClientTrait;
 use crate::mcp_server::tools::analyze_symbols::AnalyzerError;
 
 // ============================================================================
+// SymbolContext - Rich symbol information with container hierarchy
+// ============================================================================
+
+/// Rich symbol context containing DocumentSymbol and container hierarchy
+#[derive(Debug, Clone)]
+pub struct SymbolContext {
+    /// The LSP DocumentSymbol with full AST information
+    pub document_symbol: lsp_types::DocumentSymbol,
+    /// Container hierarchy path (e.g., ["Math", "Complex"] for Math::Complex::add)
+    #[allow(dead_code)]
+    pub container_path: Vec<String>,
+}
+
+// ============================================================================
 // Traits for Idiomatic Symbol Tree Operations
 // ============================================================================
 
@@ -343,33 +357,6 @@ impl Default for SymbolSearchBuilder {
 /// * `symbol_name` - Name of the symbol to find
 /// * `symbol_location` - Location of the symbol
 ///
-/// # Returns
-/// * `Ok(Some(DocumentSymbol))` - The matching document symbol
-/// * `Ok(None)` - No matching symbol found
-/// * `Err(AnalyzerError)` - LSP error
-pub async fn get_symbol_document_symbol(
-    session: &mut ClangdSession,
-    symbol_name: &str,
-    symbol_location: &crate::symbol::FileLocation,
-) -> Result<Option<lsp_types::DocumentSymbol>, AnalyzerError> {
-    let uri = symbol_location.get_uri();
-
-    // Get all document symbols for the file
-    let document_symbols = get_document_symbols(session, uri).await?;
-
-    // Search for the matching symbol by name and location
-    let matched_symbol = SymbolSearchBuilder::new()
-        .with_name(symbol_name)
-        .at_position(Position {
-            line: symbol_location.range.start.line,
-            character: symbol_location.range.start.column,
-        })
-        .find_first(&document_symbols)
-        .cloned();
-
-    Ok(matched_symbol)
-}
-
 /// Get document symbols for a file URI, returning only hierarchical symbols
 ///
 /// This function calls the LSP `textDocument/documentSymbol` method and expects
@@ -462,6 +449,40 @@ pub fn find_symbol_at_position<'a>(
     SymbolSearchBuilder::new()
         .at_position(*position)
         .find_first(symbols)
+}
+
+/// Find symbol at position with container hierarchy path
+pub fn find_symbol_at_position_with_path<'a>(
+    symbols: &'a [DocumentSymbol],
+    position: &Position,
+) -> Option<(&'a DocumentSymbol, Vec<String>)> {
+    find_symbol_recursive_with_path(symbols, position, Vec::new())
+}
+
+/// Recursive helper for path-aware symbol finding
+fn find_symbol_recursive_with_path<'a>(
+    symbols: &'a [DocumentSymbol],
+    position: &Position,
+    current_path: Vec<String>,
+) -> Option<(&'a DocumentSymbol, Vec<String>)> {
+    for symbol in symbols {
+        if symbol.range.contains(position) {
+            // Check children first for most specific match
+            if let Some(children) = &symbol.children {
+                let mut child_path = current_path.clone();
+                child_path.push(symbol.name.clone());
+
+                if let Some(result) =
+                    find_symbol_recursive_with_path(children, position, child_path)
+                {
+                    return Some(result);
+                }
+            }
+            // No more specific child found, this is the target
+            return Some((symbol, current_path));
+        }
+    }
+    None
 }
 
 /// Find symbols by name using idiomatic iterator approach

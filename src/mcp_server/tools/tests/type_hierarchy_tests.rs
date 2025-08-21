@@ -40,6 +40,7 @@ async fn test_analyzer_type_hierarchy_interface() {
         symbol: "IStorageBackend".to_string(),
         build_directory: None,
         max_examples: Some(2),
+        location_hint: None,
     };
 
     let result = tool
@@ -106,6 +107,7 @@ async fn test_analyzer_type_hierarchy_derived_class() {
         symbol: "MemoryStorage".to_string(),
         build_directory: None,
         max_examples: Some(2),
+        location_hint: None,
     };
 
     let result = tool
@@ -170,6 +172,7 @@ async fn test_analyzer_type_hierarchy_non_class() {
         symbol: "factorial".to_string(),
         build_directory: None,
         max_examples: Some(2),
+        location_hint: None,
     };
 
     let result = tool

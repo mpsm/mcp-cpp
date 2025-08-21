@@ -70,6 +70,22 @@ impl From<WorkspaceSymbol> for Symbol {
     }
 }
 
+impl From<(&lsp_types::DocumentSymbol, &std::path::Path)> for Symbol {
+    fn from((doc_symbol, file_path): (&lsp_types::DocumentSymbol, &std::path::Path)) -> Self {
+        use crate::symbol::location::Range as SymRange;
+
+        Self {
+            name: doc_symbol.name.clone(),
+            kind: doc_symbol.kind,
+            container_name: None, // DocumentSymbol doesn't have container_name
+            location: FileLocation {
+                file_path: file_path.to_path_buf(),
+                range: SymRange::from(doc_symbol.selection_range),
+            },
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

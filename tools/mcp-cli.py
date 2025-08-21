@@ -224,6 +224,11 @@ Examples:
         action="store_true",
         help="Show all class members instead of just a summary (useful for classes with many members)"
     )
+    analyze_parser.add_argument(
+        "--location-hint",
+        type=str,
+        help="Location hint for disambiguating overloaded symbols (format: /path/file.cpp:line:column, 1-based)"
+    )
     
     # get-project-details subcommand
     project_details_parser = subparsers.add_parser(
@@ -290,6 +295,8 @@ def main():
                 arguments["max_examples"] = args.max_examples
             if args.build_directory:
                 arguments["build_directory"] = args.build_directory
+            if args.location_hint:
+                arguments["location_hint"] = args.location_hint
                 
             response = client.call_tool("analyze_symbol_context", arguments)
             

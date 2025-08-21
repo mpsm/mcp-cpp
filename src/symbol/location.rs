@@ -4,20 +4,22 @@ use crate::io::file_system::FileSystemTrait;
 
 use std::fmt;
 use std::path::{Path, PathBuf};
+use std::str::FromStr;
 
 use lsp_types::{
     Location as LspLocation, LocationLink as LspLocationLink, Position as LspPosition,
     Range as LspRange,
 };
+use rust_mcp_sdk::macros::JsonSchema;
 use serde::{Deserialize, Serialize, Serializer};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct Position {
     pub line: u32,
     pub column: u32,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct Range {
     pub start: Position,
     pub end: Position,
@@ -144,6 +146,46 @@ impl<'de> Deserialize<'de> for FileLocation {
         }
 
         deserializer.deserialize_any(FileLocationVisitor)
+    }
+}
+
+impl FromStr for FileLocation {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        let parts: Vec<&str> = s.rsplitn(3, ':').collect();
+        if parts.len() != 3 {
+            return Err(format!(
+                "Invalid format: expected '/path/file.cpp:line:column', got '{}'",
+                s
+            ));
+        }
+
+        let column: u32 = parts[0]
+            .parse()
+            .map_err(|_| format!("Invalid column number: '{}'", parts[0]))?;
+        let line: u32 = parts[1]
+            .parse()
+            .map_err(|_| format!("Invalid line number: '{}'", parts[1]))?;
+        let file_path = parts[2];
+
+        if line == 0 || column == 0 {
+            return Err("Line and column numbers must be 1-based (> 0)".to_string());
+        }
+
+        Ok(FileLocation {
+            file_path: PathBuf::from(file_path),
+            range: Range {
+                start: Position {
+                    line: line - 1,
+                    column: column - 1,
+                }, // Convert to 0-based
+                end: Position {
+                    line: line - 1,
+                    column: column - 1,
+                }, // Same position for point location
+            },
+        })
     }
 }
 
@@ -276,7 +318,8 @@ impl From<LspLocation> for FilePosition {
 
 pub fn uri_from_pathbuf(path: &Path) -> lsp_types::Uri {
     use std::str::FromStr;
-    lsp_types::Uri::from_str(&path.to_string_lossy()).expect("Failed to convert PathBuf to Uri")
+    let uri_string = format!("file://{}", path.to_string_lossy());
+    lsp_types::Uri::from_str(&uri_string).expect("Failed to convert PathBuf to Uri")
 }
 
 pub fn pathbuf_from_uri(uri: &lsp_types::Uri) -> PathBuf {

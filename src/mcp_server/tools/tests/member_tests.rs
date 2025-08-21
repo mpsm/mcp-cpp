@@ -40,6 +40,7 @@ async fn test_analyzer_members_math() {
         symbol: "Math".to_string(),
         build_directory: None,
         max_examples: Some(2),
+        location_hint: None,
     };
 
     let result = tool
@@ -155,6 +156,7 @@ async fn test_analyzer_members_interface() {
         symbol: "IStorageBackend".to_string(),
         build_directory: None,
         max_examples: Some(2),
+        location_hint: None,
     };
 
     let result = tool
@@ -272,6 +274,7 @@ async fn test_analyzer_members_non_class() {
         symbol: "factorial".to_string(),
         build_directory: None,
         max_examples: Some(2),
+        location_hint: None,
     };
 
     let result = tool
