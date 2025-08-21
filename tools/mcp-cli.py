@@ -127,7 +127,7 @@ def create_parser() -> argparse.ArgumentParser:
 Examples:
   %(prog)s list-tools
   %(prog)s search-symbols Math --max-results 20
-  %(prog)s analyze-symbol "Math::sqrt" --include-usage-patterns
+  %(prog)s analyze-symbol "Math::sqrt" --max-examples 3
   %(prog)s get-project-details --pretty-json
         """
     )
@@ -202,54 +202,27 @@ Examples:
     )
     analyze_parser.add_argument(
         "symbol",
-        help="Symbol name to analyze"
+        help="Symbol name to analyze (e.g., 'Math', 'std::vector', 'MyClass::method')"
     )
     analyze_parser.add_argument(
-        "--location-file",
-        type=str,
-        help="File URI for symbol disambiguation"
-    )
-    analyze_parser.add_argument(
-        "--location-line",
+        "--max-examples",
         type=int,
-        help="Line number for symbol disambiguation (0-based)"
-    )
-    analyze_parser.add_argument(
-        "--location-char",
-        type=int,
-        help="Character position for symbol disambiguation (0-based)"
-    )
-    analyze_parser.add_argument(
-        "--include-usage-patterns",
-        action="store_true",
-        help="Include usage statistics and examples"
-    )
-    analyze_parser.add_argument(
-        "--max-usage-examples",
-        type=int,
-        default=5,
-        help="Maximum number of usage examples (1-20, default: 5)"
-    )
-    analyze_parser.add_argument(
-        "--include-inheritance",
-        action="store_true",
-        help="Include class inheritance hierarchy analysis"
-    )
-    analyze_parser.add_argument(
-        "--include-call-hierarchy",
-        action="store_true",
-        help="Include function call hierarchy analysis"
-    )
-    analyze_parser.add_argument(
-        "--max-call-depth",
-        type=int,
-        default=3,
-        help="Maximum call hierarchy depth (1-10, default: 3)"
+        help="Maximum number of usage examples to include (unlimited by default)"
     )
     analyze_parser.add_argument(
         "--build-directory",
         type=str,
-        help="Specify build directory path"
+        help="Specify build directory path containing compile_commands.json"
+    )
+    analyze_parser.add_argument(
+        "--no-code",
+        action="store_true",
+        help="Don't extract and display source code snippets"
+    )
+    analyze_parser.add_argument(
+        "--show-all-members",
+        action="store_true",
+        help="Show all class members instead of just a summary (useful for classes with many members)"
     )
     
     # get-project-details subcommand
@@ -312,27 +285,9 @@ def main():
         elif args.command == "analyze-symbol":
             arguments = {"symbol": args.symbol}
             
-            # Add location if specified
-            if args.location_file and args.location_line is not None and args.location_char is not None:
-                arguments["location"] = {
-                    "file_uri": args.location_file,
-                    "position": {
-                        "line": args.location_line,
-                        "character": args.location_char
-                    }
-                }
-            
-            # Add optional boolean flags
-            if args.include_usage_patterns:
-                arguments["include_usage_patterns"] = args.include_usage_patterns
-            if args.max_usage_examples != 5:
-                arguments["max_usage_examples"] = args.max_usage_examples
-            if args.include_inheritance:
-                arguments["include_inheritance"] = args.include_inheritance
-            if args.include_call_hierarchy:
-                arguments["include_call_hierarchy"] = args.include_call_hierarchy
-            if args.max_call_depth != 3:
-                arguments["max_call_depth"] = args.max_call_depth
+            # Add optional parameters
+            if args.max_examples is not None:
+                arguments["max_examples"] = args.max_examples
             if args.build_directory:
                 arguments["build_directory"] = args.build_directory
                 
@@ -352,7 +307,10 @@ def main():
         elif args.pretty_json:
             format_pretty_json_output(response)
         else:
-            format_output(args.command, response)
+            # Pass flags for analyze-symbol command
+            show_code = not (args.command == "analyze-symbol" and getattr(args, 'no_code', False))
+            show_all_members = args.command == "analyze-symbol" and getattr(args, 'show_all_members', False)
+            format_output(args.command, response, show_code=show_code, show_all_members=show_all_members)
             
     except McpCliError as e:
         print(f"Error: {e}", file=sys.stderr)
@@ -365,12 +323,12 @@ def main():
         sys.exit(1)
 
 
-def format_output(command: str, response: Dict) -> None:
+def format_output(command: str, response: Dict, show_code: bool = True, show_all_members: bool = False) -> None:
     """Format and display the response in a user-friendly way"""
     if not RICH_AVAILABLE:
         _format_simple_output(response)
     else:
-        _format_rich_output(command, response)
+        _format_rich_output(command, response, show_code=show_code, show_all_members=show_all_members)
 
 
 def format_pretty_json_output(response: Dict) -> None:
@@ -420,7 +378,7 @@ def _format_simple_output(response: Dict) -> None:
         print(json.dumps(response, indent=2))
 
 
-def _format_rich_output(command: str, response: Dict) -> None:
+def _format_rich_output(command: str, response: Dict, show_code: bool = True, show_all_members: bool = False) -> None:
     """Rich formatted output with colors and tables"""
     console = Console()
     
@@ -456,7 +414,7 @@ def _format_rich_output(command: str, response: Dict) -> None:
         elif command == "search-symbols":
             _format_symbols_search(console, data)
         elif command == "analyze-symbol":
-            _format_symbol_analysis(console, data)
+            _format_symbol_analysis(console, data, show_code=show_code, show_all_members=show_all_members)
         elif command == "get-project-details":
             _format_project_details(console, data)
         else:
@@ -553,200 +511,273 @@ def _format_symbols_search(console, data: Dict) -> None:
     console.print(table)
 
 
-def _format_symbol_analysis(console, data: Dict) -> None:
-    """Format symbol analysis results"""
-    if not data.get("success", False):
-        console.print(f"[red]Analysis failed: {data.get('error', 'Unknown error')}[/red]")
-        return
+def extract_code_from_location(location_str: str) -> Dict[str, Union[str, int]]:
+    """Extract code snippet from FileLocation string format.
+    
+    Args:
+        location_str: Format like "/path/to/file.cpp:18:7-11" 
+                     (file:line:start_col-end_col)
+    
+    Returns:
+        Dict with 'code', 'line_number', 'file_path', 'error' keys
+    """
+    try:
+        # Parse the location format: /path/to/file.cpp:18:7-11
+        if ':' not in location_str:
+            return {"error": "Invalid location format", "code": "", "line_number": 0, "file_path": ""}
+            
+        parts = location_str.rsplit(':', 2)  # Split from right to handle paths with colons
+        if len(parts) < 3:
+            return {"error": "Invalid location format", "code": "", "line_number": 0, "file_path": ""}
+            
+        file_path = parts[0]
+        line_part = parts[1]
+        col_part = parts[2]
         
-    # Handle the actual response structure from the MCP server
+        # Extract line number
+        try:
+            line_num = int(line_part)
+        except ValueError:
+            return {"error": "Invalid line number", "code": "", "line_number": 0, "file_path": file_path}
+        
+        # Try to read the file and extract the line
+        try:
+            with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
+                lines = f.readlines()
+                
+            if line_num <= 0 or line_num > len(lines):
+                return {"error": f"Line {line_num} out of range", "code": "", "line_number": line_num, "file_path": file_path}
+                
+            # Get the line (convert from 1-based to 0-based indexing)
+            code_line = lines[line_num - 1].rstrip('\n\r')
+            
+            return {
+                "code": code_line,
+                "line_number": line_num,
+                "file_path": file_path,
+                "error": None
+            }
+            
+        except FileNotFoundError:
+            return {"error": "File not found", "code": "", "line_number": line_num, "file_path": file_path}
+        except PermissionError:
+            return {"error": "Permission denied", "code": "", "line_number": line_num, "file_path": file_path}
+        except Exception as e:
+            return {"error": f"Error reading file: {e}", "code": "", "line_number": line_num, "file_path": file_path}
+            
+    except Exception as e:
+        return {"error": f"Error parsing location: {e}", "code": "", "line_number": 0, "file_path": ""}
+
+
+def _format_symbol_analysis(console, data: Dict, show_code: bool = True, show_all_members: bool = False) -> None:
+    """Format symbol analysis results from AnalyzerResult structure"""
+    
+    # Extract data from AnalyzerResult structure
     symbol_data = data.get("symbol", {})
-    symbol_name = symbol_data.get("name", "Unknown Symbol")
+    query = data.get("query", "Unknown")
+    definitions = data.get("definitions", [])
+    declarations = data.get("declarations", [])
+    hover_doc = data.get("hover_documentation")
+    detail = data.get("detail")
+    examples = data.get("examples", [])
+    type_hierarchy = data.get("type_hierarchy")
+    call_hierarchy = data.get("call_hierarchy")
+    members = data.get("members")
     
-    # Check if this is a namespace with class members
-    if "class_members" in symbol_data and "members" in symbol_data["class_members"]:
-        members = symbol_data["class_members"]["members"]
-        console.print(Panel(f"[bold cyan]Namespace Members ({len(members)} items)[/bold cyan]", 
-                           title=f"Analysis: {symbol_name}", border_style="blue"))
-        
-        # Group members by kind
-        by_kind = {}
-        for member in members:
-            kind = member.get("kind", "unknown")
-            if kind not in by_kind:
-                by_kind[kind] = []
-            by_kind[kind].append(member)
-        
-        # Display each kind group
-        for kind, items in by_kind.items():
-            console.print(f"\n[bold green]{kind.upper()}S ({len(items)}):[/bold green]")
-            
-            table = Table(show_header=True, header_style="bold magenta", box=None, padding=(0, 1))
-            table.add_column("Name", style="cyan", width=20)
-            table.add_column("Signature", style="white")
-            table.add_column("Location", style="green", width=15)
-            
-            for item in items[:10]:  # Limit to first 10 items per kind
-                name = item.get("name", "Unknown")
-                detail = item.get("detail", "")
-                
-                # Extract location
-                location = ""
-                if "range" in item and "start" in item["range"]:
-                    line = item["range"]["start"].get("line", 0) + 1
-                    location = f"Line {line}"
-                
-                table.add_row(name, detail, location)
-            
-            if len(items) > 10:
-                table.add_row("...", f"({len(items) - 10} more)", "")
-            
-            console.print(table)
-        
-        return
-    
-    # Handle individual symbol analysis
-    if "definition" in symbol_data or "declaration" in symbol_data or "type_info" in symbol_data:
-        console.print(Panel(f"[bold cyan]Symbol Analysis: {symbol_name}[/bold cyan]", 
-                           title="Symbol Information", border_style="blue"))
-        
-        # Basic symbol info
-        kind = symbol_data.get("kind", "Unknown")
-        console.print(f"[bold]Kind:[/bold] {kind}")
-        
-        # Type information
-        if "type_info" in symbol_data:
-            type_info = symbol_data["type_info"]
-            console.print(f"[bold]Type:[/bold] {type_info.get('type', 'Unknown')}")
-            console.print(f"[bold]Fully Qualified Name:[/bold] {symbol_data.get('fully_qualified_name', 'Unknown')}")
-            
-            # Additional type properties
-            properties = []
-            if type_info.get("is_static"):
-                properties.append("static")
-            if type_info.get("is_const"):
-                properties.append("const")
-            if type_info.get("is_template"):
-                properties.append("template")
-            if properties:
-                console.print(f"[bold]Properties:[/bold] {', '.join(properties)}")
-        
-        console.print()
-        
-        # Location information
-        if "definition" in symbol_data:
-            definition_list = symbol_data["definition"]
-            # Handle definition as a list (take first element)
-            if isinstance(definition_list, list) and definition_list:
-                definition = definition_list[0]
-                file_uri = definition.get("uri", "")
-                if file_uri.startswith("file://"):
-                    file_path = file_uri[7:]
-                else:
-                    file_path = file_uri
-                
-                if "range" in definition and "start" in definition["range"]:
-                    line = definition["range"]["start"].get("line", 0) + 1
-                    console.print(f"[bold]Definition:[/bold] {file_path}:{line}")
-        
-        if "declaration" in symbol_data:
-            declaration_list = symbol_data["declaration"]
-            # Handle declaration as a list (take first element)
-            if isinstance(declaration_list, list) and declaration_list:
-                declaration = declaration_list[0]
-                file_uri = declaration.get("uri", "")
-                if file_uri.startswith("file://"):
-                    file_path = file_uri[7:]
-                else:
-                    file_path = file_uri
-                    
-                if "range" in declaration and "start" in declaration["range"]:
-                    line = declaration["range"]["start"].get("line", 0) + 1
-                    console.print(f"[bold]Declaration:[/bold] {file_path}:{line}")
-        
-        # Documentation
-        if "documentation" in symbol_data:
-            doc = symbol_data["documentation"]
-            console.print(f"\n[bold]Documentation:[/bold]")
-            # Display as code syntax for better formatting
-            syntax = Syntax(doc, "markdown", theme="monokai", line_numbers=False)
-            console.print(Panel(syntax, border_style="dim"))
-        
-        return
-    
-    # Fall back to the original analysis format if it's something else
-    analysis = symbol_data
+    symbol_name = symbol_data.get("name", query)
     
     console.print(Panel(f"[bold cyan]Symbol Analysis: {symbol_name}[/bold cyan]", 
                        title="Symbol Information", border_style="blue"))
     
-    # Basic info
-    if "definition" in analysis:
-        definition = analysis["definition"]
-        console.print(f"[bold]Type:[/bold] {definition.get('type', 'Unknown')}")
-        console.print(f"[bold]Kind:[/bold] {definition.get('kind', 'Unknown')}")
+    # Basic symbol information
+    if symbol_data:
+        kind = symbol_data.get("kind")
+        if kind:
+            # Convert LSP symbol kind number to readable string if needed
+            if isinstance(kind, int):
+                kind_names = {
+                    1: "File", 2: "Module", 3: "Namespace", 4: "Package", 5: "Class",
+                    6: "Method", 7: "Property", 8: "Field", 9: "Constructor", 10: "Enum",
+                    11: "Interface", 12: "Function", 13: "Variable", 14: "Constant",
+                    15: "String", 16: "Number", 17: "Boolean", 18: "Array", 19: "Object",
+                    20: "Key", 21: "Null", 22: "EnumMember", 23: "Struct", 24: "Event",
+                    25: "Operator", 26: "TypeParameter"
+                }
+                kind = kind_names.get(kind, f"Unknown({kind})")
+            console.print(f"[bold]Kind:[/bold] {kind}")
         
-        if "location" in definition:
-            loc = definition["location"]
-            file_uri = loc.get("uri", "")
-            if file_uri.startswith("file://"):
-                file_path = file_uri[7:]
-            else:
-                file_path = file_uri
-            console.print(f"[bold]Location:[/bold] {file_path}")
-        console.print()
+        fully_qualified_name = symbol_data.get("fully_qualified_name")
+        if fully_qualified_name:
+            console.print(f"[bold]Fully Qualified Name:[/bold] {fully_qualified_name}")
     
-    # Inheritance hierarchy
-    if "inheritance" in analysis and analysis["inheritance"]:
-        inheritance = analysis["inheritance"]
-        tree = Tree(f"[bold green]Class Hierarchy[/bold green]")
+    # Show detail if available
+    if detail:
+        console.print(f"[bold]Detail:[/bold] {detail}")
+    
+    console.print()
+    
+    # Helper to format location with code snippet
+    def format_location_with_code(location_str, show_code_snippet=True):
+        """Format FileLocation with optional code snippet"""
+        if not show_code_snippet:
+            return location_str
+            
+        code_info = extract_code_from_location(location_str)
+        if code_info["error"]:
+            return f"{location_str} [dim](code unavailable: {code_info['error']})[/dim]"
         
-        if "base_classes" in inheritance:
-            base_node = tree.add("[blue]Base Classes[/blue]")
-            for base_class in inheritance["base_classes"]:
-                base_node.add(f"[cyan]{base_class.get('name', 'Unknown')}[/cyan]")
+        # Format with syntax highlighting
+        code = code_info["code"].strip()
+        if code:
+            # Use a more compact format for definitions/declarations
+            return f"{location_str}\n    [green]→[/green] [cyan]{code}[/cyan]"
+        else:
+            return location_str
+    
+    if definitions:
+        console.print(f"[bold]Definitions ({len(definitions)}):[/bold]")
+        for i, definition in enumerate(definitions[:3]):  # Show first 3
+            formatted = format_location_with_code(definition, show_code)
+            console.print(f"  {i+1}. {formatted}")
+        if len(definitions) > 3:
+            console.print(f"  ... and {len(definitions) - 3} more")
+    
+    if declarations:
+        console.print(f"[bold]Declarations ({len(declarations)}):[/bold]")
+        for i, declaration in enumerate(declarations[:3]):  # Show first 3
+            formatted = format_location_with_code(declaration, show_code)
+            console.print(f"  {i+1}. {formatted}")
+        if len(declarations) > 3:
+            console.print(f"  ... and {len(declarations) - 3} more")
+    
+    # Documentation
+    if hover_doc:
+        console.print(f"\n[bold]Documentation:[/bold]")
+        syntax = Syntax(hover_doc, "markdown", theme="monokai", line_numbers=False)
+        console.print(Panel(syntax, border_style="dim"))
+    
+    # Usage examples
+    if examples:
+        console.print(f"\n[bold green]Usage Examples ({len(examples)}):[/bold green]")
+        for i, example in enumerate(examples[:5], 1):  # Show first 5
+            formatted = format_location_with_code(example, show_code)
+            console.print(f"  {i}. {formatted}")
+        if len(examples) > 5:
+            console.print(f"  ... and {len(examples) - 5} more examples")
+    
+    # Type hierarchy
+    if type_hierarchy:
+        console.print(f"\n[bold green]Type Hierarchy:[/bold green]")
         
-        if "derived_classes" in inheritance:
-            derived_node = tree.add("[blue]Derived Classes[/blue]")
-            for derived_class in inheritance["derived_classes"]:
-                derived_node.add(f"[cyan]{derived_class.get('name', 'Unknown')}[/cyan]")
+        supertypes = type_hierarchy.get("supertypes", [])
+        subtypes = type_hierarchy.get("subtypes", [])
         
-        console.print(tree)
-        console.print()
+        if supertypes:
+            console.print(f"[bold]Base Types ({len(supertypes)}):[/bold]")
+            for supertype in supertypes[:3]:
+                # Handle both string names and objects
+                if isinstance(supertype, str):
+                    name = supertype
+                else:
+                    name = supertype.get("name", "Unknown")
+                console.print(f"  • [cyan]{name}[/cyan]")
+            if len(supertypes) > 3:
+                console.print(f"  ... and {len(supertypes) - 3} more")
+        
+        if subtypes:
+            console.print(f"[bold]Derived Types ({len(subtypes)}):[/bold]")
+            for subtype in subtypes[:3]:
+                # Handle both string names and objects
+                if isinstance(subtype, str):
+                    name = subtype
+                else:
+                    name = subtype.get("name", "Unknown")
+                console.print(f"  • [cyan]{name}[/cyan]")
+            if len(subtypes) > 3:
+                console.print(f"  ... and {len(subtypes) - 3} more")
     
     # Call hierarchy
-    if "call_hierarchy" in analysis and analysis["call_hierarchy"]:
-        call_hierarchy = analysis["call_hierarchy"]
+    if call_hierarchy:
+        console.print(f"\n[bold green]Call Hierarchy:[/bold green]")
         
-        if "incoming_calls" in call_hierarchy:
-            incoming = call_hierarchy["incoming_calls"]
-            if incoming:
-                console.print("[bold green]Incoming Calls:[/bold green]")
-                for call in incoming[:5]:  # Limit display
-                    caller_name = call.get("name", "Unknown")
-                    console.print(f"  • [cyan]{caller_name}[/cyan]")
-                console.print()
+        callers = call_hierarchy.get("callers", [])
+        callees = call_hierarchy.get("callees", [])
         
-        if "outgoing_calls" in call_hierarchy:
-            outgoing = call_hierarchy["outgoing_calls"]
-            if outgoing:
-                console.print("[bold green]Outgoing Calls:[/bold green]")
-                for call in outgoing[:5]:  # Limit display
-                    callee_name = call.get("name", "Unknown")
-                    console.print(f"  • [cyan]{callee_name}[/cyan]")
-                console.print()
+        if callers:
+            console.print(f"[bold]Callers ({len(callers)}):[/bold]")
+            for caller in callers[:5]:
+                # Handle both string names and objects
+                if isinstance(caller, str):
+                    name = caller
+                else:
+                    name = caller.get("name", "Unknown")
+                console.print(f"  • [cyan]{name}[/cyan]")
+            if len(callers) > 5:
+                console.print(f"  ... and {len(callers) - 5} more")
+        
+        if callees:
+            console.print(f"[bold]Callees ({len(callees)}):[/bold]")
+            for callee in callees[:5]:
+                # Handle both string names and objects
+                if isinstance(callee, str):
+                    name = callee
+                else:
+                    name = callee.get("name", "Unknown")
+                console.print(f"  • [cyan]{name}[/cyan]")
+            if len(callees) > 5:
+                console.print(f"  ... and {len(callees) - 5} more")
     
-    # Usage patterns
-    if "usage_patterns" in analysis and analysis["usage_patterns"]:
-        usage = analysis["usage_patterns"]
-        console.print("[bold green]Usage Examples:[/bold green]")
+    # Members (for classes/structs)
+    if members:
+        total_members = (len(members.get("methods", [])) + 
+                        len(members.get("constructors", [])) + 
+                        len(members.get("destructors", [])) + 
+                        len(members.get("operators", [])))
         
-        for i, example in enumerate(usage.get("examples", [])[:3], 1):
-            if "code_snippet" in example:
-                console.print(f"[bold]Example {i}:[/bold]")
-                syntax = Syntax(example["code_snippet"], "cpp", theme="monokai", line_numbers=False)
-                console.print(Panel(syntax, border_style="dim"))
-                console.print()
+        console.print(f"\n[bold green]Class Members ({total_members} total):[/bold green]")
+        
+        # Show methods
+        methods = members.get("methods", [])
+        if methods:
+            console.print(f"[bold]Methods ({len(methods)}):[/bold]")
+            method_limit = len(methods) if show_all_members else 5
+            for method in methods[:method_limit]:
+                name = method.get("name", "Unknown")
+                signature = method.get("signature", "")
+                console.print(f"  • [cyan]{name}[/cyan] {signature}")
+            if len(methods) > method_limit:
+                console.print(f"  ... and {len(methods) - method_limit} more methods")
+        
+        # Show constructors
+        constructors = members.get("constructors", [])
+        if constructors:
+            console.print(f"[bold]Constructors ({len(constructors)}):[/bold]")
+            constructor_limit = len(constructors) if show_all_members else 3
+            for constructor in constructors[:constructor_limit]:
+                signature = constructor.get("signature", "")
+                console.print(f"  • [cyan]{symbol_name}[/cyan] {signature}")
+            if len(constructors) > constructor_limit:
+                console.print(f"  ... and {len(constructors) - constructor_limit} more constructors")
+        
+        # Show destructors
+        destructors = members.get("destructors", [])
+        if destructors:
+            console.print(f"[bold]Destructors ({len(destructors)}):[/bold]")
+            for destructor in destructors:
+                signature = destructor.get("signature", "")
+                console.print(f"  • [cyan]~{symbol_name}[/cyan] {signature}")
+        
+        # Show operators
+        operators = members.get("operators", [])
+        if operators:
+            console.print(f"[bold]Operators ({len(operators)}):[/bold]")
+            operator_limit = len(operators) if show_all_members else 3
+            for operator in operators[:operator_limit]:
+                name = operator.get("name", "Unknown")
+                signature = operator.get("signature", "")
+                console.print(f"  • [cyan]{name}[/cyan] {signature}")
+            if len(operators) > operator_limit:
+                console.print(f"  ... and {len(operators) - operator_limit} more operators")
 
 
 def _format_project_details(console, data: Dict) -> None:
