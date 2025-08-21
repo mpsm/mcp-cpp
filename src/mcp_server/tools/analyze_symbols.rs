@@ -43,7 +43,7 @@ pub enum AnalyzerError {
     FileBuffer(#[from] FileBufferError),
     #[error("LSP error: {0}")]
     Lsp(#[from] crate::lsp::client::LspError),
-    #[error("Session error")]
+    #[error("Clangd session error: {0}")]
     Session(#[from] crate::clangd::error::ClangdSessionError),
     #[error("JSON error: {0}")]
     Json(#[from] serde_json::Error),
