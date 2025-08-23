@@ -10,6 +10,7 @@ use std::sync::Arc;
 use tokio::sync::Mutex;
 use tracing::{debug, info, instrument, warn};
 
+use crate::clangd::config::DEFAULT_WORKSPACE_SYMBOL_LIMIT;
 use crate::clangd::{ClangdConfigBuilder, ClangdSession, ClangdSessionBuilder};
 use crate::project::{ProjectError, ProjectWorkspace};
 
@@ -85,6 +86,10 @@ impl WorkspaceSession {
             .working_directory(project_root)
             .build_directory(build_dir.clone())
             .clangd_path(self.clangd_path.clone())
+            .add_arg(format!(
+                "--limit-results={}",
+                DEFAULT_WORKSPACE_SYMBOL_LIMIT
+            ))
             .build()
             .map_err(|e| ProjectError::SessionCreation(format!("Failed to build config: {}", e)))?;
 

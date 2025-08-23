@@ -42,7 +42,6 @@ pub struct SearchSymbolsTool {
     pub build_directory: Option<String>,
 }
 
-
 impl SearchSymbolsTool {
     #[instrument(name = "search_symbols", skip(self, session, workspace))]
     pub async fn call_tool(

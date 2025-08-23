@@ -37,6 +37,13 @@ pub const MAX_INITIALIZATION_TIMEOUT_SECS: u64 = 300;
 /// parameter. This is an approximation based on typical symbol sizes.
 pub const MEMORY_TO_RESULTS_FACTOR: u64 = 1000;
 
+/// Default workspace symbol limit for clangd
+///
+/// Clangd's default workspace symbol limit is 100 results. We increase this to 1000
+/// to provide better search coverage for large C++ codebases while maintaining
+/// reasonable performance. This is applied via the --limit-results clangd argument.
+pub const DEFAULT_WORKSPACE_SYMBOL_LIMIT: u32 = 1000;
+
 // ============================================================================
 // Core Configuration Types
 // ============================================================================
