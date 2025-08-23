@@ -16,7 +16,7 @@ use crate::project::{ProjectComponent, ProjectWorkspace};
     name = "search_symbols",
     description = "Advanced C++ symbol search using clangd LSP with project-aware filtering"
 )]
-#[derive(Debug, serde::Serialize, JsonSchema)]
+#[derive(Debug, serde::Serialize, serde::Deserialize, JsonSchema)]
 pub struct SearchSymbolsTool {
     /// Search query using clangd's native syntax
     pub query: String,
@@ -42,37 +42,6 @@ pub struct SearchSymbolsTool {
     pub build_directory: Option<String>,
 }
 
-impl<'de> serde::Deserialize<'de> for SearchSymbolsTool {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: serde::Deserializer<'de>,
-    {
-        #[derive(serde::Deserialize)]
-        struct Helper {
-            query: String,
-            #[serde(default)]
-            kinds: Option<Vec<lsp_types::SymbolKind>>,
-            #[serde(default)]
-            files: Option<Vec<String>>,
-            #[serde(default)]
-            max_results: Option<u32>,
-            #[serde(default)]
-            include_external: Option<bool>,
-            #[serde(default)]
-            build_directory: Option<String>,
-        }
-
-        let helper = Helper::deserialize(deserializer)?;
-        Ok(SearchSymbolsTool {
-            query: helper.query,
-            kinds: helper.kinds,
-            files: helper.files,
-            max_results: helper.max_results,
-            include_external: helper.include_external,
-            build_directory: helper.build_directory,
-        })
-    }
-}
 
 impl SearchSymbolsTool {
     #[instrument(name = "search_symbols", skip(self, session, workspace))]
