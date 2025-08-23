@@ -280,7 +280,8 @@ impl SymbolSearchBuilder {
                     return None;
                 }
                 // Get fuzzy score for sorting
-                self.fuzzy_match_score(symbol).map(|score| ScoredSymbol { symbol, score })
+                self.fuzzy_match_score(symbol)
+                    .map(|score| ScoredSymbol { symbol, score })
             })
             .collect();
 
@@ -427,9 +428,10 @@ impl SymbolSearchBuilder {
     fn fuzzy_match_score(&self, symbol: &DocumentSymbol) -> Option<isize> {
         if let Some(ref name) = self.name {
             if let Some(fuzzy_match) = best_match(name, &symbol.name)
-                && fuzzy_match.score() >= FUZZY_MATCH_THRESHOLD {
+                && fuzzy_match.score() >= FUZZY_MATCH_THRESHOLD
+            {
                 return Some(fuzzy_match.score());
-                }
+            }
             None
         } else {
             // If no name filter, return a default score
