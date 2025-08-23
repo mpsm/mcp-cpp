@@ -90,6 +90,7 @@ impl WorkspaceSession {
                 "--limit-results={}",
                 DEFAULT_WORKSPACE_SYMBOL_LIMIT
             ))
+            .add_arg("--query-driver=**")
             .build()
             .map_err(|e| ProjectError::SessionCreation(format!("Failed to build config: {}", e)))?;
 
