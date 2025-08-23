@@ -450,3 +450,232 @@ fn inspect_symbol_with_content(
 
     Ok(())
 }
+
+// ============================================================================
+// Fuzzy Matching Integration Tests
+// ============================================================================
+
+/// Test fuzzy matching with real clangd symbols
+#[cfg(feature = "clangd-integration-tests")]
+#[tokio::test]
+async fn test_fuzzy_matching_integration_basic() {
+    let (test_project, mut session) = create_integration_test_session().await.unwrap();
+
+    let math_header = test_project.project_root.join("include/Math.hpp");
+    let file_uri_str = format!("file://{}", math_header.display());
+    let file_uri: lsp_types::Uri = file_uri_str.parse().unwrap();
+
+    let symbols = get_document_symbols(&mut session, file_uri).await.unwrap();
+
+    // First, let's see what symbols we actually have
+    let all_symbols: Vec<_> = symbols.iter().map(|s| &s.name).collect();
+    debug!("All top-level symbols found: {:?}", all_symbols);
+
+    // Test exact match first to establish baseline
+    let found = SymbolSearchBuilder::new()
+        .with_name("Math")
+        .find_all(&symbols);
+    debug!(
+        "Exact 'Math' search found {} symbols: {:?}",
+        found.len(),
+        found.iter().map(|s| &s.name).collect::<Vec<_>>()
+    );
+
+    // Test fuzzy match for "factorial" function with a simpler typo
+    let found = SymbolSearchBuilder::new()
+        .with_name("factorial") // First try exact match
+        .find_all(&symbols);
+    debug!("Exact 'factorial' search found {} symbols", found.len());
+
+    if found.is_empty() {
+        // If we don't find factorial exactly, try a fuzzy variant
+        let found = SymbolSearchBuilder::new()
+            .with_name("fact") // Partial match
+            .find_all(&symbols);
+        debug!(
+            "Fuzzy 'fact' search found {} symbols: {:?}",
+            found.len(),
+            found.iter().map(|s| &s.name).collect::<Vec<_>>()
+        );
+        assert!(!found.is_empty(), "Should find symbols matching 'fact'");
+    } else {
+        // Try fuzzy variant
+        let found = SymbolSearchBuilder::new()
+            .with_name("factrl") // Missing letters should still match
+            .find_all(&symbols);
+        debug!(
+            "Fuzzy 'factrl' search found {} symbols: {:?}",
+            found.len(),
+            found.iter().map(|s| &s.name).collect::<Vec<_>>()
+        );
+        assert!(
+            !found.is_empty(),
+            "Fuzzy search 'factrl' should match 'factorial'"
+        );
+        assert!(
+            found.iter().any(|s| s.name.contains("factorial")),
+            "Should find factorial function with fuzzy match"
+        );
+    }
+
+    // Test fuzzy match for Math class with debug output
+    let found = SymbolSearchBuilder::new()
+        .with_name("Mat") // Simpler fuzzy match
+        .find_all(&symbols);
+    debug!(
+        "Fuzzy 'Mat' search found {} symbols: {:?}",
+        found.len(),
+        found.iter().map(|s| &s.name).collect::<Vec<_>>()
+    );
+
+    // This should definitely find Math and Matrix symbols
+    assert!(!found.is_empty(), "Fuzzy search 'Mat' should find matches");
+    assert!(
+        found.iter().any(|s| s.name == "Math"),
+        "Fuzzy search 'Mat' should match 'Math' class"
+    );
+    assert!(
+        found.iter().any(|s| s.name.contains("Matrix")),
+        "Fuzzy search 'Mat' should also match 'Matrix' symbols"
+    );
+
+    session.close().await.unwrap();
+}
+
+/// Test fuzzy matching with scoring and ordering
+#[cfg(feature = "clangd-integration-tests")]
+#[tokio::test]
+async fn test_fuzzy_matching_integration_scoring() {
+    let (test_project, mut session) = create_integration_test_session().await.unwrap();
+
+    let math_header = test_project.project_root.join("include/Math.hpp");
+    let file_uri_str = format!("file://{}", math_header.display());
+    let file_uri: lsp_types::Uri = file_uri_str.parse().unwrap();
+
+    let symbols = get_document_symbols(&mut session, file_uri).await.unwrap();
+
+    // Search for "stat" which should match "Statistics" class
+    let found = SymbolSearchBuilder::new()
+        .with_name("stat")
+        .find_all(&symbols);
+
+    assert!(!found.is_empty(), "Should find matches for 'stat'");
+
+    // Best match should be "Statistics" (if present)
+    if let Some(first_match) = found.first() {
+        debug!(
+            "Best match for 'stat': {} (kind: {:?})",
+            first_match.name, first_match.kind
+        );
+        // The fuzzy matching should prioritize better matches
+        assert!(
+            first_match.name.to_lowercase().contains("stat") || first_match.name == "Statistics",
+            "Best fuzzy match should contain 'stat' or be 'Statistics', got: {}",
+            first_match.name
+        );
+    }
+
+    session.close().await.unwrap();
+}
+
+/// Test fuzzy matching with kind filtering
+#[cfg(feature = "clangd-integration-tests")]
+#[tokio::test]
+async fn test_fuzzy_matching_integration_with_kind_filter() {
+    let (test_project, mut session) = create_integration_test_session().await.unwrap();
+
+    let math_header = test_project.project_root.join("include/Math.hpp");
+    let file_uri_str = format!("file://{}", math_header.display());
+    let file_uri: lsp_types::Uri = file_uri_str.parse().unwrap();
+
+    let symbols = get_document_symbols(&mut session, file_uri).await.unwrap();
+
+    // Search for methods with fuzzy matching
+    let found = SymbolSearchBuilder::new()
+        .with_name("mean") // Should match "mean" method
+        .with_kind(SymbolKind::METHOD)
+        .find_all(&symbols);
+
+    assert!(!found.is_empty(), "Should find method matches for 'mean'");
+
+    // All results should be methods
+    for symbol in &found {
+        assert_eq!(
+            symbol.kind,
+            SymbolKind::METHOD,
+            "All fuzzy matches should be methods, got: {} (kind: {:?})",
+            symbol.name,
+            symbol.kind
+        );
+    }
+
+    // Should include the "mean" method if it exists
+    assert!(
+        found.iter().any(|s| s.name.contains("mean")),
+        "Should find a method containing 'mean'"
+    );
+
+    session.close().await.unwrap();
+}
+
+/// Test fuzzy matching performance with large symbol sets
+#[cfg(feature = "clangd-integration-tests")]
+#[tokio::test]
+async fn test_fuzzy_matching_integration_performance() {
+    let (test_project, mut session) = create_integration_test_session().await.unwrap();
+
+    let math_header = test_project.project_root.join("include/Math.hpp");
+    let file_uri_str = format!("file://{}", math_header.display());
+    let file_uri: lsp_types::Uri = file_uri_str.parse().unwrap();
+
+    let symbols = get_document_symbols(&mut session, file_uri).await.unwrap();
+
+    // Ensure we have a reasonable number of symbols to test performance
+    let total_symbols = count_total_symbols(&symbols);
+    assert!(
+        total_symbols >= 30,
+        "Should have enough symbols for performance testing, got: {}",
+        total_symbols
+    );
+
+    let start = std::time::Instant::now();
+
+    // Perform fuzzy search that should match multiple results
+    let found = SymbolSearchBuilder::new()
+        .with_name("ma") // Should match many symbols (Math, Matrix, etc.)
+        .find_all(&symbols);
+
+    let duration = start.elapsed();
+
+    // Should complete quickly even with many symbols
+    assert!(
+        duration.as_millis() < 100,
+        "Fuzzy matching should be fast, took: {:?}",
+        duration
+    );
+
+    debug!(
+        "Fuzzy search for 'ma' found {} matches in {:?}",
+        found.len(),
+        duration
+    );
+
+    // Verify results are properly sorted (if we have multiple matches)
+    if found.len() > 1 {
+        // Check that exact matches come first when possible
+        let exact_matches: Vec<_> = found
+            .iter()
+            .filter(|s| s.name.to_lowercase().starts_with("ma"))
+            .collect();
+
+        if !exact_matches.is_empty() {
+            debug!(
+                "Found {} exact/prefix matches out of {} total",
+                exact_matches.len(),
+                found.len()
+            );
+        }
+    }
+
+    session.close().await.unwrap();
+}

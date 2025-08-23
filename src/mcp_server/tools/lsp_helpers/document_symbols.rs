@@ -7,12 +7,16 @@
 use lsp_types::{DocumentSymbol, DocumentSymbolResponse, Position, Range};
 use std::collections::VecDeque;
 use std::path::Path;
+use sublime_fuzzy::best_match;
 use tracing::{trace, warn};
 
 use crate::clangd::session::{ClangdSession, ClangdSessionTrait};
 use crate::lsp::traits::LspClientTrait;
 use crate::mcp_server::tools::analyze_symbols::AnalyzerError;
 use crate::symbol::uri_from_pathbuf;
+
+// Fuzzy matching threshold - accept all positive scores
+const FUZZY_MATCH_THRESHOLD: isize = 0;
 
 // ============================================================================
 // SymbolContext - Rich symbol information with container hierarchy
@@ -26,6 +30,13 @@ pub struct SymbolContext {
     /// Container hierarchy path (e.g., ["Math", "Complex"] for Math::Complex::add)
     #[allow(dead_code)]
     pub container_path: Vec<String>,
+}
+
+/// Symbol match with fuzzy matching score
+#[derive(Debug, Clone)]
+struct ScoredSymbol<'a> {
+    symbol: &'a DocumentSymbol,
+    score: isize,
 }
 
 // ============================================================================
@@ -253,18 +264,33 @@ impl SymbolSearchBuilder {
         self
     }
 
-    /// Find the first matching symbol
+    /// Find the first matching symbol (highest scoring match)
     pub fn find_first(self, symbols: &[DocumentSymbol]) -> Option<&DocumentSymbol> {
-        DocumentSymbolIterator::new(symbols)
-            .find(|(symbol, path)| self.matches_symbol(symbol, path))
-            .map(|(symbol, _)| symbol)
+        // Use find_all to get sorted results, then take the first (best)
+        let results = self.find_all(symbols);
+        results.first().copied()
     }
 
-    /// Find all matching symbols
+    /// Find all matching symbols, sorted by fuzzy match score (best first)
     pub fn find_all(self, symbols: &[DocumentSymbol]) -> Vec<&DocumentSymbol> {
-        DocumentSymbolIterator::new(symbols)
-            .filter(|(symbol, path)| self.matches_symbol(symbol, path))
-            .map(|(symbol, _)| symbol)
+        let mut scored_matches: Vec<ScoredSymbol> = DocumentSymbolIterator::new(symbols)
+            .filter_map(|(symbol, path)| {
+                // Check all criteria first
+                if !self.matches_symbol(symbol, &path) {
+                    return None;
+                }
+                // Get fuzzy score for sorting
+                self.fuzzy_match_score(symbol).map(|score| ScoredSymbol { symbol, score })
+            })
+            .collect();
+
+        // Sort by score (highest first)
+        scored_matches.sort_by(|a, b| b.score.cmp(&a.score));
+
+        // Return just the symbols
+        scored_matches
+            .into_iter()
+            .map(|scored| scored.symbol)
             .collect()
     }
 
@@ -397,6 +423,20 @@ impl SymbolSearchBuilder {
         Ok(filtered_symbols)
     }
 
+    /// Get fuzzy match score for a symbol, returns None if no match
+    fn fuzzy_match_score(&self, symbol: &DocumentSymbol) -> Option<isize> {
+        if let Some(ref name) = self.name {
+            if let Some(fuzzy_match) = best_match(name, &symbol.name)
+                && fuzzy_match.score() >= FUZZY_MATCH_THRESHOLD {
+                return Some(fuzzy_match.score());
+                }
+            None
+        } else {
+            // If no name filter, return a default score
+            Some(0)
+        }
+    }
+
     /// Check if a symbol matches the search criteria
     fn matches_symbol(&self, symbol: &DocumentSymbol, path: &[&str]) -> bool {
         trace!(
@@ -412,15 +452,30 @@ impl SymbolSearchBuilder {
             return false;
         }
 
-        // Name matching - use substring matching for flexibility
-        if let Some(ref name) = self.name
-            && !symbol.name.contains(name)
-        {
-            trace!(
-                "Symbol '{}' rejected: name '{}' does not contain '{}'",
-                symbol.name, symbol.name, name
-            );
-            return false;
+        // Name matching - use fuzzy matching
+        if let Some(ref name) = self.name {
+            if let Some(fuzzy_match) = best_match(name, &symbol.name) {
+                if fuzzy_match.score() < FUZZY_MATCH_THRESHOLD {
+                    trace!(
+                        "Symbol '{}' rejected: fuzzy match score {} below threshold {}",
+                        symbol.name,
+                        fuzzy_match.score(),
+                        FUZZY_MATCH_THRESHOLD
+                    );
+                    return false;
+                }
+                trace!(
+                    "Symbol '{}' accepted: fuzzy match score {}",
+                    symbol.name,
+                    fuzzy_match.score()
+                );
+            } else {
+                trace!(
+                    "Symbol '{}' rejected: no fuzzy match found for query '{}'",
+                    symbol.name, name
+                );
+                return false;
+            }
         }
 
         // Kind matching - support both single kind and multiple kinds
@@ -1027,5 +1082,116 @@ mod tests {
         assert!(paths.contains(&("Namespace".to_string(), "".to_string())));
         assert!(paths.contains(&("MyClass".to_string(), "Namespace".to_string())));
         assert!(paths.contains(&("method".to_string(), "Namespace::MyClass".to_string())));
+    }
+
+    #[test]
+    fn test_fuzzy_matching_basic() {
+        let factorial_symbol = create_test_symbol("factorial", 0, 0, 5, 0);
+        let calculate_symbol = create_test_symbol("calculate", 6, 0, 10, 0);
+        let math_symbol = create_test_symbol("Math", 11, 0, 15, 0);
+        let symbols = vec![factorial_symbol, calculate_symbol, math_symbol];
+
+        // Test exact match
+        let found = SymbolSearchBuilder::new()
+            .with_name("factorial")
+            .find_all(&symbols);
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].name, "factorial");
+
+        // Test fuzzy match with typo
+        let found = SymbolSearchBuilder::new()
+            .with_name("factrl")
+            .find_all(&symbols);
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].name, "factorial");
+
+        // Test partial match
+        let found = SymbolSearchBuilder::new()
+            .with_name("calc")
+            .find_all(&symbols);
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].name, "calculate");
+    }
+
+    #[test]
+    fn test_fuzzy_matching_case_insensitive() {
+        let string_utils_symbol = create_test_symbol("StringUtils", 0, 0, 5, 0);
+        let symbols = vec![string_utils_symbol];
+
+        // Test case variations
+        let found = SymbolSearchBuilder::new()
+            .with_name("strutil")
+            .find_all(&symbols);
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].name, "StringUtils");
+
+        let found = SymbolSearchBuilder::new()
+            .with_name("STRINGUTILS")
+            .find_all(&symbols);
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].name, "StringUtils");
+    }
+
+    #[test]
+    fn test_fuzzy_matching_scoring_order() {
+        let math_symbol = create_test_symbol("Math", 0, 0, 5, 0);
+        let matrix_symbol = create_test_symbol("Matrix", 6, 0, 10, 0);
+        let algorithm_symbol = create_test_symbol("Algorithm", 11, 0, 15, 0);
+        let symbols = vec![math_symbol, matrix_symbol, algorithm_symbol];
+
+        // Query "Mat" should prefer "Math" over "Matrix" (better score)
+        let found = SymbolSearchBuilder::new()
+            .with_name("Mat")
+            .find_all(&symbols);
+
+        assert!(!found.is_empty());
+        // The first result should be the best match
+        assert_eq!(found[0].name, "Math");
+    }
+
+    #[test]
+    fn test_fuzzy_matching_no_matches() {
+        let factorial_symbol = create_test_symbol("factorial", 0, 0, 5, 0);
+        let symbols = vec![factorial_symbol];
+
+        // Test query that shouldn't match
+        let found = SymbolSearchBuilder::new()
+            .with_name("xyz")
+            .find_all(&symbols);
+        assert_eq!(found.len(), 0);
+    }
+
+    #[test]
+    fn test_fuzzy_matching_with_kind_filter() {
+        let class_symbol = create_test_symbol_with_kind("Math", SymbolKind::CLASS, 0, 0, 5, 0);
+        let function_symbol =
+            create_test_symbol_with_kind("mathFunction", SymbolKind::FUNCTION, 6, 0, 8, 0);
+        let symbols = vec![class_symbol, function_symbol];
+
+        // Fuzzy search for "mat" with class filter should only return the class
+        let found = SymbolSearchBuilder::new()
+            .with_name("mat")
+            .with_kind(SymbolKind::CLASS)
+            .find_all(&symbols);
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].name, "Math");
+        assert_eq!(found[0].kind, SymbolKind::CLASS);
+    }
+
+    #[test]
+    fn test_fuzzy_matching_multiple_results_sorted() {
+        let math_class = create_test_symbol("Math", 0, 0, 5, 0);
+        let mathematics = create_test_symbol("Mathematics", 6, 0, 10, 0);
+        let matrix = create_test_symbol("Matrix", 11, 0, 15, 0);
+        let symbols = vec![math_class, mathematics, matrix];
+
+        // Query "Math" should return all matches, sorted by score
+        let found = SymbolSearchBuilder::new()
+            .with_name("Math")
+            .find_all(&symbols);
+
+        assert!(found.len() >= 2); // Should find Math and Mathematics at least
+        // First result should be exact match "Math"
+        assert_eq!(found[0].name, "Math");
     }
 }
