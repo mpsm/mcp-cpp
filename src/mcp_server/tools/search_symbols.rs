@@ -252,7 +252,12 @@ impl SearchSymbolsTool {
         info!("Resolved files: {:?}", absolute_files);
 
         // Build the search using the document symbols helper's builder pattern
-        let mut search_builder = SymbolSearchBuilder::new().with_name(&self.query);
+        let mut search_builder = SymbolSearchBuilder::new();
+
+        // Only add name filter if query is not empty - this allows listing all symbols in files
+        if !self.query.is_empty() {
+            search_builder = search_builder.with_name(&self.query);
+        }
 
         // Add kind filtering if specified
         if let Some(kinds) = symbol_kinds {

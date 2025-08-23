@@ -166,7 +166,9 @@ Examples:
     )
     search_parser.add_argument(
         "query",
-        help="Search query (supports fuzzy matching and qualified names)"
+        nargs="?",
+        default="",
+        help="Search query (supports fuzzy matching and qualified names). Use empty string \"\" with --files to list all symbols in specified files."
     )
     search_parser.add_argument(
         "--kinds",
@@ -271,6 +273,11 @@ def main():
             response = client.list_tools()
             
         elif args.command == "search-symbols":
+            # Validate empty query only allowed with files parameter
+            if args.query == "" and not args.files:
+                print("Error: Empty query requires --files parameter for file-specific search", file=sys.stderr)
+                sys.exit(1)
+                
             arguments = {"query": args.query}
             
             # Add optional parameters
@@ -496,32 +503,62 @@ def _format_symbols_search(console, data: Dict) -> None:
         return
     
     table = Table(show_header=True, header_style="bold magenta")
-    table.add_column("Symbol", style="cyan", width=30)
+    table.add_column("Symbol", style="cyan", width=25)
     table.add_column("Kind", style="blue", width=12)
-    table.add_column("Location", style="green")
-    table.add_column("Container", style="yellow", width=20)
+    table.add_column("Location", style="green", width=25)
+    table.add_column("Container", style="yellow", width=25)
     
     for symbol in symbols:
         name = symbol.get("name", "Unknown")
         kind = symbol.get("kind", "unknown")
         
-        # Format location
+        # Convert LSP symbol kind number to readable string if needed
+        if isinstance(kind, int):
+            kind_names = {
+                1: "File", 2: "Module", 3: "Namespace", 4: "Package", 5: "Class",
+                6: "Method", 7: "Property", 8: "Field", 9: "Constructor", 10: "Enum",
+                11: "Interface", 12: "Function", 13: "Variable", 14: "Constant",
+                15: "String", 16: "Number", 17: "Boolean", 18: "Array", 19: "Object",
+                20: "Key", 21: "Null", 22: "EnumMember", 23: "Struct", 24: "Event",
+                25: "Operator", 26: "TypeParameter"
+            }
+            kind = kind_names.get(kind, f"Unknown({kind})")
+        
+        # Format location - handle FileLocation string format
         location = "Unknown"
         if "location" in symbol:
             loc = symbol["location"]
-            file_uri = loc.get("uri", "")
-            if file_uri.startswith("file://"):
-                file_path = Path(file_uri[7:]).name  # Just filename
-            else:
-                file_path = file_uri
-                
-            if "range" in loc and "start" in loc["range"]:
-                line = loc["range"]["start"].get("line", 0) + 1  # Convert to 1-based
-                location = f"{file_path}:{line}"
-            else:
-                location = file_path
+            if isinstance(loc, str):
+                # Handle FileLocation string format: /path/file.cpp:18:7-11
+                try:
+                    # Extract just the filename and line number
+                    if ':' in loc:
+                        parts = loc.rsplit(':', 2)  # Split from right to handle paths with colons
+                        if len(parts) >= 2:
+                            file_path = Path(parts[0]).name  # Just filename
+                            line_num = parts[1]
+                            location = f"{file_path}:{line_num}"
+                        else:
+                            location = Path(loc).name
+                    else:
+                        location = Path(loc).name
+                except Exception:
+                    location = str(loc)
+            elif isinstance(loc, dict):
+                # Handle LSP Location object format (legacy support)
+                file_uri = loc.get("uri", "")
+                if file_uri.startswith("file://"):
+                    file_path = Path(file_uri[7:]).name  # Just filename
+                else:
+                    file_path = file_uri
+                    
+                if "range" in loc and "start" in loc["range"]:
+                    line = loc["range"]["start"].get("line", 0) + 1  # Convert to 1-based
+                    location = f"{file_path}:{line}"
+                else:
+                    location = file_path
         
-        container = symbol.get("containerName", "")
+        container = symbol.get("container_name", "")
         
         table.add_row(name, kind, location, container)
     
