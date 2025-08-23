@@ -475,10 +475,20 @@ def _format_symbols_search(console, data: Dict) -> None:
         
     query = data.get("query", "Unknown")
     symbols = data.get("symbols", [])
-    total_found = data.get("total_found", len(symbols))
+    total_matches = data.get("total_matches", len(symbols))  # Fixed: use total_matches instead of total_found
+    metadata = data.get("metadata", {})
     
-    console.print(f"[bold]Search Results for '[cyan]{query}[/cyan]'[/bold]")
-    console.print(f"Found {total_found} symbols (showing {len(symbols)})")
+    # Panel header similar to analyze_symbol
+    console.print(Panel(f"[bold cyan]Search Results for '[yellow]{query}[/yellow]'[/bold cyan]", 
+                       title="Symbol Search Results", border_style="blue"))
+    
+    # Display metadata information
+    search_type = metadata.get("search_type", "unknown")
+    build_dir = metadata.get("build_directory", "")
+    if build_dir:
+        console.print(f"[bold]Build Directory:[/bold] {build_dir}")
+    console.print(f"[bold]Search Type:[/bold] {search_type}")
+    console.print(f"[bold]Results:[/bold] Found {total_matches} symbols (showing {len(symbols)})")
     console.print()
     
     if not symbols:
