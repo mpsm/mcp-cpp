@@ -11,3 +11,4 @@ pub mod hover;
 pub mod members;
 pub mod symbol_resolution;
 pub mod type_hierarchy;
+pub mod workspace_symbols;

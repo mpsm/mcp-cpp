@@ -8,8 +8,8 @@ use tokio::sync::Mutex;
 use tracing::{info, instrument};
 
 use crate::clangd::session::{ClangdSession, ClangdSessionTrait};
-// SymbolKind functionality now comes directly from lsp-types
 use crate::lsp::traits::LspClientTrait;
+use crate::mcp_server::tools::lsp_helpers::workspace_symbols::WorkspaceSymbolSearchBuilder;
 use crate::project::{ProjectComponent, ProjectWorkspace};
 
 #[mcp_tool(
@@ -110,7 +110,7 @@ impl SearchSymbolsTool {
                 .await?
         } else {
             // Workspace-wide search using workspace symbols for comprehensive discovery
-            self.search_workspace_symbols(session_guard.client_mut(), component)
+            self.search_workspace_symbols(&mut session_guard, component)
                 .await?
         };
 
@@ -126,14 +126,29 @@ impl SearchSymbolsTool {
         )]))
     }
 
-    /// Handle workspace-wide symbol search
+    /// Handle workspace-wide symbol search using LSP helpers
     async fn search_workspace_symbols(
         &self,
-        client: &mut impl LspClientTrait,
+        session: &mut ClangdSession,
         component: &ProjectComponent,
     ) -> Result<serde_json::Value, CallToolError> {
-        let symbols = client
-            .workspace_symbols(self.query.clone())
+        // Build the search using the new helper's builder pattern
+        let mut search_builder = WorkspaceSymbolSearchBuilder::new(self.query.clone())
+            .include_external(self.include_external.unwrap_or(false));
+
+        // Add kind filtering if specified
+        if let Some(ref kinds) = self.kinds {
+            search_builder = search_builder.with_kinds(kinds.clone());
+        }
+
+        // Add result limiting
+        if let Some(max) = self.max_results {
+            search_builder = search_builder.with_max_results(max);
+        }
+
+        // Execute the search
+        let symbols = search_builder
+            .search(session, component)
             .await
             .map_err(|e| {
                 CallToolError::new(std::io::Error::other(format!(
@@ -142,10 +157,8 @@ impl SearchSymbolsTool {
                 )))
             })?;
 
-        let filtered_symbols = self.filter_workspace_symbols(symbols, component);
-        let limited_symbols = self.apply_result_limit(filtered_symbols);
-
-        let symbols_json: Vec<_> = limited_symbols
+        // Convert to JSON format
+        let symbols_json: Vec<_> = symbols
             .iter()
             .map(|s| {
                 json!({
@@ -330,31 +343,10 @@ impl SearchSymbolsTool {
         }
     }
 
-    /// Apply result limit to workspace symbols
-    fn apply_result_limit(
-        &self,
-        symbols: Vec<lsp_types::WorkspaceSymbol>,
-    ) -> Vec<lsp_types::WorkspaceSymbol> {
-        let max_results = self.max_results.unwrap_or(100).min(1000) as usize;
-        symbols.into_iter().take(max_results).collect()
-    }
-
-    /// Apply result limit to JSON symbols
+    /// Apply result limit to JSON symbols (used for document symbol search)
     fn apply_json_result_limit(&self, symbols: Vec<serde_json::Value>) -> Vec<serde_json::Value> {
         let max_results = self.max_results.unwrap_or(100).min(1000) as usize;
         symbols.into_iter().take(max_results).collect()
-    }
-
-    /// Filter workspace symbols based on project boundaries and kind
-    fn filter_workspace_symbols(
-        &self,
-        symbols: Vec<lsp_types::WorkspaceSymbol>,
-        component: &ProjectComponent,
-    ) -> Vec<lsp_types::WorkspaceSymbol> {
-        symbols
-            .into_iter()
-            .filter(|symbol| self.workspace_symbol_passes_filters(symbol, component))
-            .collect()
     }
 
     /// Filter file symbols based on project boundaries
@@ -371,39 +363,6 @@ impl SearchSymbolsTool {
             .into_iter()
             .filter(|symbol| self.file_symbol_is_in_project(symbol, component))
             .collect()
-    }
-
-    /// Applies project boundary and external library filtering rules.
-    /// Determines whether a workspace symbol should be included in results
-    /// based on location and external dependency policies.
-    fn workspace_symbol_passes_filters(
-        &self,
-        symbol: &lsp_types::WorkspaceSymbol,
-        component: &ProjectComponent,
-    ) -> bool {
-        // Apply symbol kind filtering if specified
-        if let Some(kinds) = &self.kinds {
-            let kind_str = format!("{:?}", symbol.kind).to_lowercase();
-            if !kinds.iter().any(|k| k.eq_ignore_ascii_case(&kind_str)) {
-                return false;
-            }
-        }
-
-        // Apply project boundary filtering unless external symbols are explicitly included
-        if !self.include_external.unwrap_or(false) {
-            let uri_str = match &symbol.location {
-                lsp_types::OneOf::Left(location) => location.uri.as_str(),
-                lsp_types::OneOf::Right(workspace_location) => workspace_location.uri.as_str(),
-            };
-
-            if let Some(path) = uri_str.strip_prefix("file://")
-                && !self.is_project_file(path, component)
-            {
-                return false;
-            }
-        }
-
-        true
     }
 
     /// Validates whether a file-based symbol belongs to the project scope.
