@@ -112,20 +112,14 @@ class ClangdIndexGenerator:
     def _mark_file_as_processed(self, file_path_str: str, activity: str = ""):
         """Mark a file as processed if it's in compile_commands.json"""
         try:
-            file_path = Path(file_path_str)
-            filename = file_path.name
+            # Normalize the path from clangd to absolute path
+            resolved_path = Path(file_path_str).resolve()
+            filename = resolved_path.name
             
-            # Check if this file is in our compile_commands.json
-            if filename in self.compile_commands_files_by_name:
-                # Find the matching full path from compile_commands.json
-                matching_path = None
-                for cc_path in self.compile_commands_files:
-                    if cc_path.name == filename:
-                        matching_path = cc_path
-                        break
-                
-                if matching_path and matching_path not in self.processed_compile_files:
-                    self.processed_compile_files.add(matching_path)
+            # Check if this resolved path is in our compile_commands.json
+            if resolved_path in self.compile_commands_files:
+                if resolved_path not in self.processed_compile_files:
+                    self.processed_compile_files.add(resolved_path)
                     self.current_processing_file = filename
                     self.last_indexing_activity = time.time()
                     
@@ -725,8 +719,21 @@ class ClangdIndexGenerator:
                 print("⚠️  No files in compile_commands.json. Cannot trigger indexing.")
                 return
 
-            # Use the first file from compile_commands.json
-            cpp_file = Path(commands[0]['file'])
+            # Use the first file from compile_commands.json and resolve it properly
+            cmd = commands[0]
+            directory = Path(cmd.get('directory', '.')).resolve()
+            cpp_file = Path(cmd['file'])
+            if not cpp_file.is_absolute():
+                cpp_file = (directory / cpp_file).resolve()
+            else:
+                cpp_file = cpp_file.resolve()
+            
+            # Check if the file exists before trying to open it
+            if not cpp_file.exists():
+                print(f"❌ Error: First file from compile_commands.json does not exist: {cpp_file}")
+                print("   Cannot trigger indexing without a valid source file.")
+                return
+            
             print(f"📂 Opening file to trigger indexing: {cpp_file}")
 
             with open(cpp_file, 'r', encoding='utf-8') as f:
@@ -1057,11 +1064,30 @@ class ClangdIndexGenerator:
             with open(compile_commands, 'r') as f:
                 commands = json.load(f)
 
+            # Track seen files to avoid duplicates - use the first occurrence
+            seen_files = set()
+            missing_files = []
+            
             for cmd in commands:
                 if 'file' in cmd:
+                    # Resolve relative paths using the directory field
+                    directory = Path(cmd.get('directory', '.')).resolve()
                     file_path = Path(cmd['file'])
-                    self.compile_commands_files.add(file_path)  # Store full Path object
-                    self.compile_commands_files_by_name.add(file_path.name)  # Store filename for backward compatibility
+                    if not file_path.is_absolute():
+                        file_path = (directory / file_path).resolve()
+                    else:
+                        file_path = file_path.resolve()
+                    
+                    # Only add if we haven't seen this absolute path before (first occurrence wins)
+                    if file_path not in seen_files:
+                        seen_files.add(file_path)
+                        
+                        # Check if file exists
+                        if file_path.exists():
+                            self.compile_commands_files.add(file_path)  # Store resolved absolute Path object
+                            self.compile_commands_files_by_name.add(file_path.name)  # Store filename for backward compatibility
+                        else:
+                            missing_files.append(file_path)
 
             total_files = len(self.compile_commands_files)
             print(f"📋 Found {total_files} files in compile_commands.json")
@@ -1069,6 +1095,17 @@ class ClangdIndexGenerator:
                 print(f"   Files: {', '.join(sorted(self.compile_commands_files_by_name))}")
             else:
                 print(f"   Use --verbose to see file list")
+            
+            # Warn about missing files
+            if missing_files:
+                print(f"⚠️  Warning: {len(missing_files)} files from compile_commands.json do not exist:")
+                if self.verbose or len(missing_files) <= 5:
+                    for missing_file in missing_files:
+                        print(f"   - {missing_file}")
+                else:
+                    for missing_file in missing_files[:3]:
+                        print(f"   - {missing_file}")
+                    print(f"   ... and {len(missing_files) - 3} more (use --verbose for full list)")
 
         except Exception as e:
             print(f"❌ Error reading compile_commands.json: {e}")
