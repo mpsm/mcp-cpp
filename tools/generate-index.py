@@ -28,20 +28,23 @@ from typing import Dict, Any
 
 class ClangdIndexGenerator:
     def __init__(self, build_directory: str, clangd_path: str = "clangd",
-                 refresh_index: bool = False, log_file: str = None):
+                 refresh_index: bool = False, log_file: str = None, verbose: bool = False):
         self.build_directory = Path(build_directory).resolve()
         self.clangd_path = clangd_path
         self.refresh_index = refresh_index
         self.log_file = log_file
+        self.verbose = verbose
         self.log_file_handle = None
         self.process = None
         self.reader = None
         self.writer = None
         self.request_id = 0
         self.indexing_progress = {}
-        self.indexed_files = set()
-        # Files from compile_commands.json for reporting
-        self.compile_commands_files = set()
+        self.indexed_files = set()  # All files indexed (including headers)
+        self.processed_compile_files = set()  # Files from compile_commands.json that have been processed
+        # Files from compile_commands.json for reporting (now stores full paths)
+        self.compile_commands_files = set()  # Set of Path objects
+        self.compile_commands_files_by_name = set()  # Set of filenames for backward compatibility
         self.failed_files = set()  # Files that failed to index
         self.files_with_errors = {}  # filename -> error count
         self.indexing_complete = False
@@ -49,6 +52,7 @@ class ClangdIndexGenerator:
         self.diagnostic_errors = 0  # Total count of diagnostic errors
         self.diagnostic_warnings = 0  # Total count of diagnostic warnings
         self.lsp_errors = 0  # Count of LSP protocol errors
+        self.current_processing_file = ""  # Current file being processed for progress display
 
         # Open log file if specified
         if self.log_file:
@@ -99,6 +103,57 @@ class ClangdIndexGenerator:
                 self.log_file_handle.flush()
             except Exception as e:
                 print(f"⚠️  Warning: Could not write LSP message to log: {e}")
+
+    def _print_verbose(self, message: str):
+        """Print message only if in verbose mode"""
+        if self.verbose:
+            print(message)
+
+    def _mark_file_as_processed(self, file_path_str: str, activity: str = ""):
+        """Mark a file as processed if it's in compile_commands.json"""
+        try:
+            file_path = Path(file_path_str)
+            filename = file_path.name
+            
+            # Check if this file is in our compile_commands.json
+            if filename in self.compile_commands_files_by_name:
+                # Find the matching full path from compile_commands.json
+                matching_path = None
+                for cc_path in self.compile_commands_files:
+                    if cc_path.name == filename:
+                        matching_path = cc_path
+                        break
+                
+                if matching_path and matching_path not in self.processed_compile_files:
+                    self.processed_compile_files.add(matching_path)
+                    self.current_processing_file = filename
+                    self.last_indexing_activity = time.time()
+                    
+                    if activity and self.verbose:
+                        self._print_verbose(f"📝 Processing {filename}: {activity}")
+                    
+                    return True
+        except Exception:
+            pass
+        return False
+
+    def _print_progress(self, update_in_place: bool = False):
+        """Display clean progress indicator"""
+        if not self.compile_commands_files:
+            return
+        
+        processed_count = len(self.processed_compile_files)
+        total_count = len(self.compile_commands_files)
+        percentage = (processed_count / total_count) * 100 if total_count > 0 else 0
+        
+        progress_msg = f"Processing: {processed_count}/{total_count} files ({percentage:.1f}%)"
+        if self.current_processing_file:
+            progress_msg += f" [{self.current_processing_file}]"
+        
+        if update_in_place and not self.verbose:
+            print(f"\r{progress_msg}", end='', flush=True)
+        else:
+            print(progress_msg)
 
     def clean_cache(self):
         """Clean clangd cache directories to ensure fresh indexing (only if refresh_index is True)"""
@@ -196,87 +251,104 @@ class ClangdIndexGenerator:
                     # Log all stderr to file if logging is enabled
                     self._log_clangd_stderr(line)
 
-                    # Look for indexing-related messages and errors
-                    if any(keyword in line for keyword in [
+                    # Track indexing-related messages with reduced verbosity
+                    show_clangd_log = self.verbose and any(keyword in line for keyword in [
                         "Enqueueing", "commands for indexing", "Indexed",
                         "symbols", "backgroundIndexProgress",
                         "Building first preamble", "compilation database",
                         "Broadcasting", "ASTWorker", "Error", "Failed",
                         "error:", "warning:", "fatal error"
+                    ])
+                    
+                    if show_clangd_log:
+                        self._print_verbose(f"[CLANGD LOG] {line}")
+
+                    # Track file processing from multiple log patterns
+                    file_processed = False
+                    
+                    if "Indexed " in line and "symbols" in line:
+                        # Extract filename from log line like:
+                        # "Indexed /path/to/file.cpp (1234 symbols, ...)"
+                        try:
+                            file_part = line.split("Indexed ")[1].split(" (")[0]
+                            filename = Path(file_part).name
+                            self.indexed_files.add(filename)
+                            
+                            # Mark as processed if it's from compile_commands.json
+                            if self._mark_file_as_processed(file_part, "indexed with symbols"):
+                                file_processed = True
+                                if self.verbose:
+                                    symbols_part = line.split("(")[1].split(" symbols")[0] if "(" in line else "unknown"
+                                    print(f"✅ Indexed {filename} ({symbols_part} symbols)")
+
+                        except Exception:
+                            pass  # Ignore parsing errors
+                    
+                    elif "Building first preamble for " in line:
+                        # Extract filename from preamble build message
+                        # Format: "Building first preamble for /path/to/file.cpp version N"
+                        try:
+                            after_for = line.split("Building first preamble for ")[1]
+                            file_part = after_for.split(" version ")[0].strip()
+                            if self._mark_file_as_processed(file_part, "building preamble"):
+                                file_processed = True
+                        except Exception:
+                            pass
+                    
+                    elif "ASTWorker building file " in line:
+                        # Extract filename from ASTWorker build messages
+                        # Format: "ASTWorker building file /path/to/file.cpp version N with command ..."
+                        try:
+                            after_file = line.split("ASTWorker building file ")[1]
+                            file_part = after_file.split(" version ")[0].strip()
+                            if self._mark_file_as_processed(file_part, "ASTWorker building"):
+                                file_processed = True
+                        except Exception:
+                            pass
+                    
+                    # Update progress display if a compile_commands.json file was processed
+                    if file_processed and not self.verbose:
+                        self._print_progress(update_in_place=True)
+
+                    # Track indexing failures
+                    elif any(error_indicator in line.lower() for error_indicator in [
+                        "error:", "fatal error", "failed to", "could not", "cannot"
                     ]):
-                        print(f"[CLANGD LOG] {line}")
+                        # Extract potential filename from error messages
+                        try:
+                            # Look for patterns like "file.cpp:line:col: error"
+                            if ".cpp:" in line or ".cc:" in line or ".cxx:" in line:
+                                for ext in [".cpp:", ".cc:", ".cxx:"]:
+                                    if ext in line:
+                                        file_part = line.split(ext)[0]
+                                        filename_with_ext = file_part.split("/")[-1] + ext[:-1]
+                                        if filename_with_ext in self.compile_commands_files_by_name:
+                                            if filename_with_ext not in self.files_with_errors:
+                                                self.files_with_errors[filename_with_ext] = 0
+                                            self.files_with_errors[filename_with_ext] += 1
+                                            error_msg = line.split('error:')[-1].strip()
+                                            self._print_verbose(f"❌ Error in {filename_with_ext}: {error_msg}")
+                                        break
+                            else:
+                                self._print_verbose(f"❌ General indexing error: {line}")
+                        except Exception:
+                            self._print_verbose(f"❌ Parse error in log: {line}")
 
-                        # Track indexed files from various log patterns
-                        if "Indexed " in line and "symbols" in line:
-                            # Extract filename from log line like:
-                            # "Indexed /path/to/file.cpp (1234 symbols, ...)"
-                            try:
-                                file_part = line.split(
-                                    "Indexed ")[1].split(" (")[0]
-                                filename = Path(file_part).name
-                                self.indexed_files.add(filename)
-                                self.last_indexing_activity = time.time()
+                    # Also track from symbol slab messages
+                    elif "symbol slab:" in line and "symbols" in line:
+                        # These indicate files being processed
+                        symbols_count = line.split("symbol slab:")[1].split("symbols")[0].strip()
+                        if symbols_count.isdigit() and int(symbols_count) > 0:
+                            self._print_verbose(f"📊 Processing symbols: {symbols_count} symbols indexed")
+                            self.last_indexing_activity = time.time()
 
-                                # Calculate progress based on compile_commands.json files
-                                compile_commands_indexed = len(
-                                    self.indexed_files & self.compile_commands_files
-                                )
-                                total_compile_commands = len(
-                                    self.compile_commands_files)
+                    # Check for indexing completion signals
+                    elif "backgroundIndexProgress" in line and "end" in line:
+                        self._print_verbose("🎯 Background indexing progress ended")
+                        self.indexing_complete = True
 
-                                if total_compile_commands > 0:
-                                    percentage = (
-                                        compile_commands_indexed / total_compile_commands) * 100
-                                    print(f"✅ Indexed {filename} "
-                                          f"({compile_commands_indexed}/{total_compile_commands} = {percentage:.1f}% of compile_commands.json files)")
-                                else:
-                                    print(f"✅ Indexed {filename}")
-
-                            except Exception:
-                                pass  # Ignore parsing errors
-
-                        # Track indexing failures
-                        elif any(error_indicator in line.lower() for error_indicator in [
-                            "error:", "fatal error", "failed to", "could not", "cannot"
-                        ]):
-                            # Extract potential filename from error messages
-                            try:
-                                # Look for patterns like "file.cpp:line:col: error"
-                                if ".cpp:" in line or ".cc:" in line or ".cxx:" in line:
-                                    for ext in [".cpp:", ".cc:", ".cxx:"]:
-                                        if ext in line:
-                                            file_part = line.split(ext)[0]
-                                            filename_with_ext = file_part.split(
-                                                "/")[-1] + ext[:-1]
-                                            if filename_with_ext in self.compile_commands_files:
-                                                if filename_with_ext not in self.files_with_errors:
-                                                    self.files_with_errors[filename_with_ext] = 0
-                                                self.files_with_errors[filename_with_ext] += 1
-                                                print(
-                                                    f"❌ Error in {filename_with_ext}: {line.split('error:')[-1].strip()}")
-                                            break
-                                else:
-                                    print(f"❌ General indexing error: {line}")
-                            except Exception:
-                                print(f"❌ Parse error in log: {line}")
-
-                        # Also track from symbol slab messages
-                        elif "symbol slab:" in line and "symbols" in line:
-                            # These indicate files being processed
-                            symbols_count = line.split("symbol slab:")[
-                                1].split("symbols")[0].strip()
-                            if symbols_count.isdigit() and int(symbols_count) > 0:
-                                print(
-                                    f"📊 Processing symbols: {symbols_count} symbols indexed")
-                                self.last_indexing_activity = time.time()
-
-                        # Check for indexing completion signals
-                        elif "backgroundIndexProgress" in line and "end" in line:
-                            print("🎯 Background indexing progress ended")
-                            self.indexing_complete = True
-
-                        elif "ASTWorker" in line and ("idle" in line.lower() or "finished" in line.lower()):
-                            print("🔄 ASTWorker activity completed")
+                    elif "ASTWorker" in line and ("idle" in line.lower() or "finished" in line.lower()):
+                        self._print_verbose("🔄 ASTWorker activity completed")
 
             except Exception as e:
                 print(f"Error reading stderr: {e}")
@@ -330,14 +402,14 @@ class ClangdIndexGenerator:
 
         method = message.get("method", "")
 
-        # Debug: print all methods we receive
+        # Debug: print all methods we receive in verbose mode
         if method:
-            print(f"🔍 Received method: {method}")
+            self._print_verbose(f"🔍 Received method: {method}")
 
         if method == "window/workDoneProgress/create":
             # clangd is requesting to create a progress token
             token = message.get("params", {}).get("token", "")
-            print(f"🔄 Progress token created: {token}")
+            self._print_verbose(f"🔄 Progress token created: {token}")
             # Send success response
             self._send_response(message.get("id"), None)
 
@@ -352,14 +424,17 @@ class ClangdIndexGenerator:
                 if kind == "begin":
                     title = value.get("title", "")
                     percentage = value.get("percentage", 0)
-                    print(f"🚀 Indexing started: {title} ({percentage}%)")
+                    print(f"🚀 Indexing started: {title}")
+                    if self.verbose:
+                        print(f"   Initial progress: {percentage}%")
                 elif kind == "report":
                     message_text = value.get("message", "")
                     percentage = value.get("percentage", 0)
-                    print(
-                        f"📊 Indexing progress: {message_text} ({percentage}%)")
+                    self._print_verbose(f"📊 Indexing progress: {message_text} ({percentage}%)")
                     self.last_indexing_activity = time.time()
                 elif kind == "end":
+                    if not self.verbose:
+                        print()  # New line to finish the progress indicator
                     print("✅ Background indexing completed!")
                     self.indexing_complete = True
 
@@ -369,7 +444,7 @@ class ClangdIndexGenerator:
             uri = params.get("uri", "")
             state = params.get("state", "")
             filename = Path(uri.replace("file://", "")).name
-            print(f"📄 File status: {filename} - {state}")
+            self._print_verbose(f"📄 File status: {filename} - {state}")
 
         elif method == "textDocument/publishDiagnostics":
             # Diagnostic messages (errors, warnings, etc.)
@@ -384,26 +459,25 @@ class ClangdIndexGenerator:
                 warnings = [d for d in diagnostics if d.get('severity') == 2]
 
                 # Track diagnostics for failure reporting
-                if filename in self.compile_commands_files:
+                if filename in self.compile_commands_files_by_name:
                     if errors:
                         self.diagnostic_errors += len(errors)
                         if filename not in self.files_with_errors:
                             self.files_with_errors[filename] = 0
                         self.files_with_errors[filename] += len(errors)
-                        print(f"❌ {filename}: {len(errors)} error(s)")
+                        self._print_verbose(f"❌ {filename}: {len(errors)} error(s)")
                     if warnings:
                         self.diagnostic_warnings += len(warnings)
-                        print(f"⚠️  {filename}: {len(warnings)} warning(s)")
+                        self._print_verbose(f"⚠️  {filename}: {len(warnings)} warning(s)")
                 else:
-                    print(f"🔍 Diagnostics for {filename}: "
-                          f"{len(diagnostics)} issues")
+                    self._print_verbose(f"🔍 Diagnostics for {filename}: {len(diagnostics)} issues")
             # Don't print "Unknown method" for this standard LSP method
 
         elif "result" in message:
             # Response to our request
             request_id = message.get("id")
             if request_id:
-                print(f"✅ Response to request {request_id}")
+                self._print_verbose(f"✅ Response to request {request_id}")
 
         elif "error" in message:
             # Error response to our request
@@ -412,19 +486,17 @@ class ClangdIndexGenerator:
             error_code = error.get("code", "")
             error_message = error.get("message", "")
             if error_code == -32601:  # Method not found
-                print(
-                    f"⚠️  Method not supported by clangd (request {request_id})")
+                self._print_verbose(f"⚠️  Method not supported by clangd (request {request_id})")
             else:
-                print(f"❌ Error response to request {request_id}: "
-                      f"{error_message}")
+                print(f"❌ Error response to request {request_id}: {error_message}")
                 # Track LSP errors as potential indexing failures
                 self.lsp_errors += 1
         else:
             # Debug: print unknown messages
             if method:
-                print(f"❓ Unknown method: {method}")
+                self._print_verbose(f"❓ Unknown method: {method}")
             elif "result" not in message and "error" not in message:
-                print(f"❓ Unknown message: {message}")
+                self._print_verbose(f"❓ Unknown message: {message}")
 
     def _send_json_rpc(self, message: Dict[str, Any]):
         """Send a JSON-RPC message to clangd using LSP format"""
@@ -459,7 +531,7 @@ class ClangdIndexGenerator:
             "method": method,
             "params": params or {}
         }
-        print(f"📤 Sending {method} request (id: {self.request_id})")
+        self._print_verbose(f"📤 Sending {method} request (id: {self.request_id})")
         self._send_json_rpc(request)
         return self.request_id
 
@@ -470,7 +542,7 @@ class ClangdIndexGenerator:
             "method": method,
             "params": params or {}
         }
-        print(f"📤 Sending {method} notification")
+        self._print_verbose(f"📤 Sending {method} notification")
         self._send_json_rpc(notification)
 
     def initialize_lsp(self):
@@ -687,6 +759,106 @@ class ClangdIndexGenerator:
 
         # Note: Don't request foldingRange as clangd doesn't support it
 
+    def open_file_for_indexing(self, file_path: Path):
+        """Open a specific file to trigger its indexing"""
+        try:
+            with open(file_path, 'r', encoding='utf-8') as f:
+                content = f.read()
+        except Exception as e:
+            self._print_verbose(f"❌ Could not read file {file_path}: {e}")
+            return False
+
+        # Send textDocument/didOpen
+        did_open_params = {
+            "textDocument": {
+                "uri": f"file://{file_path}",
+                "languageId": "cpp",
+                "version": 1,
+                "text": content
+            }
+        }
+
+        self._print_verbose(f"📂 Opening file to trigger indexing: {file_path.name}")
+        self._send_notification("textDocument/didOpen", did_open_params)
+        return True
+
+    def ensure_all_files_indexed(self):
+        """Open every file from compile_commands.json to ensure complete indexing"""
+        if not self.compile_commands_files:
+            return True
+
+        # Track which files we've tried to open
+        files_opened = set()
+        
+        print(f"📂 Opening all {len(self.compile_commands_files)} files from compile_commands.json to ensure complete indexing...")
+        
+        for i, file_path in enumerate(sorted(self.compile_commands_files)):
+            progress = f"({i+1}/{len(self.compile_commands_files)})"
+            
+            if self.verbose:
+                status = "✅ already processed" if file_path in self.processed_compile_files else "🔄 needs processing"
+                print(f"   {progress} Opening {file_path.name} {status}")
+            else:
+                print(f"   {progress} Opening {file_path.name}...")
+            
+            # Always open the file, regardless of processing status
+            if self.open_file_for_indexing(file_path):
+                files_opened.add(file_path)
+                
+                # Give clangd a moment to process
+                time.sleep(0.2)
+                
+                # Update activity timestamp
+                self.last_indexing_activity = time.time()
+            else:
+                self._print_verbose(f"❌ Failed to open {file_path.name}")
+        
+        # Wait a bit for final processing
+        if files_opened:
+            if not self.verbose:
+                print(f"   Waiting for final processing...")
+            
+            final_wait_start = time.time()
+            max_final_wait = 10  # 10 seconds for final processing
+            
+            while time.time() - final_wait_start < max_final_wait:
+                time.sleep(0.5)
+                
+                # Check if there's still indexing activity
+                if time.time() - self.last_indexing_activity < 3:
+                    # Reset wait timer if there's still activity
+                    final_wait_start = time.time()
+                    continue
+                else:
+                    # No recent activity, probably done
+                    break
+        
+        # Final status
+        processed_count = len(self.processed_compile_files)
+        total_count = len(self.compile_commands_files)
+        
+        if processed_count == total_count:
+            print(f"✅ All {total_count} files have been opened and processed by clangd!")
+            return True
+        elif processed_count > 0:
+            print(f"⚠️  {processed_count}/{total_count} files were processed after opening")
+            unprocessed = []
+            for file_path in self.compile_commands_files:
+                if file_path not in self.processed_compile_files:
+                    unprocessed.append(file_path.name)
+            
+            if self.verbose or len(unprocessed) <= 10:
+                print(f"   Unprocessed files: {', '.join(sorted(unprocessed))}")
+            else:
+                sample = sorted(unprocessed)[:5]
+                print(f"   Unprocessed files: {', '.join(sample)} ... and {len(unprocessed) - 5} more")
+            
+            return False
+        else:
+            print(f"⚠️  No files were detected as processed by clangd")
+            print(f"   This could indicate clangd logging issues or compilation database problems")
+            return False
+
     def wait_for_indexing_completion(self):
         """Wait for clangd to finish indexing (no timeout)"""
         print("👀 Waiting for indexing to complete...")
@@ -721,7 +893,11 @@ class ClangdIndexGenerator:
 
         # Determine completion status
         if self.indexing_complete:
-            print("✅ Indexing completed successfully!")
+            print("✅ Initial indexing completed successfully!")
+            # Now check coverage and ensure all files are indexed
+            print("\n🔍 Checking compile commands coverage...")
+            if not self.ensure_all_files_indexed():
+                print("⚠️  Not all files could be indexed completely")
         elif self.process and self.process.poll() is not None:
             print("⚠️  clangd process ended")
         else:
@@ -729,69 +905,104 @@ class ClangdIndexGenerator:
 
         # Final summary with detailed analysis
         if self.compile_commands_files:
-            indexed_from_compile = len(
-                self.indexed_files & self.compile_commands_files)
+            processed_from_compile = len(self.processed_compile_files)
             total_compile = len(self.compile_commands_files)
-            final_percentage = (indexed_from_compile /
+            final_percentage = (processed_from_compile /
                                 total_compile) * 100 if total_compile > 0 else 0
-            print(
-                f"📊 Final summary: {indexed_from_compile}/{total_compile} = {final_percentage:.1f}% of compile_commands.json files indexed")
+            
+            if not self.verbose:
+                print()  # Ensure we end the progress line
+            
+            print(f"\n📊 FINAL SUMMARY")
+            print("=" * 40)
+            print(f"📋 Files in compile_commands.json: {total_compile}")
+            print(f"✅ Files processed by clangd: {processed_from_compile}")
+            print(f"📊 Coverage: {final_percentage:.1f}%")
 
-            # Show which files were/weren't indexed
-            if indexed_from_compile < total_compile:
-                missing_files = self.compile_commands_files - self.indexed_files
-                print(
-                    f"❓ Files not detected as indexed: {', '.join(sorted(missing_files))}")
+            # Show which files were/weren't processed only in verbose mode or if there are missing files
+            if processed_from_compile < total_compile:
+                missing_files = set()
+                for file_path in self.compile_commands_files:
+                    if file_path not in self.processed_compile_files:
+                        missing_files.add(file_path.name)
+                
+                print(f"❓ Files not processed: {len(missing_files)}")
+                if self.verbose or len(missing_files) <= 5:
+                    for filename in sorted(missing_files):
+                        print(f"   - {filename}")
+                elif len(missing_files) > 5:
+                    for filename in sorted(list(missing_files)[:3]):
+                        print(f"   - {filename}")
+                    print(f"   ... and {len(missing_files) - 3} more (use --verbose to see all)")
 
-        print(f"📁 Total files indexed: {len(self.indexed_files)}")
-        if self.indexed_files:
-            print(f"   Files: {', '.join(sorted(self.indexed_files))}")
-        else:
+            # Also show total indexed files (including headers) in verbose mode
+            if self.verbose:
+                print(f"\n📁 Total files indexed (including headers): {len(self.indexed_files)}")
+                if len(self.indexed_files) <= 20:
+                    print(f"   Files: {', '.join(sorted(self.indexed_files))}")
+                else:
+                    sample_files = sorted(list(self.indexed_files))[:10]
+                    print(f"   Sample: {', '.join(sample_files)} ... and {len(self.indexed_files) - 10} more")
+
+        # Additional diagnostics only if no files were indexed at all
+        if not self.indexed_files and self.verbose:
             print("⚠️  Warning: No individual file indexing detected in logs")
             print("   This might indicate:")
             print("   - Files were indexed but not logged with expected format")
             print("   - Indexing completed too quickly to capture")
             print("   - clangd used cached index data")
 
-        # Report indexing failures and issues
-        print("\n" + "="*60)
-        print("📊 INDEXING FAILURE SUMMARY")
-        print("="*60)
+        # Report indexing failures and issues only if there are errors or in verbose mode
+        has_issues = (self.files_with_errors or self.diagnostic_errors > 0 or 
+                     self.diagnostic_warnings > 0 or self.lsp_errors > 0)
+        
+        if has_issues or self.verbose:
+            print("\n📊 INDEXING ISSUES SUMMARY")
+            print("=" * 40)
 
-        if self.files_with_errors:
-            print(f"❌ Files with errors: {len(self.files_with_errors)}")
-            for filename, error_count in sorted(self.files_with_errors.items()):
-                print(f"   • {filename}: {error_count} error(s)")
-        else:
-            print("✅ No files with compile errors detected")
+            if self.files_with_errors:
+                print(f"❌ Files with errors: {len(self.files_with_errors)}")
+                if self.verbose:
+                    for filename, error_count in sorted(self.files_with_errors.items()):
+                        print(f"   • {filename}: {error_count} error(s)")
+                elif len(self.files_with_errors) <= 3:
+                    for filename, error_count in sorted(self.files_with_errors.items()):
+                        print(f"   • {filename}: {error_count} error(s)")
+                else:
+                    # Show first 3 files with errors
+                    for filename, error_count in sorted(list(self.files_with_errors.items())[:3]):
+                        print(f"   • {filename}: {error_count} error(s)")
+                    print(f"   ... and {len(self.files_with_errors) - 3} more (use --verbose for details)")
+            else:
+                print("✅ No files with compile errors detected")
 
-        if self.diagnostic_errors > 0:
-            print(f"❌ Total diagnostic errors: {self.diagnostic_errors}")
-        else:
-            print("✅ No diagnostic errors reported")
+            if self.diagnostic_errors > 0:
+                print(f"❌ Total diagnostic errors: {self.diagnostic_errors}")
+            elif self.verbose:
+                print("✅ No diagnostic errors reported")
 
-        if self.diagnostic_warnings > 0:
-            print(f"⚠️  Total diagnostic warnings: {self.diagnostic_warnings}")
-        else:
-            print("✅ No diagnostic warnings reported")
+            if self.diagnostic_warnings > 0:
+                print(f"⚠️  Total diagnostic warnings: {self.diagnostic_warnings}")
+            elif self.verbose:
+                print("✅ No diagnostic warnings reported")
 
-        if self.lsp_errors > 0:
-            print(f"❌ LSP protocol errors: {self.lsp_errors}")
-        else:
-            print("✅ No LSP protocol errors")
+            if self.lsp_errors > 0:
+                print(f"❌ LSP protocol errors: {self.lsp_errors}")
+            elif self.verbose:
+                print("✅ No LSP protocol errors")
 
-        # Calculate success rate
-        failed_files = set(self.files_with_errors.keys())
-        successful_files = self.indexed_files - failed_files
+            # Calculate success rate
+            failed_files = set(self.files_with_errors.keys())
+            successful_files = self.indexed_files - failed_files
 
-        if self.compile_commands_files:
-            success_rate = (len(successful_files & self.compile_commands_files) /
-                            len(self.compile_commands_files)) * 100
-            print(f"\n🎯 Overall success rate: {success_rate:.1f}% "
-                  f"({len(successful_files & self.compile_commands_files)}/"
-                  f"{len(self.compile_commands_files)} files)")
+            if self.compile_commands_files and self.verbose:
+                success_rate = (len(successful_files & self.compile_commands_files_by_name) /
+                                len(self.compile_commands_files)) * 100
+                print(f"\n🎯 Overall success rate: {success_rate:.1f}% "
+                      f"({len(successful_files & self.compile_commands_files_by_name)}/"
+                      f"{len(self.compile_commands_files)} files)")
 
-        print("="*60)
+            print("=" * 40)
 
     def shutdown(self):
         """Shutdown clangd gracefully"""
@@ -830,12 +1041,15 @@ class ClangdIndexGenerator:
             for cmd in commands:
                 if 'file' in cmd:
                     file_path = Path(cmd['file'])
-                    self.compile_commands_files.add(file_path.name)
+                    self.compile_commands_files.add(file_path)  # Store full Path object
+                    self.compile_commands_files_by_name.add(file_path.name)  # Store filename for backward compatibility
 
             total_files = len(self.compile_commands_files)
             print(f"📋 Found {total_files} files in compile_commands.json")
-            print(
-                f"   Files: {', '.join(sorted(self.compile_commands_files))}")
+            if self.verbose:
+                print(f"   Files: {', '.join(sorted(self.compile_commands_files_by_name))}")
+            else:
+                print(f"   Use --verbose to see file list")
 
         except Exception as e:
             print(f"❌ Error reading compile_commands.json: {e}")
@@ -854,6 +1068,8 @@ def main():
     parser.add_argument("--log-file",
                         help="Save all clangd logs to specified file for "
                         "investigation (optional)")
+    parser.add_argument("--verbose", action="store_true",
+                        help="Show detailed clangd logs and progress messages")
 
     args = parser.parse_args()
 
@@ -897,7 +1113,7 @@ def main():
         sys.exit(1)
 
     generator = ClangdIndexGenerator(
-        args.build_directory, clangd_path, args.refresh_index, args.log_file)
+        args.build_directory, clangd_path, args.refresh_index, args.log_file, args.verbose)
 
     try:
         print("=" * 60)
