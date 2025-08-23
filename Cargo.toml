@@ -13,30 +13,30 @@ documentation = "https://docs.rs/mcp-cpp-server"
 homepage = "https://github.com/mpsm/mcp-cpp"
 
 [dependencies]
-async-trait = "0.1.88"
+async-trait = "0.1"
 chrono = { version = "0.4", features = ["serde"] }
-clap = { version = "4.5.27", features = ["derive"] }
+clap = { version = "4.5", features = ["derive"] }
 libc = "0.2"
 lsp-types = "0.97"
-rust-mcp-sdk = { version = "0.5.0", features = ["macros"] }
-serde = { version = "1.0.219", features = ["derive"] }
-serde_json = "1.0.141"
-thiserror = "2.0.12"
-tokio = { version = "1.46.1", features = ["full"] }
-tokio-util = { version = "0.7.15", features = ["codec"] }
-tracing = "0.1.41"
-tracing-subscriber = { version = "0.3.19", features = ["json", "env-filter"] }
-walkdir = "2.5.0"
-uuid = { version = "1.17.0", features = ["v4", "serde"] }
-regex = "1.11.1"
+rust-mcp-sdk = { version = "0.6", features = ["macros"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+thiserror = "2.0"
+tokio = { version = "1.46", features = ["full"] }
+tokio-util = { version = "0.7", features = ["codec"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["json", "env-filter"] }
+walkdir = "2.5"
+uuid = { version = "1.17", features = ["v4", "serde"] }
+regex = "1.11"
 sha2 = "0.10"
 json_compilation_db = "1.0"
 sublime_fuzzy = "0.7"
 
 [dev-dependencies]
 tempfile = "3.0"
-ctor = "0.4"
-mockall = "0.13.1"
+ctor = "0.5"
+mockall = "0.13"
 
 [features]
 default = []
