@@ -2,7 +2,7 @@
 
 use rust_mcp_sdk::macros::{JsonSchema, mcp_tool};
 use rust_mcp_sdk::schema::{CallToolResult, TextContent, schema_utils::CallToolError};
-use serde_json::json;
+use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use tokio::sync::Mutex;
 use tracing::{info, instrument};
@@ -11,6 +11,34 @@ use crate::clangd::session::{ClangdSession, ClangdSessionTrait};
 use crate::mcp_server::tools::lsp_helpers::document_symbols::SymbolSearchBuilder;
 use crate::mcp_server::tools::lsp_helpers::workspace_symbols::WorkspaceSymbolSearchBuilder;
 use crate::project::{ProjectComponent, ProjectWorkspace};
+use crate::symbol::Symbol;
+
+/// Search result structure for search_symbols tool
+#[derive(Debug, Serialize, Deserialize)]
+pub struct SearchResult {
+    pub success: bool,
+    pub query: String,
+    pub total_matches: usize,
+    pub symbols: Vec<Symbol>,
+    pub metadata: SearchMetadata,
+}
+
+/// Metadata about the search operation
+#[derive(Debug, Serialize, Deserialize)]
+pub struct SearchMetadata {
+    pub search_type: String,
+    pub build_directory: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub files_processed: Option<Vec<FileProcessingResult>>,
+}
+
+/// Result of processing a specific file during search
+#[derive(Debug, Serialize, Deserialize)]
+pub struct FileProcessingResult {
+    pub file: String,
+    pub status: String,
+    pub symbols_found: usize,
+}
 
 #[mcp_tool(
     name = "search_symbols",
@@ -99,7 +127,7 @@ impl SearchSymbolsTool {
         &self,
         session: &mut ClangdSession,
         component: &ProjectComponent,
-    ) -> Result<serde_json::Value, CallToolError> {
+    ) -> Result<SearchResult, CallToolError> {
         // Build the search using the new helper's builder pattern
         let mut search_builder = WorkspaceSymbolSearchBuilder::new(self.query.clone())
             .include_external(self.include_external.unwrap_or(false));
@@ -115,7 +143,7 @@ impl SearchSymbolsTool {
         }
 
         // Execute the search
-        let symbols = search_builder
+        let workspace_symbols = search_builder
             .search(session, component)
             .await
             .map_err(|e| {
@@ -125,33 +153,20 @@ impl SearchSymbolsTool {
                 )))
             })?;
 
-        // Convert to JSON format
-        let symbols_json: Vec<_> = symbols
-            .iter()
-            .map(|s| {
-                json!({
-                    "name": s.name,
-                    "kind": s.kind,
-                    "location": s.location,
-                    "containerName": s.container_name
-                })
-            })
-            .collect();
+        // Convert WorkspaceSymbol to Symbol using the From trait
+        let symbols: Vec<Symbol> = workspace_symbols.into_iter().map(Symbol::from).collect();
 
-        // Convert LSP numeric symbol kinds to string representations for MCP client compatibility.
-        // This ensures consistent symbol type representation across different MCP client implementations.
-        let converted_symbols = super::utils::convert_symbol_kinds(symbols_json);
-
-        Ok(json!({
-            "success": true,
-            "query": self.query,
-            "total_matches": converted_symbols.len(),
-            "symbols": converted_symbols,
-            "metadata": {
-                "search_type": "workspace",
-                "build_directory": component.build_dir_path.display().to_string(),
-            }
-        }))
+        Ok(SearchResult {
+            success: true,
+            query: self.query.clone(),
+            total_matches: symbols.len(),
+            symbols,
+            metadata: SearchMetadata {
+                search_type: "workspace".to_string(),
+                build_directory: component.build_dir_path.display().to_string(),
+                files_processed: None,
+            },
+        })
     }
 
     /// Handle file-specific document symbol search
@@ -160,7 +175,7 @@ impl SearchSymbolsTool {
         session: &mut ClangdSession,
         files: &[String],
         component: &ProjectComponent,
-    ) -> Result<serde_json::Value, CallToolError> {
+    ) -> Result<SearchResult, CallToolError> {
         // Build the search using the document symbols helper's builder pattern
         let mut search_builder = SymbolSearchBuilder::new().with_name(&self.query);
 
@@ -180,43 +195,36 @@ impl SearchSymbolsTool {
                 )))
             })?;
 
-        // Convert to the expected JSON format for backward compatibility
+        // Convert DocumentSymbol results to Symbol structs
         let mut all_symbols = Vec::new();
         let mut processed_files = Vec::new();
 
         for (file_path, symbols) in file_results {
-            processed_files.push(json!({
-                "file": file_path,
-                "status": "success",
-                "symbols_found": symbols.len()
-            }));
+            processed_files.push(FileProcessingResult {
+                file: file_path.clone(),
+                status: "success".to_string(),
+                symbols_found: symbols.len(),
+            });
 
-            // Convert DocumentSymbol to JSON format
+            // Convert DocumentSymbol to Symbol using the From trait
             for symbol in symbols {
-                all_symbols.push(json!({
-                    "name": symbol.name,
-                    "kind": format!("{:?}", symbol.kind).to_lowercase(),
-                    "range": symbol.range,
-                    "selection_range": symbol.selection_range,
-                    "detail": symbol.detail
-                }));
+                let path = std::path::PathBuf::from(&file_path);
+                let converted_symbol = Symbol::from((&symbol, path.as_path()));
+                all_symbols.push(converted_symbol);
             }
         }
 
-        // Convert LSP numeric symbol kinds to string representations for MCP client compatibility
-        let converted_symbols = super::utils::convert_symbol_kinds(all_symbols);
-
-        Ok(json!({
-            "success": true,
-            "query": self.query,
-            "total_matches": converted_symbols.len(),
-            "symbols": converted_symbols,
-            "metadata": {
-                "search_type": "file_specific",
-                "files_processed": processed_files,
-                "build_directory": component.build_dir_path.display().to_string(),
-            }
-        }))
+        Ok(SearchResult {
+            success: true,
+            query: self.query.clone(),
+            total_matches: all_symbols.len(),
+            symbols: all_symbols,
+            metadata: SearchMetadata {
+                search_type: "file_specific".to_string(),
+                build_directory: component.build_dir_path.display().to_string(),
+                files_processed: Some(processed_files),
+            },
+        })
     }
 }
 

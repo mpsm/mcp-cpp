@@ -41,32 +41,3 @@ pub fn serialize_result(content: &serde_json::Value) -> String {
     serde_json::to_string_pretty(content)
         .unwrap_or_else(|e| format!("Error serializing result: {e}"))
 }
-
-/// Converts LSP numeric symbol kinds to string representations for MCP client compatibility.
-///
-/// This function takes LSP SymbolKind numeric values (1-26) and converts them to lowercase
-/// string representations (e.g., 5 -> "class", 12 -> "function") for better readability
-/// in MCP client responses.
-///
-/// # Arguments
-/// * `symbols` - Vector of JSON symbol objects with numeric "kind" fields
-///
-/// # Returns
-/// * Vector of JSON symbol objects with string "kind" fields
-pub fn convert_symbol_kinds(symbols: Vec<serde_json::Value>) -> Vec<serde_json::Value> {
-    symbols
-        .into_iter()
-        .map(|mut symbol| {
-            if let Some(kind_num) = symbol.get("kind").and_then(|k| k.as_u64()) {
-                // Convert numeric kind to strongly-typed SymbolKind enum via serde
-                if let Ok(kind_enum) = serde_json::from_value::<lsp_types::SymbolKind>(
-                    serde_json::Value::Number(serde_json::Number::from(kind_num)),
-                ) {
-                    let kind_str = format!("{:?}", kind_enum).to_lowercase();
-                    symbol["kind"] = serde_json::Value::String(kind_str);
-                }
-            }
-            symbol
-        })
-        .collect()
-}
