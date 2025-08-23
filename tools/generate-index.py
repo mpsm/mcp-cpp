@@ -783,80 +783,98 @@ class ClangdIndexGenerator:
         return True
 
     def ensure_all_files_indexed(self):
-        """Open every file from compile_commands.json to ensure complete indexing"""
+        """Open files from compile_commands.json one at a time to ensure complete indexing"""
         if not self.compile_commands_files:
             return True
 
-        # Track which files we've tried to open
-        files_opened = set()
+        unprocessed_files = []
+        for file_path in self.compile_commands_files:
+            if file_path not in self.processed_compile_files:
+                unprocessed_files.append(file_path)
         
-        print(f"📂 Opening all {len(self.compile_commands_files)} files from compile_commands.json to ensure complete indexing...")
+        if not unprocessed_files:
+            print(f"✅ All {len(self.compile_commands_files)} files have already been processed!")
+            return True
         
-        for i, file_path in enumerate(sorted(self.compile_commands_files)):
-            progress = f"({i+1}/{len(self.compile_commands_files)})"
+        # Clear any lingering progress display before starting sequential processing
+        if not self.verbose:
+            print()  # Clear the progress line completely
+        
+        print(f"📂 Opening {len(unprocessed_files)} remaining files one at a time to ensure complete indexing...")
+        
+        files_opened = 0
+        max_wait_per_file = 15  # 15 seconds timeout per file
+        
+        for file_path in sorted(unprocessed_files):
+            files_opened += 1
+            progress = f"({files_opened}/{len(unprocessed_files)})"
             
             if self.verbose:
-                status = "✅ already processed" if file_path in self.processed_compile_files else "🔄 needs processing"
-                print(f"   {progress} Opening {file_path.name} {status}")
+                print(f"   {progress} Opening {file_path.name} and waiting for processing...")
             else:
-                print(f"   {progress} Opening {file_path.name}...")
+                print(f"   {progress} Opening {file_path.name}...", end='', flush=True)
             
-            # Always open the file, regardless of processing status
-            if self.open_file_for_indexing(file_path):
-                files_opened.add(file_path)
-                
-                # Give clangd a moment to process
-                time.sleep(0.2)
-                
-                # Update activity timestamp
-                self.last_indexing_activity = time.time()
-            else:
-                self._print_verbose(f"❌ Failed to open {file_path.name}")
-        
-        # Wait a bit for final processing
-        if files_opened:
-            if not self.verbose:
-                print(f"   Waiting for final processing...")
-            
-            final_wait_start = time.time()
-            max_final_wait = 10  # 10 seconds for final processing
-            
-            while time.time() - final_wait_start < max_final_wait:
-                time.sleep(0.5)
-                
-                # Check if there's still indexing activity
-                if time.time() - self.last_indexing_activity < 3:
-                    # Reset wait timer if there's still activity
-                    final_wait_start = time.time()
-                    continue
+            # Open the file
+            if not self.open_file_for_indexing(file_path):
+                if not self.verbose:
+                    print(" ❌ Failed to open")
                 else:
-                    # No recent activity, probably done
+                    print(f"   ❌ Failed to open {file_path.name}")
+                continue
+            
+            # Wait for this specific file to be processed
+            wait_start = time.time()
+            file_processed = False
+            
+            while time.time() - wait_start < max_wait_per_file:
+                time.sleep(0.3)
+                
+                # Check if this file has been processed
+                if file_path in self.processed_compile_files:
+                    file_processed = True
+                    if not self.verbose:
+                        print(" ✅")
+                    else:
+                        print(f"   ✅ {file_path.name} processed successfully")
                     break
+                
+                # Check for ongoing activity - extend timeout if there's activity
+                if time.time() - self.last_indexing_activity < 2:
+                    # Reset timeout if there's recent activity
+                    wait_start = time.time()
+                    if not self.verbose:
+                        print(".", end='', flush=True)  # Show activity dots
+            
+            if not file_processed:
+                if not self.verbose:
+                    print(" ⏰ timeout")
+                else:
+                    print(f"   ⏰ Timeout waiting for {file_path.name} to be processed")
         
-        # Final status
-        processed_count = len(self.processed_compile_files)
+        # Final status check
+        final_processed = len(self.processed_compile_files)
         total_count = len(self.compile_commands_files)
         
-        if processed_count == total_count:
-            print(f"✅ All {total_count} files have been opened and processed by clangd!")
+        if final_processed == total_count:
+            print(f"✅ All {total_count} files have been processed by clangd!")
             return True
-        elif processed_count > 0:
-            print(f"⚠️  {processed_count}/{total_count} files were processed after opening")
+        else:
+            remaining = total_count - final_processed
+            print(f"⚠️  {remaining} files could not be processed:")
+            
             unprocessed = []
             for file_path in self.compile_commands_files:
                 if file_path not in self.processed_compile_files:
                     unprocessed.append(file_path.name)
             
             if self.verbose or len(unprocessed) <= 10:
-                print(f"   Unprocessed files: {', '.join(sorted(unprocessed))}")
+                for filename in sorted(unprocessed):
+                    print(f"   - {filename}")
             else:
-                sample = sorted(unprocessed)[:5]
-                print(f"   Unprocessed files: {', '.join(sample)} ... and {len(unprocessed) - 5} more")
+                for filename in sorted(unprocessed[:5]):
+                    print(f"   - {filename}")
+                print(f"   ... and {len(unprocessed) - 5} more (use --verbose for full list)")
             
-            return False
-        else:
-            print(f"⚠️  No files were detected as processed by clangd")
-            print(f"   This could indicate clangd logging issues or compilation database problems")
             return False
 
     def wait_for_indexing_completion(self):
@@ -891,6 +909,10 @@ class ClangdIndexGenerator:
                 print("⏰ Maximum indexing time reached (10 minutes), stopping")
                 break
 
+        # Clear any in-place progress display before final messages
+        if not self.verbose:
+            print()  # Ensure clean line after progress updates
+        
         # Determine completion status
         if self.indexing_complete:
             print("✅ Initial indexing completed successfully!")
@@ -909,9 +931,6 @@ class ClangdIndexGenerator:
             total_compile = len(self.compile_commands_files)
             final_percentage = (processed_from_compile /
                                 total_compile) * 100 if total_compile > 0 else 0
-            
-            if not self.verbose:
-                print()  # Ensure we end the progress line
             
             print(f"\n📊 FINAL SUMMARY")
             print("=" * 40)
