@@ -70,36 +70,21 @@ impl<'a> WorkspaceSymbolFilter for ProjectBoundaryFilter<'a> {
 
 /// Filter for symbol kinds
 pub struct SymbolKindFilter {
-    allowed_kind_strings: Vec<String>,
+    allowed_kinds: Vec<lsp_types::SymbolKind>,
 }
 
 impl SymbolKindFilter {
     #[allow(dead_code)]
     pub fn new(kinds: Vec<SymbolKind>) -> Self {
-        let kind_strings = kinds
-            .iter()
-            .map(|kind| format!("{:?}", kind).to_lowercase())
-            .collect();
-        
         Self {
-            allowed_kind_strings: kind_strings,
-        }
-    }
-
-    /// Create filter from string kind names - just store the strings directly
-    pub fn from_strings(kind_strings: &[String]) -> Self {
-        Self {
-            allowed_kind_strings: kind_strings.iter().map(|s| s.to_lowercase()).collect(),
+            allowed_kinds: kinds,
         }
     }
 }
 
 impl WorkspaceSymbolFilter for SymbolKindFilter {
     fn matches(&self, symbol: &WorkspaceSymbol) -> bool {
-        let kind_str = format!("{:?}", symbol.kind).to_lowercase();
-        self.allowed_kind_strings
-            .iter()
-            .any(|s| s == &kind_str)
+        self.allowed_kinds.contains(&symbol.kind)
     }
 }
 
@@ -183,7 +168,7 @@ impl<'a> Iterator for WorkspaceSymbolIterator<'a> {
 #[derive(Debug, Clone)]
 pub struct WorkspaceSymbolSearchBuilder {
     query: String,
-    kinds: Option<Vec<String>>,
+    kinds: Option<Vec<lsp_types::SymbolKind>>,
     max_results: Option<u32>,
     include_external: bool,
     case_sensitive: bool,
@@ -202,7 +187,7 @@ impl WorkspaceSymbolSearchBuilder {
     }
 
     /// Filter by specific symbol kinds
-    pub fn with_kinds(mut self, kinds: Vec<String>) -> Self {
+    pub fn with_kinds(mut self, kinds: Vec<lsp_types::SymbolKind>) -> Self {
         self.kinds = Some(kinds);
         self
     }
@@ -255,7 +240,7 @@ impl WorkspaceSymbolSearchBuilder {
 
         // Add symbol kind filter if specified
         if let Some(ref kinds) = self.kinds {
-            filtered_iter = filtered_iter.with_filter(SymbolKindFilter::from_strings(kinds));
+            filtered_iter = filtered_iter.with_filter(SymbolKindFilter::new(kinds.clone()));
         }
 
         // Add name filter for additional refinement (beyond clangd's initial filtering)
@@ -335,7 +320,7 @@ pub async fn search_workspace_symbols(
 #[allow(dead_code)]
 pub async fn search_workspace_symbols_with_kinds(
     query: &str,
-    kinds: Vec<String>,
+    kinds: Vec<lsp_types::SymbolKind>,
     session: &mut ClangdSession,
     component: &ProjectComponent,
 ) -> Result<Vec<WorkspaceSymbol>, AnalyzerError> {
@@ -507,9 +492,9 @@ mod tests {
     }
 
     #[test]
-    fn test_symbol_kind_filter_from_strings() {
-        let kind_strings = vec!["class".to_string(), "function".to_string()];
-        let filter = SymbolKindFilter::from_strings(&kind_strings);
+    fn test_symbol_kind_filter_from_kinds() {
+        let kinds = vec![SymbolKind::CLASS, SymbolKind::FUNCTION];
+        let filter = SymbolKindFilter::new(kinds);
 
         let class_symbol =
             create_test_workspace_symbol("Test", SymbolKind::CLASS, "file:///test.cpp", None);
@@ -559,13 +544,13 @@ mod tests {
     #[test]
     fn test_workspace_symbol_search_builder() {
         let builder = WorkspaceSymbolSearchBuilder::new("test".to_string())
-            .with_kinds(vec!["class".to_string()])
+            .with_kinds(vec![lsp_types::SymbolKind::CLASS])
             .with_max_results(10)
             .include_external(true)
             .case_sensitive(false);
 
         assert_eq!(builder.query, "test");
-        assert_eq!(builder.kinds, Some(vec!["class".to_string()]));
+        assert_eq!(builder.kinds, Some(vec![lsp_types::SymbolKind::CLASS]));
         assert_eq!(builder.max_results, Some(10));
         assert!(builder.include_external);
         assert!(!builder.case_sensitive);

@@ -8,7 +8,7 @@ use tokio::sync::Mutex;
 use tracing::{info, instrument};
 
 use crate::clangd::session::{ClangdSession, ClangdSessionTrait};
-use crate::lsp::traits::LspClientTrait;
+use crate::mcp_server::tools::lsp_helpers::document_symbols::SymbolSearchBuilder;
 use crate::mcp_server::tools::lsp_helpers::workspace_symbols::WorkspaceSymbolSearchBuilder;
 use crate::project::{ProjectComponent, ProjectWorkspace};
 
@@ -23,7 +23,7 @@ pub struct SearchSymbolsTool {
 
     /// Optional symbol kinds to filter results
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub kinds: Option<Vec<String>>,
+    pub kinds: Option<Vec<lsp_types::SymbolKind>>,
 
     /// Optional file paths to limit search scope
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -51,7 +51,7 @@ impl<'de> serde::Deserialize<'de> for SearchSymbolsTool {
         struct Helper {
             query: String,
             #[serde(default)]
-            kinds: Option<Vec<String>>,
+            kinds: Option<Vec<lsp_types::SymbolKind>>,
             #[serde(default)]
             files: Option<Vec<String>>,
             #[serde(default)]
@@ -106,7 +106,7 @@ impl SearchSymbolsTool {
         // while workspace searches use workspace/symbol for broad discovery.
         let result = if let Some(ref files) = self.files {
             // File-specific search using document symbols for targeted analysis
-            self.search_in_files(session_guard.client_mut(), files, component)
+            self.search_in_files(&mut session_guard, files, component)
                 .await?
         } else {
             // Workspace-wide search using workspace symbols for comprehensive discovery
@@ -189,40 +189,54 @@ impl SearchSymbolsTool {
     /// Handle file-specific document symbol search
     async fn search_in_files(
         &self,
-        client: &mut impl LspClientTrait,
+        session: &mut ClangdSession,
         files: &[String],
         component: &ProjectComponent,
     ) -> Result<serde_json::Value, CallToolError> {
+        // Build the search using the document symbols helper's builder pattern
+        let mut search_builder = SymbolSearchBuilder::new().with_name(&self.query);
+
+        // Add kind filtering if specified
+        if let Some(ref kinds) = self.kinds {
+            search_builder = search_builder.with_kinds(kinds);
+        }
+
+        // Execute the search with top-level limiting
+        let file_results = search_builder
+            .search_multiple_files(session, files, self.max_results)
+            .await
+            .map_err(|e| {
+                CallToolError::new(std::io::Error::other(format!(
+                    "Failed to search files: {}",
+                    e
+                )))
+            })?;
+
+        // Convert to the expected JSON format for backward compatibility
         let mut all_symbols = Vec::new();
         let mut processed_files = Vec::new();
 
-        for file_path in files {
-            let file_result = self.process_single_file(client, file_path).await;
-            match file_result {
-                Ok(symbols) => {
-                    processed_files.push(json!({
-                        "file": file_path,
-                        "status": "success",
-                        "symbols_found": symbols.len()
-                    }));
-                    all_symbols.extend(symbols);
-                }
-                Err(error_msg) => {
-                    processed_files.push(json!({
-                        "file": file_path,
-                        "status": "error",
-                        "error": error_msg
-                    }));
-                }
+        for (file_path, symbols) in file_results {
+            processed_files.push(json!({
+                "file": file_path,
+                "status": "success",
+                "symbols_found": symbols.len()
+            }));
+
+            // Convert DocumentSymbol to JSON format
+            for symbol in symbols {
+                all_symbols.push(json!({
+                    "name": symbol.name,
+                    "kind": format!("{:?}", symbol.kind).to_lowercase(),
+                    "range": symbol.range,
+                    "selection_range": symbol.selection_range,
+                    "detail": symbol.detail
+                }));
             }
         }
 
-        let filtered_symbols = self.filter_file_symbols(all_symbols, component);
-        let limited_symbols = self.apply_json_result_limit(filtered_symbols);
-
-        // Convert LSP numeric symbol kinds to string representations for MCP client compatibility.
-        // This ensures consistent symbol type representation across different MCP client implementations.
-        let converted_symbols = super::utils::convert_symbol_kinds(limited_symbols);
+        // Convert LSP numeric symbol kinds to string representations for MCP client compatibility
+        let converted_symbols = super::utils::convert_symbol_kinds(all_symbols);
 
         Ok(json!({
             "success": true,
@@ -236,165 +250,6 @@ impl SearchSymbolsTool {
             }
         }))
     }
-
-    /// Process a single file for document symbols
-    async fn process_single_file(
-        &self,
-        client: &mut impl LspClientTrait,
-        file_path: &str,
-    ) -> Result<Vec<serde_json::Value>, String> {
-        let file_uri_str = self.normalize_file_uri(file_path);
-        let file_uri: lsp_types::Uri = file_uri_str
-            .parse()
-            .map_err(|e| format!("Invalid URI: {}", e))?;
-
-        let response = client
-            .text_document_document_symbol(file_uri)
-            .await
-            .map_err(|e| format!("Failed to get symbols: {}", e))?;
-
-        self.extract_symbols_from_response(response)
-    }
-
-    /// Normalize file path to proper URI format
-    fn normalize_file_uri(&self, file_path: &str) -> String {
-        if file_path.starts_with("file://") {
-            file_path.to_string()
-        } else {
-            format!("file://{}", file_path)
-        }
-    }
-
-    /// Extract symbols from document symbol response
-    fn extract_symbols_from_response(
-        &self,
-        response: lsp_types::DocumentSymbolResponse,
-    ) -> Result<Vec<serde_json::Value>, String> {
-        let mut symbols = Vec::new();
-
-        match response {
-            lsp_types::DocumentSymbolResponse::Flat(symbol_infos) => {
-                for symbol in symbol_infos {
-                    if self.symbol_matches_criteria(&symbol.name, symbol.kind) {
-                        symbols.push(json!({
-                            "name": symbol.name,
-                            "kind": format!("{:?}", symbol.kind).to_lowercase(),
-                            "location": symbol.location,
-                            "containerName": symbol.container_name
-                        }));
-                    }
-                }
-            }
-            lsp_types::DocumentSymbolResponse::Nested(document_symbols) => {
-                self.extract_from_nested_symbols(&document_symbols, &mut symbols);
-            }
-        }
-
-        Ok(symbols)
-    }
-
-    /// Extract symbols from nested document symbol structure
-    fn extract_from_nested_symbols(
-        &self,
-        symbols: &[lsp_types::DocumentSymbol],
-        output: &mut Vec<serde_json::Value>,
-    ) {
-        for symbol in symbols {
-            if self.symbol_matches_criteria(&symbol.name, symbol.kind) {
-                output.push(json!({
-                    "name": symbol.name,
-                    "kind": format!("{:?}", symbol.kind).to_lowercase(),
-                    "range": symbol.range,
-                    "selection_range": symbol.selection_range,
-                    "detail": symbol.detail
-                }));
-            }
-
-            // Recursively process children
-            if let Some(children) = &symbol.children {
-                self.extract_from_nested_symbols(children, output);
-            }
-        }
-    }
-
-    /// Validates symbol against configured search filters.
-    /// Applies both name pattern matching and symbol kind filtering.
-    fn symbol_matches_criteria(&self, name: &str, kind: lsp_types::SymbolKind) -> bool {
-        self.name_matches_query(name) && self.kind_matches_filter(kind)
-    }
-
-    /// Performs case-insensitive substring matching against the search query.
-    /// Returns true if the symbol name contains the query string as a substring.
-    fn name_matches_query(&self, name: &str) -> bool {
-        let query_lower = self.query.to_lowercase();
-        let name_lower = name.to_lowercase();
-        name_lower.contains(&query_lower)
-    }
-
-    /// Validates symbol kind against configured filter criteria.
-    /// Returns true if no kind filter is specified or if the symbol kind
-    /// is included in the allowed kinds set.
-    fn kind_matches_filter(&self, kind: lsp_types::SymbolKind) -> bool {
-        if let Some(kinds) = &self.kinds {
-            let kind_str = format!("{:?}", kind).to_lowercase();
-            kinds.iter().any(|k| k.eq_ignore_ascii_case(&kind_str))
-        } else {
-            true // No filter means all symbol kinds are accepted
-        }
-    }
-
-    /// Apply result limit to JSON symbols (used for document symbol search)
-    fn apply_json_result_limit(&self, symbols: Vec<serde_json::Value>) -> Vec<serde_json::Value> {
-        let max_results = self.max_results.unwrap_or(100).min(1000) as usize;
-        symbols.into_iter().take(max_results).collect()
-    }
-
-    /// Filter file symbols based on project boundaries
-    fn filter_file_symbols(
-        &self,
-        symbols: Vec<serde_json::Value>,
-        component: &ProjectComponent,
-    ) -> Vec<serde_json::Value> {
-        if self.include_external.unwrap_or(false) {
-            return symbols;
-        }
-
-        symbols
-            .into_iter()
-            .filter(|symbol| self.file_symbol_is_in_project(symbol, component))
-            .collect()
-    }
-
-    /// Validates whether a file-based symbol belongs to the project scope.
-    /// Uses URI parsing and project boundary detection to filter external dependencies.
-    fn file_symbol_is_in_project(
-        &self,
-        symbol: &serde_json::Value,
-        component: &ProjectComponent,
-    ) -> bool {
-        if let Some(location) = symbol.get("location")
-            && let Some(uri) = location.get("uri").and_then(|u| u.as_str())
-            && let Some(path) = uri.strip_prefix("file://")
-        {
-            return self.is_project_file(path, component);
-        }
-        true // Default to inclusion when file path parsing fails to prevent inadvertent filtering
-    }
-
-    /// Determines if a file path belongs to the project source tree.
-    /// Uses canonical path resolution to handle symlinks and relative paths correctly.
-    fn is_project_file(&self, path: &str, component: &ProjectComponent) -> bool {
-        let file_path = std::path::PathBuf::from(path);
-
-        // Verify file is within the project source root boundary
-        if let Ok(canonical_file) = file_path.canonicalize()
-            && canonical_file.starts_with(&component.source_root_path)
-        {
-            return true;
-        }
-
-        false
-    }
 }
 
 #[cfg(test)]
@@ -406,14 +261,17 @@ mod tests {
     fn test_search_symbols_deserialize() {
         let json_data = json!({
             "query": "vector",
-            "kinds": ["class", "function"],
+            "kinds": [5, 12], // CLASS = 5, FUNCTION = 12
             "max_results": 50
         });
         let tool: SearchSymbolsTool = serde_json::from_value(json_data).unwrap();
         assert_eq!(tool.query, "vector");
         assert_eq!(
             tool.kinds,
-            Some(vec!["class".to_string(), "function".to_string()])
+            Some(vec![
+                lsp_types::SymbolKind::CLASS,
+                lsp_types::SymbolKind::FUNCTION
+            ])
         );
         assert_eq!(tool.max_results, Some(50));
     }

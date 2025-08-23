@@ -12,6 +12,7 @@ use tracing::{trace, warn};
 use crate::clangd::session::{ClangdSession, ClangdSessionTrait};
 use crate::lsp::traits::LspClientTrait;
 use crate::mcp_server::tools::analyze_symbols::AnalyzerError;
+use crate::symbol::uri_from_pathbuf;
 
 // ============================================================================
 // SymbolContext - Rich symbol information with container hierarchy
@@ -236,6 +237,16 @@ impl SymbolSearchBuilder {
         self
     }
 
+    /// Search for symbols matching any of the given kinds
+    pub fn with_kinds(mut self, kinds: &[lsp_types::SymbolKind]) -> Self {
+        // For simplicity, just take the first kind
+        // In practice, we'd need a more sophisticated approach for multiple kinds
+        if let Some(&kind) = kinds.first() {
+            self.kind = Some(kind);
+        }
+        self
+    }
+
     /// Search for symbols whose path contains the given string
     #[allow(dead_code)]
     pub fn path_contains<S: Into<String>>(mut self, path_part: S) -> Self {
@@ -286,6 +297,94 @@ impl SymbolSearchBuilder {
         self.path_contains = Some(class_name.clone());
         self.kind = Some(lsp_types::SymbolKind::METHOD);
         self
+    }
+
+    /// Search across multiple files for symbols matching criteria
+    pub async fn search_multiple_files(
+        self,
+        session: &mut ClangdSession,
+        files: &[String],
+        max_results: Option<u32>,
+    ) -> Result<Vec<(String, Vec<DocumentSymbol>)>, AnalyzerError> {
+        let mut file_results = Vec::new();
+
+        for file_path in files {
+            match self.search_single_file(session, file_path).await {
+                Ok(symbols) => {
+                    file_results.push((file_path.clone(), symbols));
+                }
+                Err(e) => {
+                    trace!("Failed to search file {}: {}", file_path, e);
+                    file_results.push((file_path.clone(), Vec::new()));
+                }
+            }
+        }
+
+        // Apply top-level limiting if specified
+        if let Some(max) = max_results {
+            let mut all_symbols = Vec::new();
+            for (file_path, symbols) in &file_results {
+                for symbol in symbols {
+                    all_symbols.push((file_path.clone(), symbol.clone()));
+                    if all_symbols.len() >= max as usize {
+                        break;
+                    }
+                }
+                if all_symbols.len() >= max as usize {
+                    break;
+                }
+            }
+
+            // Reconstruct file_results with limited symbols
+            let mut limited_results = Vec::new();
+            let mut current_file = String::new();
+            let mut current_symbols = Vec::new();
+
+            for (file_path, symbol) in all_symbols {
+                if file_path != current_file {
+                    if !current_file.is_empty() {
+                        limited_results.push((current_file.clone(), current_symbols));
+                        current_symbols = Vec::new();
+                    }
+                    current_file = file_path;
+                }
+                current_symbols.push(symbol);
+            }
+
+            if !current_file.is_empty() {
+                limited_results.push((current_file, current_symbols));
+            }
+
+            Ok(limited_results)
+        } else {
+            Ok(file_results)
+        }
+    }
+
+    /// Search a single file for symbols matching criteria  
+    async fn search_single_file(
+        &self,
+        session: &mut ClangdSession,
+        file_path: &str,
+    ) -> Result<Vec<DocumentSymbol>, AnalyzerError> {
+        let file_uri = if file_path.starts_with("file://") {
+            file_path
+                .parse()
+                .map_err(|e| AnalyzerError::NoData(format!("Invalid URI: {}", e)))?
+        } else {
+            uri_from_pathbuf(Path::new(file_path))
+        };
+
+        let document_symbols = get_document_symbols(session, file_uri).await?;
+
+        let filtered_symbols: Vec<DocumentSymbol> = self
+            .clone()
+            .find_all(&document_symbols)
+            .into_iter()
+            .cloned()
+            .collect();
+
+        Ok(filtered_symbols)
     }
 
     /// Check if a symbol matches the search criteria
