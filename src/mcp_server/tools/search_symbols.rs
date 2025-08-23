@@ -1,4 +1,26 @@
 //! Symbol search functionality using session-based API
+//!
+//! This module provides two search modes for C++ symbols:
+//!
+//! ## Search Modes
+//!
+//! ### 1. Workspace Search (when `files` is None)
+//! - Uses LSP `workspace/symbol` requests to clangd
+//! - **Subject to clangd heuristics**: May not return all matching symbols
+//! - Best for discovery and fuzzy matching across the project
+//! - Results are ranked by clangd's relevance scoring
+//!
+//! ### 2. Document Search (when `files` is provided)
+//! - Uses LSP `textDocument/documentSymbol` requests for each file
+//! - **More predictable**: Returns all symbols in the file matching criteria
+//! - Best for comprehensive analysis of specific files
+//! - Uses substring matching for symbol names
+//!
+//! ## Important Notes
+//!
+//! - **Workspace search results may be incomplete** due to clangd's internal filtering
+//! - Document search provides more complete results but requires known file paths
+//! - Both modes support kind filtering and project boundary detection
 
 use rust_mcp_sdk::macros::{JsonSchema, mcp_tool};
 use rust_mcp_sdk::schema::{CallToolResult, TextContent, schema_utils::CallToolError};
@@ -49,9 +71,9 @@ pub struct SearchSymbolsTool {
     /// Search query using clangd's native syntax
     pub query: String,
 
-    /// Optional symbol kinds to filter results
+    /// Optional symbol kinds to filter results. Use PascalCase names like "Class", "Function", "Method", "Variable", "Enum", etc.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub kinds: Option<Vec<lsp_types::SymbolKind>>,
+    pub kinds: Option<Vec<String>>,
 
     /// Optional file paths to limit search scope
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -77,9 +99,29 @@ impl SearchSymbolsTool {
         session: Arc<Mutex<ClangdSession>>,
         workspace: &ProjectWorkspace,
     ) -> Result<CallToolResult, CallToolError> {
+        // Convert string kinds to SymbolKind enums once at the start
+        let symbol_kinds: Option<Vec<lsp_types::SymbolKind>> =
+            if let Some(ref kind_names) = self.kinds {
+                let mut kinds = Vec::new();
+                for kind_name in kind_names {
+                    match lsp_types::SymbolKind::try_from(kind_name.as_str()) {
+                        Ok(kind) => kinds.push(kind),
+                        Err(_) => {
+                            return Err(CallToolError::new(std::io::Error::new(
+                                std::io::ErrorKind::InvalidInput,
+                                format!("Invalid symbol kind: '{}'", kind_name),
+                            )));
+                        }
+                    }
+                }
+                Some(kinds)
+            } else {
+                None
+            };
+
         info!(
             "Searching symbols (v2): query='{}', kinds={:?}, max_results={:?}",
-            self.query, self.kinds, self.max_results
+            self.query, symbol_kinds, self.max_results
         );
 
         let mut session_guard = session.lock().await;
@@ -102,11 +144,11 @@ impl SearchSymbolsTool {
         // while workspace searches use workspace/symbol for broad discovery.
         let result = if let Some(ref files) = self.files {
             // File-specific search using document symbols for targeted analysis
-            self.search_in_files(&mut session_guard, files, component)
+            self.search_in_files(&mut session_guard, files, component, symbol_kinds.as_ref())
                 .await?
         } else {
             // Workspace-wide search using workspace symbols for comprehensive discovery
-            self.search_workspace_symbols(&mut session_guard, component)
+            self.search_workspace_symbols(&mut session_guard, component, symbol_kinds.as_ref())
                 .await?
         };
 
@@ -127,13 +169,14 @@ impl SearchSymbolsTool {
         &self,
         session: &mut ClangdSession,
         component: &ProjectComponent,
+        symbol_kinds: Option<&Vec<lsp_types::SymbolKind>>,
     ) -> Result<SearchResult, CallToolError> {
         // Build the search using the new helper's builder pattern
         let mut search_builder = WorkspaceSymbolSearchBuilder::new(self.query.clone())
             .include_external(self.include_external.unwrap_or(false));
 
         // Add kind filtering if specified
-        if let Some(ref kinds) = self.kinds {
+        if let Some(kinds) = symbol_kinds {
             search_builder = search_builder.with_kinds(kinds.clone());
         }
 
@@ -175,18 +218,52 @@ impl SearchSymbolsTool {
         session: &mut ClangdSession,
         files: &[String],
         component: &ProjectComponent,
+        symbol_kinds: Option<&Vec<lsp_types::SymbolKind>>,
     ) -> Result<SearchResult, CallToolError> {
+        info!(
+            "Document search: query='{}', files={:?}, kinds={:?}",
+            self.query, files, symbol_kinds
+        );
+
+        // Resolve relative file paths to absolute paths using project root
+        let project_root = &component.source_root_path;
+        let mut absolute_files = Vec::new();
+        for file_path in files {
+            let absolute_path = if std::path::Path::new(file_path).is_absolute() {
+                file_path.clone()
+            } else {
+                let resolved_path = project_root.join(file_path);
+                // Check if file exists and return error if not
+                if !resolved_path.exists() {
+                    return Err(CallToolError::new(std::io::Error::new(
+                        std::io::ErrorKind::NotFound,
+                        format!(
+                            "File not found: {} (resolved to {})",
+                            file_path,
+                            resolved_path.display()
+                        ),
+                    )));
+                }
+                resolved_path.to_string_lossy().to_string()
+            };
+            absolute_files.push(absolute_path);
+        }
+
+        info!("Resolved files: {:?}", absolute_files);
+
         // Build the search using the document symbols helper's builder pattern
         let mut search_builder = SymbolSearchBuilder::new().with_name(&self.query);
 
         // Add kind filtering if specified
-        if let Some(ref kinds) = self.kinds {
+        if let Some(kinds) = symbol_kinds {
             search_builder = search_builder.with_kinds(kinds);
         }
 
-        // Execute the search with top-level limiting
+        info!("Created search builder: {:?}", search_builder);
+
+        // Execute the search with top-level limiting using absolute file paths
         let file_results = search_builder
-            .search_multiple_files(session, files, self.max_results)
+            .search_multiple_files(session, &absolute_files, self.max_results)
             .await
             .map_err(|e| {
                 CallToolError::new(std::io::Error::other(format!(
@@ -194,6 +271,11 @@ impl SearchSymbolsTool {
                     e
                 )))
             })?;
+
+        info!(
+            "File search results: {} files processed",
+            file_results.len()
+        );
 
         // Convert DocumentSymbol results to Symbol structs
         let mut all_symbols = Vec::new();
@@ -237,17 +319,14 @@ mod tests {
     fn test_search_symbols_deserialize() {
         let json_data = json!({
             "query": "vector",
-            "kinds": [5, 12], // CLASS = 5, FUNCTION = 12
+            "kinds": ["Class", "Function"],
             "max_results": 50
         });
         let tool: SearchSymbolsTool = serde_json::from_value(json_data).unwrap();
         assert_eq!(tool.query, "vector");
         assert_eq!(
             tool.kinds,
-            Some(vec![
-                lsp_types::SymbolKind::CLASS,
-                lsp_types::SymbolKind::FUNCTION
-            ])
+            Some(vec!["Class".to_string(), "Function".to_string()])
         );
         assert_eq!(tool.max_results, Some(50));
     }

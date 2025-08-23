@@ -205,6 +205,7 @@ pub struct SymbolSearchBuilder {
     position: Option<Position>,
     name: Option<String>,
     kind: Option<lsp_types::SymbolKind>,
+    kinds: Option<Vec<lsp_types::SymbolKind>>,
     path_contains: Option<String>,
 }
 
@@ -215,6 +216,7 @@ impl SymbolSearchBuilder {
             position: None,
             name: None,
             kind: None,
+            kinds: None,
             path_contains: None,
         }
     }
@@ -239,11 +241,8 @@ impl SymbolSearchBuilder {
 
     /// Search for symbols matching any of the given kinds
     pub fn with_kinds(mut self, kinds: &[lsp_types::SymbolKind]) -> Self {
-        // For simplicity, just take the first kind
-        // In practice, we'd need a more sophisticated approach for multiple kinds
-        if let Some(&kind) = kinds.first() {
-            self.kind = Some(kind);
-        }
+        // Store the kinds for proper matching in matches_symbol
+        self.kinds = Some(kinds.to_vec());
         self
     }
 
@@ -367,6 +366,11 @@ impl SymbolSearchBuilder {
         session: &mut ClangdSession,
         file_path: &str,
     ) -> Result<Vec<DocumentSymbol>, AnalyzerError> {
+        trace!(
+            "Searching single file: {} with criteria: {:?}",
+            file_path, self
+        );
+
         let file_uri = if file_path.starts_with("file://") {
             file_path
                 .parse()
@@ -375,7 +379,9 @@ impl SymbolSearchBuilder {
             uri_from_pathbuf(Path::new(file_path))
         };
 
+        trace!("Getting document symbols for URI: {:?}", file_uri);
         let document_symbols = get_document_symbols(session, file_uri).await?;
+        trace!("Found {} document symbols", document_symbols.len());
 
         let filtered_symbols: Vec<DocumentSymbol> = self
             .clone()
@@ -384,29 +390,55 @@ impl SymbolSearchBuilder {
             .cloned()
             .collect();
 
+        trace!(
+            "After filtering: {} symbols match criteria",
+            filtered_symbols.len()
+        );
         Ok(filtered_symbols)
     }
 
     /// Check if a symbol matches the search criteria
     fn matches_symbol(&self, symbol: &DocumentSymbol, path: &[&str]) -> bool {
+        trace!(
+            "Checking symbol '{}' (kind: {:?}) against criteria: {:?}",
+            symbol.name, symbol.kind, self
+        );
+
         // Position matching
         if let Some(ref position) = self.position
             && !symbol.contains(position)
         {
+            trace!("Symbol '{}' rejected: position mismatch", symbol.name);
             return false;
         }
 
-        // Name matching
+        // Name matching - use substring matching for flexibility
         if let Some(ref name) = self.name
-            && symbol.name != *name
+            && !symbol.name.contains(name)
         {
+            trace!(
+                "Symbol '{}' rejected: name '{}' does not contain '{}'",
+                symbol.name, symbol.name, name
+            );
             return false;
         }
 
-        // Kind matching
-        if let Some(kind) = self.kind
-            && symbol.kind != kind
+        // Kind matching - support both single kind and multiple kinds
+        if let Some(kind) = self.kind {
+            if symbol.kind != kind {
+                trace!(
+                    "Symbol '{}' rejected: kind {:?} != {:?}",
+                    symbol.name, symbol.kind, kind
+                );
+                return false;
+            }
+        } else if let Some(ref kinds) = self.kinds
+            && !kinds.contains(&symbol.kind)
         {
+            trace!(
+                "Symbol '{}' rejected: kind {:?} not in {:?}",
+                symbol.name, symbol.kind, kinds
+            );
             return false;
         }
 
@@ -414,6 +446,10 @@ impl SymbolSearchBuilder {
         if let Some(ref path_contains) = self.path_contains {
             let full_path = path.join("::");
             if !full_path.contains(path_contains) {
+                trace!(
+                    "Symbol '{}' rejected: path '{}' does not contain '{}'",
+                    symbol.name, full_path, path_contains
+                );
                 return false;
             }
         }
@@ -427,10 +463,15 @@ impl SymbolSearchBuilder {
                     | lsp_types::SymbolKind::FUNCTION
                     | lsp_types::SymbolKind::CONSTRUCTOR
             ) {
+                trace!(
+                    "Symbol '{}' rejected: class_members_only filter - not a callable member",
+                    symbol.name
+                );
                 return false;
             }
         }
 
+        trace!("Symbol '{}' matches criteria", symbol.name);
         true
     }
 }

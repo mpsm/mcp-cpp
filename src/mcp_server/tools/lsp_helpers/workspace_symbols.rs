@@ -3,6 +3,40 @@
 //! This module provides LSP-based workspace symbol search with filtering capabilities
 //! that work with clangd to find symbols across the entire project workspace.
 //! It follows the same builder and iterator patterns as document_symbols.rs for consistency.
+//!
+//! ## Important Limitations
+//!
+//! ### Clangd Heuristics and Result Filtering
+//!
+//! **You may not get all symbols even with high limits** due to clangd's internal heuristics:
+//!
+//! 1. **Relevance Ranking**: clangd applies its own relevance scoring and may filter out
+//!    symbols it considers less relevant to the query, even if they match.
+//!
+//! 2. **Query-dependent Filtering**: clangd uses fuzzy matching and may exclude symbols
+//!    that don't meet its internal similarity thresholds.
+//!
+//! 3. **Performance Optimizations**: clangd may limit results based on index size,
+//!    query complexity, and performance considerations.
+//!
+//! 4. **Index Coverage**: Symbols may not appear if:
+//!    - The file hasn't been indexed yet
+//!    - The compilation database is incomplete
+//!    - clangd encountered parsing errors
+//!
+//! ### When to Use Workspace vs Document Search
+//!
+//! - **Workspace Search**: Best for discovery and fuzzy matching across the entire project.
+//!   Results are subject to clangd's relevance ranking and may be incomplete.
+//!
+//! - **Document Search**: Best for comprehensive symbol listing within specific files.
+//!   Returns all symbols in the file that match the criteria (more predictable results).
+//!
+//! ### Configuration
+//!
+//! The workspace symbol limit is configured via `DEFAULT_WORKSPACE_SYMBOL_LIMIT` (1000)
+//! and passed to clangd via the `--limit-results` argument. However, clangd may return
+//! fewer results based on its internal filtering.
 
 use lsp_types::{SymbolKind, WorkspaceSymbol};
 use tracing::{debug, trace};
