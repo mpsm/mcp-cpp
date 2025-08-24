@@ -110,7 +110,7 @@ impl LogParser for ClangdLogParser {
 /// Log monitor that processes clangd stderr output
 pub struct LogMonitor {
     parser: Box<dyn LogParser>,
-    handler: Option<Arc<dyn ProgressHandler>>,
+    handler: Arc<std::sync::Mutex<Option<Arc<dyn ProgressHandler>>>>,
 }
 
 impl LogMonitor {
@@ -118,7 +118,7 @@ impl LogMonitor {
     pub fn new() -> Self {
         Self {
             parser: Box::new(ClangdLogParser::default()),
-            handler: None,
+            handler: Arc::new(std::sync::Mutex::new(None)),
         }
     }
 
@@ -126,43 +126,57 @@ impl LogMonitor {
     pub fn with_parser(parser: Box<dyn LogParser>) -> Self {
         Self {
             parser,
-            handler: None,
+            handler: Arc::new(std::sync::Mutex::new(None)),
         }
     }
 
     /// Set the progress handler
     pub fn set_handler(&mut self, handler: Arc<dyn ProgressHandler>) {
-        self.handler = Some(handler);
+        if let Ok(mut handler_guard) = self.handler.lock() {
+            *handler_guard = Some(handler);
+        }
     }
 
     /// Get a mutable reference to set the handler
-    pub fn handler_mut(&mut self) -> &mut Option<Arc<dyn ProgressHandler>> {
-        &mut self.handler
+    pub fn handler_mut(&mut self) -> Arc<std::sync::Mutex<Option<Arc<dyn ProgressHandler>>>> {
+        Arc::clone(&self.handler)
     }
 
     /// Process a single log line
     pub fn process_line(&self, line: &str) {
+        trace!("LogMonitor: Processing stderr line: {}", line);
+
         if let Some(event) = self.parser.parse_line(line) {
             trace!("LogMonitor: Parsed event from stderr: {:?}", event);
 
-            if let Some(handler) = &self.handler {
+            if let Ok(handler_guard) = self.handler.lock()
+                && let Some(ref handler) = *handler_guard
+            {
                 handler.handle_event(event);
             }
+        } else {
+            trace!("LogMonitor: No event parsed from line: {}", line);
         }
     }
 
     /// Create a stderr line processor that can be used as a callback
     pub fn create_stderr_processor(&self) -> impl Fn(String) + Send + Sync + 'static {
         let parser = ClangdLogParser::default();
-        let handler = self.handler.clone();
+        let handler_ref = Arc::clone(&self.handler);
 
         move |line: String| {
+            trace!("LogMonitor: Processing stderr line: {}", line);
+
             if let Some(event) = parser.parse_line(&line) {
                 trace!("LogMonitor: Parsed event from stderr: {:?}", event);
 
-                if let Some(ref handler) = handler {
+                if let Ok(handler_guard) = handler_ref.lock()
+                    && let Some(ref handler) = *handler_guard
+                {
                     handler.handle_event(event);
                 }
+            } else {
+                trace!("LogMonitor: No event parsed from line: {}", line);
             }
         }
     }
@@ -302,7 +316,7 @@ mod tests {
     #[test]
     fn test_log_monitor_creation() {
         let monitor = LogMonitor::new();
-        assert!(monitor.handler.is_none());
+        assert!(monitor.handler.lock().unwrap().is_none());
     }
 
     #[test]
@@ -311,7 +325,7 @@ mod tests {
         let handler = Arc::new(TestHandler::default());
 
         monitor.set_handler(handler.clone());
-        assert!(monitor.handler.is_some());
+        assert!(monitor.handler.lock().unwrap().is_some());
 
         // Test processing a line
         let line = "V[14:23:45.123] Indexing /test.cpp (digest:=0xABC)";

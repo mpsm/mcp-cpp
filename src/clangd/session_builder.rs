@@ -10,7 +10,7 @@ use crate::clangd::file_manager::ClangdFileManager;
 use crate::clangd::index::IndexMonitor;
 use crate::clangd::log_monitor::LogMonitor;
 use crate::clangd::session::ClangdSession;
-use crate::io::{ChildProcessManager, ProcessManager, StdioTransport};
+use crate::io::{ChildProcessManager, ProcessManager, StderrMonitor, StdioTransport};
 use crate::lsp::{LspClient, traits::LspClientTrait};
 
 /// Phantom type markers for builder state
@@ -117,14 +117,21 @@ impl ClangdSessionBuilder<HasConfig, NoProcessManager, NoLspClient> {
     {
         info!("Starting clangd session");
 
-        let config = self.config.unwrap(); // Safe: HasConfig guarantees this
-        let mut process_manager = Self::create_process_manager(&config).await?;
+        let config = self.config.unwrap();
+
+        let log_monitor = LogMonitor::new();
+        let mut process_manager = Self::create_process_manager_without_start(&config).await?;
+
+        let stderr_processor = log_monitor.create_stderr_processor();
+        process_manager.on_stderr_line(move |line: String| {
+            stderr_processor(line);
+        });
+
+        process_manager.start().await?;
+
         let mut lsp_client =
             Self::create_lsp_client(&config, process_manager.create_stdio_transport()?).await?;
         let index_monitor = Self::setup_monitoring(&mut lsp_client).await;
-
-        // Create log monitor and finalize session (which will setup stderr handling)
-        let log_monitor = LogMonitor::new();
 
         Self::finalize_session(
             config,
@@ -139,7 +146,7 @@ impl ClangdSessionBuilder<HasConfig, NoProcessManager, NoLspClient> {
 // Testing build (config required, both dependencies injected)
 impl<P, C> ClangdSessionBuilder<HasConfig, P, C>
 where
-    P: ProcessManager + 'static,
+    P: ProcessManager + StderrMonitor + 'static,
     C: LspClientTrait + 'static,
 {
     /// Build the session with injected dependencies
@@ -152,14 +159,19 @@ where
         let index_monitor = IndexMonitor::new();
         let log_monitor = LogMonitor::new();
 
-        Ok(ClangdSession::with_dependencies(
+        let mut session = ClangdSession::with_dependencies(
             config,
             process_manager,
             lsp_client,
             file_manager,
             index_monitor,
             log_monitor,
-        ))
+        );
+
+        // Setup stderr processing for injected dependencies path too
+        session.setup_stderr_monitoring();
+
+        Ok(session)
     }
 }
 
@@ -181,6 +193,24 @@ impl ClangdSessionBuilder<HasConfig, NoProcessManager, NoLspClient> {
 
         debug!("Starting clangd process");
         process_manager.start().await?;
+        Ok(process_manager)
+    }
+
+    /// Create process manager without starting it
+    async fn create_process_manager_without_start(
+        config: &ClangdConfig,
+    ) -> Result<ChildProcessManager, ClangdSessionError> {
+        debug!("Working directory: {:?}", config.working_directory);
+        debug!("Build directory: {:?}", config.build_directory);
+        debug!("Clangd path: {}", config.clangd_path);
+
+        let args = config.get_clangd_args();
+        let process_manager = ChildProcessManager::new(
+            config.clangd_path.clone(),
+            args,
+            Some(config.working_directory.clone()),
+        );
+
         Ok(process_manager)
     }
 

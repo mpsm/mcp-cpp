@@ -8,7 +8,7 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tokio::sync::Mutex;
-use tracing::{debug, info, instrument, warn};
+use tracing::{debug, info, instrument, trace, warn};
 
 use crate::clangd::config::DEFAULT_WORKSPACE_SYMBOL_LIMIT;
 use crate::clangd::version::ClangdVersion;
@@ -117,6 +117,7 @@ impl WorkspaceSession {
                 DEFAULT_WORKSPACE_SYMBOL_LIMIT
             ))
             .add_arg("--query-driver=**")
+            .add_arg("--log=verbose")
             .build()
             .map_err(|e| ProjectError::SessionCreation(format!("Failed to build config: {}", e)))?;
 
@@ -131,6 +132,13 @@ impl WorkspaceSession {
 
         // Wrap in Arc<Mutex> for sharing
         let session_arc = Arc::new(Mutex::new(session));
+
+        // Initialize index components for this build directory first
+        self.initialize_index_components(&build_dir).await?;
+
+        // Register progress event handler to update IndexState
+        self.register_progress_handler(&build_dir, Arc::clone(&session_arc))
+            .await?;
 
         // Trigger clangd indexing by opening a representative source file.
         // clangd requires at least one textDocument/didOpen to initiate background indexing.
@@ -161,9 +169,6 @@ impl WorkspaceSession {
 
         // Store the session for future reuse
         sessions.insert(build_dir.clone(), Arc::clone(&session_arc));
-
-        // Initialize index components for this build directory
-        self.initialize_index_components(&build_dir).await?;
 
         Ok(session_arc)
     }
@@ -224,5 +229,61 @@ impl WorkspaceSession {
     pub async fn get_indexing_coverage(&self, build_dir: &Path) -> Option<f32> {
         let states = self.index_states.lock().await;
         states.get(build_dir).map(|state| state.coverage())
+    }
+
+    /// Register progress event handler for a build directory
+    async fn register_progress_handler(
+        &self,
+        build_dir: &Path,
+        session: Arc<Mutex<ClangdSession>>,
+    ) -> Result<(), ProjectError> {
+        use crate::clangd::index::{ProgressEvent, ProgressHandler};
+        use std::sync::Arc;
+
+        // Create a progress handler that updates our IndexState
+        let index_states = Arc::clone(&self.index_states);
+        let build_dir_clone = build_dir.to_path_buf();
+
+        let handler = Arc::new(move |event: ProgressEvent| {
+            let index_states = Arc::clone(&index_states);
+            let build_dir = build_dir_clone.clone();
+
+            // Spawn async task to handle the event
+            tokio::spawn(async move {
+                if let Ok(mut states) = index_states.try_lock() {
+                    if let Some(index_state) = states.get_mut(&build_dir) {
+                        match event {
+                            ProgressEvent::FileIndexingStarted { path, .. } => {
+                                debug!("File indexing started: {:?}", path);
+                                index_state.mark_indexing(&path);
+                            }
+                            ProgressEvent::FileIndexingCompleted { path, .. } => {
+                                debug!("File indexing completed: {:?}", path);
+                                index_state.mark_indexed(&path);
+                            }
+                            _ => {
+                                // Handle other events as needed
+                                trace!("Received progress event: {:?}", event);
+                            }
+                        }
+                    }
+                } else {
+                    warn!("Could not acquire lock on index states to handle progress event");
+                }
+            });
+        }) as Arc<dyn ProgressHandler>;
+
+        // Register the handler with the session
+        {
+            let mut session_guard = session.lock().await;
+            session_guard.set_progress_handler(handler);
+        }
+
+        debug!(
+            "Progress event handler registered for build dir: {}",
+            build_dir.display()
+        );
+
+        Ok(())
     }
 }

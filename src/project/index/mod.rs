@@ -16,3 +16,6 @@ pub mod reader;
 pub mod state;
 #[allow(dead_code)]
 pub mod storage;
+
+#[cfg(all(test, feature = "clangd-integration-tests"))]
+mod integration_tests;

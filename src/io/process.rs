@@ -572,6 +572,16 @@ impl ProcessManager for MockProcessManager {
 }
 
 #[cfg(test)]
+impl StderrMonitor for MockProcessManager {
+    fn on_stderr_line<F>(&mut self, _callback: F)
+    where
+        F: Fn(String) + Send + Sync + 'static,
+    {
+        // Mock implementation - no-op since we don't have real stderr in tests
+    }
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use std::sync::{Arc, Mutex};
