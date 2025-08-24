@@ -198,7 +198,13 @@ async fn main() -> SdkResult<()> {
     let transport = StdioTransport::new(TransportOptions::default())?;
 
     // Create custom handler with ProjectWorkspace and clangd path
-    let handler = CppServerHandler::new(project_workspace, clangd_path);
+    let handler = match CppServerHandler::new(project_workspace, clangd_path) {
+        Ok(handler) => handler,
+        Err(e) => {
+            eprintln!("Failed to create server handler: {}", e);
+            std::process::exit(1);
+        }
+    };
 
     // Create MCP server
     let server: ServerRuntime = server_runtime::create_server(server_details, transport, handler);

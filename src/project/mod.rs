@@ -8,6 +8,7 @@ pub mod cmake_provider;
 pub mod compilation_database;
 pub mod component;
 pub mod error;
+pub mod index;
 pub mod meson_provider;
 pub mod provider;
 pub mod scanner;

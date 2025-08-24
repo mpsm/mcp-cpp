@@ -26,7 +26,8 @@ async fn test_hover_info_class_symbol() {
 
     // Create a WorkspaceSession with test clangd path
     let clangd_path = crate::test_utils::get_test_clangd_path();
-    let workspace_session = WorkspaceSession::new(workspace.clone(), clangd_path);
+    let workspace_session = WorkspaceSession::new(workspace.clone(), clangd_path)
+        .expect("Failed to create workspace session");
     let session = workspace_session
         .get_or_create_session(test_project.build_dir.clone())
         .await
@@ -70,7 +71,8 @@ async fn test_hover_info_function_symbol() {
 
     // Create a WorkspaceSession with test clangd path
     let clangd_path = crate::test_utils::get_test_clangd_path();
-    let workspace_session = WorkspaceSession::new(workspace.clone(), clangd_path);
+    let workspace_session = WorkspaceSession::new(workspace.clone(), clangd_path)
+        .expect("Failed to create workspace session");
     let session = workspace_session
         .get_or_create_session(test_project.build_dir.clone())
         .await
@@ -118,7 +120,8 @@ async fn test_hover_info_method_symbol() {
 
     // Create a WorkspaceSession with test clangd path
     let clangd_path = crate::test_utils::get_test_clangd_path();
-    let workspace_session = WorkspaceSession::new(workspace.clone(), clangd_path);
+    let workspace_session = WorkspaceSession::new(workspace.clone(), clangd_path)
+        .expect("Failed to create workspace session");
     let session = workspace_session
         .get_or_create_session(test_project.build_dir.clone())
         .await
@@ -162,7 +165,8 @@ async fn test_hover_info_interface_symbol() {
 
     // Create a WorkspaceSession with test clangd path
     let clangd_path = crate::test_utils::get_test_clangd_path();
-    let workspace_session = WorkspaceSession::new(workspace.clone(), clangd_path);
+    let workspace_session = WorkspaceSession::new(workspace.clone(), clangd_path)
+        .expect("Failed to create workspace session");
     let session = workspace_session
         .get_or_create_session(test_project.build_dir.clone())
         .await

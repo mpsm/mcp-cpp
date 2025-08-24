@@ -56,6 +56,9 @@ pub trait FileSystemTrait: Clone + Send + Sync {
 
     /// Get file metadata (modification time, size, etc.)
     fn metadata(&self, path: &Path) -> Result<FileMetadata, std::io::Error>;
+
+    /// List directory entries
+    fn read_dir(&self, path: &Path) -> Result<Vec<std::path::PathBuf>, std::io::Error>;
 }
 
 // ============================================================================
@@ -78,6 +81,16 @@ impl FileSystemTrait for RealFileSystem {
     fn metadata(&self, path: &Path) -> Result<FileMetadata, std::io::Error> {
         let metadata = std::fs::metadata(path)?;
         FileMetadata::from_std_metadata(&metadata)
+    }
+
+    fn read_dir(&self, path: &Path) -> Result<Vec<std::path::PathBuf>, std::io::Error> {
+        let entries = std::fs::read_dir(path)?;
+        let mut paths = Vec::new();
+        for entry in entries {
+            let entry = entry?;
+            paths.push(entry.path());
+        }
+        Ok(paths)
     }
 }
 
@@ -132,7 +145,22 @@ mod test_filesystem {
     impl FileSystemTrait for TestFileSystem {
         fn exists(&self, path: &Path) -> bool {
             let state = self.state.lock().unwrap();
-            state.contains_key(path)
+
+            // Check if it's a direct file
+            if state.contains_key(path) {
+                return true;
+            }
+
+            // Check if it's a directory (has any children)
+            for file_path in state.keys() {
+                if let Some(parent) = file_path.parent()
+                    && parent == path
+                {
+                    return true;
+                }
+            }
+
+            false
         }
 
         fn read(&self, path: &Path) -> Result<Vec<u8>, std::io::Error> {
@@ -152,6 +180,22 @@ mod test_filesystem {
                     size: content.len() as u64,
                 })
                 .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::NotFound, "File not found"))
+        }
+
+        fn read_dir(&self, path: &Path) -> Result<Vec<std::path::PathBuf>, std::io::Error> {
+            let state = self.state.lock().unwrap();
+            let mut entries = Vec::new();
+
+            // Find all paths that are direct children of the given path
+            for file_path in state.keys() {
+                if let Some(parent) = file_path.parent()
+                    && parent == path
+                {
+                    entries.push(file_path.clone());
+                }
+            }
+
+            Ok(entries)
         }
     }
 }

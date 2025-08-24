@@ -11,8 +11,7 @@ use super::tools::analyze_symbols::AnalyzeSymbolContextTool;
 use super::tools::project_tools::GetProjectDetailsTool;
 use super::tools::search_symbols::SearchSymbolsTool;
 use crate::io::file_manager::RealFileBufferManager;
-use crate::project::ProjectWorkspace;
-use crate::project::WorkspaceSession;
+use crate::project::{ProjectError, ProjectWorkspace, WorkspaceSession};
 use crate::register_tools;
 use crate::{log_mcp_message, log_timing};
 use std::path::PathBuf;
@@ -27,14 +26,17 @@ pub struct CppServerHandler {
 }
 
 impl CppServerHandler {
-    pub fn new(project_workspace: ProjectWorkspace, clangd_path: String) -> Self {
-        let workspace_session = WorkspaceSession::new(project_workspace.clone(), clangd_path);
+    pub fn new(
+        project_workspace: ProjectWorkspace,
+        clangd_path: String,
+    ) -> Result<Self, ProjectError> {
+        let workspace_session = WorkspaceSession::new(project_workspace.clone(), clangd_path)?;
         let file_buffer_manager = Arc::new(Mutex::new(RealFileBufferManager::new_real()));
-        Self {
+        Ok(Self {
             project_workspace,
             workspace_session,
             file_buffer_manager,
-        }
+        })
     }
 
     /// Resolves build directory from optional parameter using the helper function.
