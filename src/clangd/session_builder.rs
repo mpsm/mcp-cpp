@@ -2,15 +2,15 @@
 
 use lsp_types::request::Request;
 use std::marker::PhantomData;
-use std::sync::Arc;
 use tracing::{debug, info};
 
 use crate::clangd::config::ClangdConfig;
 use crate::clangd::error::ClangdSessionError;
 use crate::clangd::file_manager::ClangdFileManager;
 use crate::clangd::index::IndexMonitor;
+use crate::clangd::log_monitor::LogMonitor;
 use crate::clangd::session::ClangdSession;
-use crate::io::{ChildProcessManager, ProcessManager, StderrMonitor, StdioTransport};
+use crate::io::{ChildProcessManager, ProcessManager, StdioTransport};
 use crate::lsp::{LspClient, traits::LspClientTrait};
 
 /// Phantom type markers for builder state
@@ -123,7 +123,16 @@ impl ClangdSessionBuilder<HasConfig, NoProcessManager, NoLspClient> {
             Self::create_lsp_client(&config, process_manager.create_stdio_transport()?).await?;
         let index_monitor = Self::setup_monitoring(&mut lsp_client).await;
 
-        Self::finalize_session(config, process_manager, lsp_client, index_monitor)
+        // Create log monitor and finalize session (which will setup stderr handling)
+        let log_monitor = LogMonitor::new();
+
+        Self::finalize_session(
+            config,
+            process_manager,
+            lsp_client,
+            index_monitor,
+            log_monitor,
+        )
     }
 }
 
@@ -141,6 +150,7 @@ where
 
         let file_manager = ClangdFileManager::new();
         let index_monitor = IndexMonitor::new();
+        let log_monitor = LogMonitor::new();
 
         Ok(ClangdSession::with_dependencies(
             config,
@@ -148,6 +158,7 @@ where
             lsp_client,
             file_manager,
             index_monitor,
+            log_monitor,
         ))
     }
 }
@@ -167,14 +178,6 @@ impl ClangdSessionBuilder<HasConfig, NoProcessManager, NoLspClient> {
             args,
             Some(config.working_directory.clone()),
         );
-
-        // Install stderr handler if configured
-        if let Some(handler) = &config.stderr_handler {
-            let handler_clone = Arc::clone(handler);
-            process_manager.on_stderr_line(move |line| {
-                handler_clone(line);
-            });
-        }
 
         debug!("Starting clangd process");
         process_manager.start().await?;
@@ -257,17 +260,25 @@ impl ClangdSessionBuilder<HasConfig, NoProcessManager, NoLspClient> {
         process_manager: ChildProcessManager,
         lsp_client: LspClient<StdioTransport>,
         index_monitor: IndexMonitor,
+        log_monitor: LogMonitor,
     ) -> Result<ClangdSession<ChildProcessManager, LspClient<StdioTransport>>, ClangdSessionError>
     {
         info!("Clangd session started successfully");
         let file_manager = ClangdFileManager::new();
 
-        Ok(ClangdSession::with_dependencies(
+        // Create session with all components
+        let mut session = ClangdSession::with_dependencies(
             config,
             process_manager,
             lsp_client,
             file_manager,
             index_monitor,
-        ))
+            log_monitor,
+        );
+
+        // Setup stderr processing after session creation
+        session.setup_stderr_monitoring();
+
+        Ok(session)
     }
 }

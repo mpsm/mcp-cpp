@@ -37,6 +37,7 @@ pub mod config;
 pub mod error;
 pub mod file_manager;
 pub mod index;
+pub mod log_monitor;
 pub mod session;
 pub mod session_builder;
 pub mod version;

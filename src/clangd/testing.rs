@@ -328,6 +328,7 @@ pub mod test_helpers {
             .returning(|_, _, _, _| Box::pin(async { Ok(()) }));
         let file_manager = ClangdFileManager::new();
         let index_monitor = IndexMonitor::new();
+        let log_monitor = crate::clangd::log_monitor::LogMonitor::new();
 
         super::super::session::ClangdSession::with_dependencies(
             config,
@@ -335,6 +336,7 @@ pub mod test_helpers {
             mock_lsp,
             file_manager,
             index_monitor,
+            log_monitor,
         )
     }
 

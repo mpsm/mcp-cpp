@@ -6,6 +6,8 @@
 
 pub mod hash;
 pub mod monitor;
+pub mod progress_events;
 pub mod project_index;
 
 pub use monitor::IndexMonitor;
+pub use progress_events::{ProgressEvent, ProgressHandler};
