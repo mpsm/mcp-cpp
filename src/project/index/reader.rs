@@ -84,6 +84,7 @@ impl IndexEntry {
 }
 
 /// Index reader with caching and automatic staleness detection
+#[derive(Clone)]
 pub struct IndexReader {
     /// Storage backend for reading index files
     storage: Arc<dyn IndexStorage>,

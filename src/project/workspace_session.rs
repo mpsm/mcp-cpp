@@ -7,10 +7,12 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::time::Duration;
 use tokio::sync::Mutex;
 use tracing::{debug, info, instrument, trace, warn};
 
 use crate::clangd::config::DEFAULT_WORKSPACE_SYMBOL_LIMIT;
+use crate::clangd::index::ProgressEvent;
 use crate::clangd::version::ClangdVersion;
 use crate::clangd::{ClangdConfigBuilder, ClangdSession, ClangdSessionBuilder};
 use crate::io::file_system::RealFileSystem;
@@ -248,28 +250,8 @@ impl WorkspaceSession {
             let index_states = Arc::clone(&index_states);
             let build_dir = build_dir_clone.clone();
 
-            // Spawn async task to handle the event
             tokio::spawn(async move {
-                if let Ok(mut states) = index_states.try_lock() {
-                    if let Some(index_state) = states.get_mut(&build_dir) {
-                        match event {
-                            ProgressEvent::FileIndexingStarted { path, .. } => {
-                                debug!("File indexing started: {:?}", path);
-                                index_state.mark_indexing(&path);
-                            }
-                            ProgressEvent::FileIndexingCompleted { path, .. } => {
-                                debug!("File indexing completed: {:?}", path);
-                                index_state.mark_indexed(&path);
-                            }
-                            _ => {
-                                // Handle other events as needed
-                                trace!("Received progress event: {:?}", event);
-                            }
-                        }
-                    }
-                } else {
-                    warn!("Could not acquire lock on index states to handle progress event");
-                }
+                Self::handle_progress_event_async(index_states, build_dir, event).await;
             });
         }) as Arc<dyn ProgressHandler>;
 
@@ -285,5 +267,307 @@ impl WorkspaceSession {
         );
 
         Ok(())
+    }
+
+    /// Handle progress events asynchronously with proper error handling
+    async fn handle_progress_event_async(
+        index_states: Arc<Mutex<HashMap<PathBuf, IndexState>>>,
+        build_dir: PathBuf,
+        event: ProgressEvent,
+    ) {
+        let Ok(mut states) = index_states.try_lock() else {
+            warn!("Could not acquire lock on index states to handle progress event");
+            return;
+        };
+
+        let Some(index_state) = states.get_mut(&build_dir) else {
+            warn!(
+                "No index state found for build directory: {}",
+                build_dir.display()
+            );
+            return;
+        };
+
+        match event {
+            ProgressEvent::FileIndexingStarted { path, .. } => {
+                debug!("File indexing started: {:?}", path);
+                index_state.mark_indexing(&path);
+            }
+            ProgressEvent::FileIndexingCompleted {
+                path,
+                symbols,
+                refs,
+            } => {
+                debug!(
+                    "File indexing completed: {:?} ({} symbols, {} refs)",
+                    path, symbols, refs
+                );
+                index_state.mark_indexed(&path);
+            }
+            ProgressEvent::StandardLibraryStarted {
+                stdlib_version,
+                context_file,
+            } => {
+                debug!(
+                    "Standard library indexing started: {} (context: {:?})",
+                    stdlib_version, context_file
+                );
+            }
+            ProgressEvent::StandardLibraryCompleted { symbols, filtered } => {
+                debug!(
+                    "Standard library indexing completed: {} symbols, {} filtered",
+                    symbols, filtered
+                );
+            }
+            ProgressEvent::OverallProgress {
+                current,
+                total,
+                percentage,
+                message,
+            } => {
+                debug!(
+                    "Overall indexing progress: {}/{} ({}%) - {:?}",
+                    current, total, percentage, message
+                );
+            }
+            ProgressEvent::OverallCompleted => {
+                info!(
+                    "Overall indexing completed for build directory: {}",
+                    build_dir.display()
+                );
+            }
+            ProgressEvent::IndexingFailed { error } => {
+                warn!(
+                    "Indexing failed for build directory {}: {}",
+                    build_dir.display(),
+                    error
+                );
+            }
+        }
+    }
+
+    /// Wait for indexing completion with coverage assurance
+    ///
+    /// This method waits for clangd to complete indexing and ensures that all files
+    /// in the compilation database have been indexed. If coverage is incomplete after
+    /// initial indexing, it will trigger indexing for unindexed files.
+    #[allow(dead_code)]
+    pub async fn wait_for_indexing_completion(&self, build_dir: &Path) -> Result<(), ProjectError> {
+        const INDEXING_TIMEOUT: Duration = Duration::from_secs(300); // 5 minutes for large codebases
+        let start_time = tokio::time::Instant::now();
+
+        let session = self.get_session_for_build_dir(build_dir).await?;
+        info!(
+            "Waiting for indexing completion for build dir: {}",
+            build_dir.display()
+        );
+
+        // Wait for initial indexing completion
+        self.wait_for_initial_indexing(&session).await?;
+
+        // Ensure complete coverage
+        self.ensure_complete_indexing(build_dir, &session, start_time, INDEXING_TIMEOUT)
+            .await?;
+
+        Ok(())
+    }
+
+    /// Get session for build directory
+    async fn get_session_for_build_dir(
+        &self,
+        build_dir: &Path,
+    ) -> Result<Arc<Mutex<ClangdSession>>, ProjectError> {
+        let sessions = self.sessions.lock().await;
+        sessions.get(build_dir).cloned().ok_or_else(|| {
+            ProjectError::SessionNotFound(format!(
+                "No session found for build directory: {}",
+                build_dir.display()
+            ))
+        })
+    }
+
+    /// Wait for initial indexing to complete
+    async fn wait_for_initial_indexing(
+        &self,
+        session: &Arc<Mutex<ClangdSession>>,
+    ) -> Result<(), ProjectError> {
+        let session_guard = session.lock().await;
+        session_guard
+            .index_monitor()
+            .wait_for_indexing_completion()
+            .await
+            .map_err(|e| {
+                ProjectError::IndexingTimeout(format!("Initial indexing wait failed: {}", e))
+            })
+    }
+
+    /// Get unindexed files for a build directory  
+    async fn get_unindexed_files(&self, build_dir: &Path) -> Vec<PathBuf> {
+        let states = self.index_states.lock().await;
+        states
+            .get(build_dir)
+            .map(|state| state.get_unindexed_files())
+            .unwrap_or_default()
+    }
+
+    /// Ensure complete indexing by triggering additional files if needed
+    async fn ensure_complete_indexing(
+        &self,
+        build_dir: &Path,
+        session: &Arc<Mutex<ClangdSession>>,
+        start_time: tokio::time::Instant,
+        timeout_duration: Duration,
+    ) -> Result<(), ProjectError> {
+        loop {
+            if start_time.elapsed() > timeout_duration {
+                return Err(ProjectError::IndexingTimeout(
+                    "Indexing completion timeout exceeded".to_string(),
+                ));
+            }
+
+            let unindexed_files = self.get_unindexed_files(build_dir).await;
+
+            if unindexed_files.is_empty() {
+                info!(
+                    "Indexing completion achieved: all files indexed for {}",
+                    build_dir.display()
+                );
+                return Ok(());
+            }
+
+            debug!("Found {} unindexed files remaining", unindexed_files.len());
+
+            if let Some(file) = unindexed_files.first() {
+                self.trigger_file_indexing(session, file).await?;
+            }
+        }
+    }
+
+    /// Trigger indexing for a specific file
+    async fn trigger_file_indexing(
+        &self,
+        session: &Arc<Mutex<ClangdSession>>,
+        file: &Path,
+    ) -> Result<(), ProjectError> {
+        debug!("Triggering indexing for unindexed file: {:?}", file);
+
+        let mut session_guard = session.lock().await;
+        if let Err(e) = session_guard.ensure_file_ready(file).await {
+            warn!("Failed to trigger indexing for file {:?}: {}", file, e);
+        } else {
+            session_guard
+                .index_monitor()
+                .wait_for_indexing_completion()
+                .await
+                .map_err(|e| {
+                    ProjectError::IndexingTimeout(format!("File indexing wait failed: {}", e))
+                })?;
+        }
+
+        Ok(())
+    }
+
+    /// Refresh index state by synchronizing with actual index files on disk
+    ///
+    /// This method reads the current state of index files and updates the IndexState
+    /// to reflect staleness and availability of actual index data.
+    #[allow(dead_code)]
+    pub async fn refresh_index_state(&self, build_dir: &Path) -> Result<(), ProjectError> {
+        debug!(
+            "Refreshing index state for build dir: {}",
+            build_dir.display()
+        );
+
+        let (index_reader, compilation_db_files) = self.get_refresh_dependencies(build_dir).await?;
+        self.sync_index_state_with_disk(build_dir, &index_reader, compilation_db_files)
+            .await?;
+
+        Ok(())
+    }
+
+    /// Get dependencies needed for index refresh
+    async fn get_refresh_dependencies(
+        &self,
+        build_dir: &Path,
+    ) -> Result<(IndexReader, Vec<PathBuf>), ProjectError> {
+        // Get the index reader for this build directory
+        let readers = self.index_readers.lock().await;
+        let reader = readers.get(build_dir).cloned().ok_or_else(|| {
+            ProjectError::IndexingTimeout(format!(
+                "No index reader found for build directory: {}",
+                build_dir.display()
+            ))
+        })?;
+
+        // Get compilation database files
+        let component = self
+            .workspace
+            .get_component_by_build_dir(&build_dir.to_path_buf())
+            .ok_or_else(|| {
+                ProjectError::SessionCreation("Component not found for build directory".to_string())
+            })?;
+
+        let files = component
+            .compilation_database
+            .source_files()
+            .into_iter()
+            .map(|p| p.to_path_buf())
+            .collect::<Vec<_>>();
+
+        Ok((reader, files))
+    }
+
+    /// Synchronize IndexState with actual index files on disk
+    async fn sync_index_state_with_disk(
+        &self,
+        build_dir: &Path,
+        index_reader: &IndexReader,
+        compilation_db_files: Vec<PathBuf>,
+    ) -> Result<(), ProjectError> {
+        let mut states = self.index_states.lock().await;
+        let Some(index_state) = states.get_mut(build_dir) else {
+            return Err(ProjectError::SessionCreation(
+                "No index state found for build directory".to_string(),
+            ));
+        };
+
+        for file_path in compilation_db_files {
+            self.update_file_state_from_index(index_state, index_reader, &file_path)
+                .await;
+        }
+
+        index_state.refresh();
+        debug!(
+            "Index state refreshed. Coverage: {:.1}%",
+            index_state.coverage() * 100.0
+        );
+
+        Ok(())
+    }
+
+    /// Update individual file state based on index file
+    async fn update_file_state_from_index(
+        &self,
+        index_state: &mut IndexState,
+        index_reader: &IndexReader,
+        file_path: &Path,
+    ) {
+        match index_reader.read_index_for_file(file_path).await {
+            Ok(index_entry) => {
+                use crate::project::index::reader::FileIndexStatus;
+                match index_entry.status {
+                    FileIndexStatus::Done => index_state.mark_indexed(file_path),
+                    FileIndexStatus::Stale => index_state.mark_stale(file_path),
+                    FileIndexStatus::InProgress => index_state.mark_indexing(file_path),
+                    FileIndexStatus::None | FileIndexStatus::Invalid(_) => {
+                        // File not indexed or invalid - leave as None in state
+                    }
+                }
+            }
+            Err(e) => {
+                trace!("Could not read index for file {:?}: {}", file_path, e);
+                // File likely not indexed yet
+            }
+        }
     }
 }

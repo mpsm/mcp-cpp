@@ -71,3 +71,41 @@ async fn test_indexing_progress_tracking_with_real_clangd() {
         panic!("Final indexing coverage should not be None");
     }
 }
+
+#[tokio::test]
+async fn test_wait_for_indexing_completion_ensures_full_coverage() {
+    let test_project = TestProject::new().await.unwrap();
+    test_project.cmake_configure().await.unwrap();
+
+    let scanner = ProjectScanner::with_default_providers();
+    let workspace = scanner
+        .scan_project(&test_project.project_root, 2, None)
+        .unwrap();
+
+    let clangd_path = crate::test_utils::get_test_clangd_path();
+    let workspace_session = WorkspaceSession::new(workspace, clangd_path).unwrap();
+
+    // Create session first - required for wait_for_indexing_completion
+    let _session = workspace_session
+        .get_or_create_session(test_project.build_dir.clone())
+        .await
+        .unwrap();
+
+    let result = tokio::time::timeout(
+        Duration::from_secs(60),
+        workspace_session.wait_for_indexing_completion(&test_project.build_dir),
+    )
+    .await;
+
+    match result {
+        Ok(Ok(())) => {
+            println!("✅ wait_for_indexing_completion succeeded");
+        }
+        Ok(Err(e)) => {
+            panic!("wait_for_indexing_completion failed: {}", e);
+        }
+        Err(_) => {
+            panic!("wait_for_indexing_completion timed out after 60s");
+        }
+    }
+}
