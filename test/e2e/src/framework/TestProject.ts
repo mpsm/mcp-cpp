@@ -615,7 +615,7 @@ int main() {
       preservedAt: new Date().toISOString(),
       reason: reason ?? 'Manual preservation',
       projectPath: this.projectPath,
-      ...(testCaseInfo && { testCase: testCaseInfo }),
+      ...(testCaseInfo ? { testCase: testCaseInfo } : {}),
     };
 
     await this.writeFile(

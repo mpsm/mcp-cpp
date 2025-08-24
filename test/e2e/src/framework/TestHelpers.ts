@@ -1,4 +1,4 @@
-import { TestProject, TestContext } from './TestProject.js';
+import { TestProject, TestContext, ProjectTemplate } from './TestProject.js';
 import { TestUtils } from './TestUtils.js';
 import { McpClient } from './McpClient.js';
 
@@ -37,7 +37,10 @@ export class TestHelpers {
       case 'empty':
         return TestProject.empty(testContext);
       case 'minimal-cmake':
-        return TestProject.fromTemplate('minimal-cmake', testContext);
+        return TestProject.fromTemplate(
+          ProjectTemplate.MINIMAL_CMAKE,
+          testContext
+        );
       default:
         return TestProject.fromBaseProject(
           options?.projectOptions,

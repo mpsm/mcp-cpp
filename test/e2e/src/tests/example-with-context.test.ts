@@ -3,6 +3,14 @@ import { TestHelpers } from '../framework/TestHelpers.js';
 import { TestProject } from '../framework/TestProject.js';
 import { McpClient } from '../framework/McpClient.js';
 
+interface VitestTaskContext {
+  task?: {
+    name?: string;
+    file?: { name?: string };
+    suite?: { name?: string };
+  };
+}
+
 describe('Example Test with Context Tracking', () => {
   let client: McpClient;
   let project: TestProject;
@@ -20,7 +28,7 @@ describe('Example Test with Context Tracking', () => {
     client = setup.client;
   });
 
-  afterEach(async (context) => {
+  afterEach(async (context: VitestTaskContext) => {
     // Enhanced cleanup preserves folders on test failure
     await TestHelpers.cleanup(client, project, {
       cleanupOnFailure: false,
@@ -35,8 +43,8 @@ describe('Example Test with Context Tracking', () => {
     // Check that metadata was created
     const metadata = await project.getTestMetadata();
     expect(metadata).toBeDefined();
-    expect(metadata.testName).toBe('example-context-test');
-    expect(metadata.describe).toBe('Example Test with Context Tracking');
+    expect(metadata?.testName).toBe('example-context-test');
+    expect(metadata?.describe).toBe('Example Test with Context Tracking');
 
     // Run a test operation
     await project.runCmake();
@@ -86,7 +94,7 @@ describe('Manual Context Example', () => {
 
     try {
       const metadata = await project.getTestMetadata();
-      expect(metadata.testName).toBe('manual-context-test');
+      expect(metadata?.testName).toBe('manual-context-test');
 
       await project.runCmake();
       const result = await client.callTool('list_build_dirs');
