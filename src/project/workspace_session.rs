@@ -571,7 +571,6 @@ impl WorkspaceSession {
             }
         }
     }
-
 }
 
 impl Drop for WorkspaceSession {

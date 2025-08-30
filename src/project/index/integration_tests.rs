@@ -3,6 +3,7 @@
 use crate::project::{ProjectScanner, WorkspaceSession};
 use crate::test_utils::integration::TestProject;
 use std::time::Duration;
+use tracing::debug;
 
 #[cfg(feature = "test-logging")]
 #[ctor::ctor]
@@ -99,7 +100,7 @@ async fn test_wait_for_indexing_completion_ensures_full_coverage() {
 
     match result {
         Ok(Ok(())) => {
-            println!("✅ wait_for_indexing_completion succeeded");
+            debug!("wait_for_indexing_completion succeeded");
         }
         Ok(Err(e)) => {
             panic!("wait_for_indexing_completion failed: {}", e);
