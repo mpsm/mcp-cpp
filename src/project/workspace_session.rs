@@ -205,6 +205,13 @@ impl WorkspaceSession {
         // Store the session for future reuse
         sessions.insert(build_dir.clone(), Arc::clone(&session_arc));
 
+        // Drop sessions lock before calling refresh_index_state to avoid deadlock
+        drop(sessions);
+
+        // Sync index state with disk and trigger appropriate action
+        // This must be called after the session is stored so it can access the session
+        self.refresh_index_state(&build_dir).await?;
+
         Ok(session_arc)
     }
 
@@ -472,7 +479,6 @@ impl WorkspaceSession {
     ///
     /// This method reads the current state of index files and updates the IndexState
     /// to reflect staleness and availability of actual index data.
-    #[allow(dead_code)]
     pub async fn refresh_index_state(&self, build_dir: &Path) -> Result<(), ProjectError> {
         debug!(
             "Refreshing index state for build dir: {}",
@@ -482,6 +488,52 @@ impl WorkspaceSession {
         let (index_reader, compilation_db_files) = self.get_refresh_dependencies(build_dir).await?;
         self.sync_index_state_with_disk(build_dir, &index_reader, compilation_db_files)
             .await?;
+
+        // Get statistics after sync to check completion status
+        let stats = {
+            let index_states = self.index_states.lock().await;
+            let Some(index_state) = index_states.get(build_dir) else {
+                return Err(ProjectError::SessionCreation(
+                    "No index state found for build directory".to_string(),
+                ));
+            };
+            index_state.get_statistics()
+        };
+
+        debug!(
+            "Index state after disk sync: {}/{} files indexed",
+            stats.compilation_db_indexed, stats.compilation_db_files
+        );
+
+        // Access sessions to trigger appropriate action
+        let sessions = self.sessions.lock().await;
+        if let Some(session) = sessions.get(build_dir) {
+            let mut session_guard = session.lock().await;
+            if stats.is_complete() {
+                // All files indexed - trigger completion latch
+                let monitor = session_guard.index_monitor();
+                monitor.mark_complete_from_disk().await;
+                debug!("Triggered IndexMonitor completion: all files already indexed");
+            } else {
+                // Some files need indexing - get unindexed files and trigger on first
+                let unindexed_files = {
+                    let index_states = self.index_states.lock().await;
+                    let Some(index_state) = index_states.get(build_dir) else {
+                        return Err(ProjectError::SessionCreation(
+                            "No index state found for build directory".to_string(),
+                        ));
+                    };
+                    index_state.get_unindexed_files()
+                };
+
+                if let Some(first_file) = unindexed_files.first() {
+                    debug!("Triggering indexing on first unindexed file: {}", first_file.display());
+                    session_guard.ensure_file_ready(first_file).await.map_err(|e| {
+                        ProjectError::SessionCreation(format!("Failed to trigger indexing: {}", e))
+                    })?;
+                }
+            }
+        }
 
         Ok(())
     }

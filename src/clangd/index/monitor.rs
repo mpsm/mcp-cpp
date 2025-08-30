@@ -138,6 +138,20 @@ impl IndexMonitor {
         debug!("IndexMonitor: Reset indexing state and latch");
     }
 
+    /// Mark indexing as complete based on disk state
+    ///
+    /// This is used when we detect from disk that indexing is already complete
+    /// and clangd won't send progress notifications (e.g., when index files already exist).
+    pub async fn mark_complete_from_disk(&self) {
+        let mut state = self.state.lock().await;
+        state.status = IndexingStatus::Completed;
+        drop(state); // Release lock before triggering latch
+
+        // Trigger completion latch
+        self.latch.trigger_success().await;
+        debug!("IndexMonitor: Marked indexing as complete based on disk state");
+    }
+
     /// Internal notification processing
     async fn process_notification_internal(
         notification: JsonRpcNotification,

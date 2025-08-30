@@ -324,7 +324,7 @@ pub struct IndexStatistics {
 impl IndexStatistics {
     /// Check if indexing is complete
     pub fn is_complete(&self) -> bool {
-        self.coverage >= 1.0
+        self.compilation_db_files > 0 && self.compilation_db_indexed == self.compilation_db_files
     }
 
     /// Get human-readable summary

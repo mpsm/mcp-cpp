@@ -173,38 +173,10 @@ impl IndexReader {
             });
         }
 
-        // Step 2: Compute current file hash for staleness detection
-        let current_hash = match Self::compute_content_hash(absolute_path).await {
-            Ok(hash) => hash,
-            Err(e) => {
-                warn!("Failed to compute hash for {:?}: {}", absolute_path, e);
-                // If we can't compute current hash, assume stale for safety
-                return Ok(IndexEntry {
-                    absolute_path: absolute_path.clone(),
-                    status: FileIndexStatus::Stale,
-                    index_format_version: Some(index_data.format_version),
-                    expected_format_version: self.storage.expected_version(),
-                    index_content_hash: Some(index_data.content_hash),
-                    current_file_hash: None,
-                    symbols: vec![],
-                    index_file_size: index_data.metadata.file_size,
-                    index_created_at: index_data.metadata.created_at,
-                });
-            }
-        };
-
-        // Step 3: Compare hashes to detect staleness
-        let status = if index_data.content_hash == current_hash {
-            FileIndexStatus::Done // Index is current
-        } else {
-            FileIndexStatus::Stale // File modified since indexing
-        };
-
-        let symbols = if status.is_valid() {
-            index_data.symbols
-        } else {
-            vec![] // Don't trust stale symbols
-        };
+        // Step 2: Trust the index file - if it exists, assume it's valid
+        // Clangd manages its own index validity, so we don't need to validate
+        let status = FileIndexStatus::Done;
+        let symbols = index_data.symbols;
 
         debug!(
             "Index validation complete for {:?}: {}",
@@ -222,7 +194,7 @@ impl IndexReader {
             index_format_version: Some(index_data.format_version),
             expected_format_version: self.storage.expected_version(),
             index_content_hash: Some(index_data.content_hash),
-            current_file_hash: Some(current_hash),
+            current_file_hash: None, // We trust the index, no need to compute current hash
             symbols,
             index_file_size: index_data.metadata.file_size,
             index_created_at: index_data.metadata.created_at,

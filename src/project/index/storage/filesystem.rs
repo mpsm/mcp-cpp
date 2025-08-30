@@ -133,13 +133,35 @@ impl<F: FileSystemTrait + 'static> FilesystemIndexStorage<F> {
 #[async_trait]
 impl<F: FileSystemTrait + 'static> IndexStorage for FilesystemIndexStorage<F> {
     async fn read_index(&self, source_path: &Path) -> Result<IndexData, IndexError> {
-        let index_path = self.get_index_file_path(source_path);
-        trace!(
-            "Reading index for source: {:?} -> {:?}",
-            source_path, index_path
-        );
-
-        self.parse_index_file(&index_path).await
+        // Find the actual index file by pattern matching instead of hash computation
+        let source_filename = source_path.file_name()
+            .ok_or_else(|| IndexError::FileNotFound { 
+                path: source_path.to_path_buf() 
+            })?
+            .to_string_lossy();
+        
+        // Look for files matching the pattern: SourceFile.HASH.idx
+        let pattern_prefix = format!("{}.", source_filename);
+        
+        let index_files = self.list_index_files(&self.index_directory).await.unwrap_or_default();
+        
+        for index_file in index_files {
+            if let Some(filename) = index_file.file_name() {
+                let filename_str = filename.to_string_lossy();
+                if filename_str.starts_with(&pattern_prefix) && filename_str.ends_with(".idx") {
+                    trace!(
+                        "Found index file for source: {:?} -> {:?}",
+                        source_path, index_file
+                    );
+                    return self.parse_index_file(&index_file).await;
+                }
+            }
+        }
+        
+        // No index file found for this source file
+        Err(IndexError::FileNotFound { 
+            path: source_path.to_path_buf() 
+        })
     }
 
     async fn list_index_files(&self, index_dir: &Path) -> Result<Vec<PathBuf>, IndexError> {

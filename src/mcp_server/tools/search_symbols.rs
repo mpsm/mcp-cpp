@@ -125,12 +125,13 @@ impl SearchSymbolsTool {
             self.query, symbol_kinds, self.max_results
         );
 
-        let mut session_guard = session.lock().await;
-
-        // Ensure indexing completion before searching
+        // Ensure indexing completion before acquiring session lock
         index_session.ensure_indexed().await.map_err(|e| {
             CallToolError::new(std::io::Error::other(format!("Indexing failed: {}", e)))
         })?;
+
+        // Lock session for LSP operations after indexing is complete
+        let mut session_guard = session.lock().await;
 
         // Get the component for this session's build directory
         let build_dir = session_guard.build_directory();
