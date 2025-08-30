@@ -571,4 +571,16 @@ impl WorkspaceSession {
             }
         }
     }
+
+}
+
+impl Drop for WorkspaceSession {
+    fn drop(&mut self) {
+        // Clear the sessions HashMap to drop all Arc references
+        // This allows ClangdSession::drop() to be called for proper cleanup
+        if let Ok(mut sessions) = self.sessions.try_lock() {
+            sessions.clear();
+        }
+        // IndexState and IndexReader will be cleaned up automatically
+    }
 }

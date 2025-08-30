@@ -251,9 +251,7 @@ where
     fn drop(&mut self) {
         // Check if process is still running
         if self.process_manager.is_running() {
-            eprintln!(
-                "Warning: ClangdSession dropped without calling close() - force killing process"
-            );
+            warn!("ClangdSession dropped without calling close() - force killing process");
 
             // Clean sync kill - no async runtime needed
             self.process_manager.kill_sync();
