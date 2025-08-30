@@ -13,9 +13,14 @@
 #[allow(dead_code)]
 pub mod reader;
 #[allow(dead_code)]
+pub mod session;
+#[allow(dead_code)]
 pub mod state;
 #[allow(dead_code)]
 pub mod storage;
+
+// Public exports
+pub use session::IndexSession;
 
 #[cfg(all(test, feature = "clangd-integration-tests"))]
 mod integration_tests;

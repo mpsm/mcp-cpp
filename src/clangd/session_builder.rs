@@ -2,12 +2,13 @@
 
 use lsp_types::request::Request;
 use std::marker::PhantomData;
+use tokio::sync::mpsc;
 use tracing::{debug, info};
 
 use crate::clangd::config::ClangdConfig;
 use crate::clangd::error::ClangdSessionError;
 use crate::clangd::file_manager::ClangdFileManager;
-use crate::clangd::index::IndexMonitor;
+use crate::clangd::index::{IndexMonitor, ProgressEvent};
 use crate::clangd::log_monitor::LogMonitor;
 use crate::clangd::session::ClangdSession;
 use crate::io::{ChildProcessManager, ProcessManager, StderrMonitor, StdioTransport};
@@ -48,6 +49,7 @@ pub struct ClangdSessionBuilder<ConfigState = NoConfig, P = NoProcessManager, C 
     config: Option<ClangdConfig>,
     process_manager: Option<P>,
     lsp_client: Option<C>,
+    progress_sender: Option<mpsc::Sender<ProgressEvent>>,
     _phantom: PhantomData<(ConfigState, P, C)>,
 }
 
@@ -58,6 +60,7 @@ impl ClangdSessionBuilder<NoConfig, NoProcessManager, NoLspClient> {
             config: None,
             process_manager: None,
             lsp_client: None,
+            progress_sender: None,
             _phantom: PhantomData,
         }
     }
@@ -70,6 +73,7 @@ impl<P, C> ClangdSessionBuilder<NoConfig, P, C> {
             config: Some(config),
             process_manager: self.process_manager,
             lsp_client: self.lsp_client,
+            progress_sender: self.progress_sender,
             _phantom: PhantomData,
         }
     }
@@ -88,6 +92,7 @@ impl<ConfigState, C> ClangdSessionBuilder<ConfigState, NoProcessManager, C> {
             config: self.config,
             process_manager: Some(process_manager),
             lsp_client: self.lsp_client,
+            progress_sender: self.progress_sender,
             _phantom: PhantomData,
         }
     }
@@ -103,8 +108,17 @@ impl<ConfigState, P> ClangdSessionBuilder<ConfigState, P, NoLspClient> {
             config: self.config,
             process_manager: self.process_manager,
             lsp_client: Some(lsp_client),
+            progress_sender: self.progress_sender,
             _phantom: PhantomData,
         }
+    }
+}
+
+impl<ConfigState, P, C> ClangdSessionBuilder<ConfigState, P, C> {
+    /// Inject a progress event sender
+    pub fn with_progress_sender(mut self, sender: mpsc::Sender<ProgressEvent>) -> Self {
+        self.progress_sender = Some(sender);
+        self
     }
 }
 
@@ -119,7 +133,11 @@ impl ClangdSessionBuilder<HasConfig, NoProcessManager, NoLspClient> {
 
         let config = self.config.unwrap();
 
-        let log_monitor = LogMonitor::new();
+        let log_monitor = if let Some(progress_sender) = self.progress_sender {
+            LogMonitor::with_sender(progress_sender)
+        } else {
+            LogMonitor::new()
+        };
         let mut process_manager = Self::create_process_manager_without_start(&config).await?;
 
         let stderr_processor = log_monitor.create_stderr_processor();
@@ -157,7 +175,11 @@ where
 
         let file_manager = ClangdFileManager::new();
         let index_monitor = IndexMonitor::new();
-        let log_monitor = LogMonitor::new();
+        let log_monitor = if let Some(progress_sender) = self.progress_sender {
+            LogMonitor::with_sender(progress_sender)
+        } else {
+            LogMonitor::new()
+        };
 
         let mut session = ClangdSession::with_dependencies(
             config,

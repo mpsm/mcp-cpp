@@ -167,7 +167,7 @@ pub struct ChildProcessManager {
     stdio_transport: Option<StdioTransport>,
 
     /// Stderr handler
-    stderr_handler: Option<Arc<dyn Fn(String) + Send + Sync>>,
+    stderr_handler: Option<Box<dyn Fn(String) + Send + Sync>>,
 
     /// Stderr monitoring task handle
     stderr_task: Option<JoinHandle<()>>,
@@ -219,8 +219,8 @@ impl ChildProcessManager {
             return Ok(());
         }
 
-        // Clone handler if present (None is fine)
-        let handler = self.stderr_handler.clone();
+        // Move handler into task (take ownership, no cloning needed)
+        let handler = self.stderr_handler.take();
 
         let task = tokio::spawn(async move {
             let mut reader = BufReader::new(stderr);
@@ -247,7 +247,7 @@ impl ChildProcessManager {
                         let line_content = line.trim().to_string();
                         if !line_content.is_empty() {
                             if let Some(ref handler) = handler {
-                                // Handler installed - forward the line
+                                // Handler installed - forward the line (direct Box call, no Arc deref)
                                 trace!("ChildProcessManager: stderr line: {}", line_content);
                                 handler(line_content);
                             } else {
@@ -499,7 +499,7 @@ impl StderrMonitor for ChildProcessManager {
     where
         F: Fn(String) + Send + Sync + 'static,
     {
-        self.stderr_handler = Some(Arc::new(handler));
+        self.stderr_handler = Some(Box::new(handler));
     }
 }
 

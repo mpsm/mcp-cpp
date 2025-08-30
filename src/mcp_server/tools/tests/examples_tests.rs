@@ -8,7 +8,7 @@ use crate::io::file_manager::RealFileBufferManager;
 use crate::mcp_server::tools::lsp_helpers::{
     examples::get_examples, symbol_resolution::get_matching_symbol,
 };
-use crate::project::{ProjectScanner, WorkspaceSession};
+use crate::project::{ProjectScanner, WorkspaceSession, index::IndexSession};
 use crate::test_utils::integration::TestProject;
 use std::sync::Arc;
 use tokio::sync::Mutex;
@@ -36,11 +36,13 @@ async fn test_examples_class_usage() {
         .await
         .expect("Failed to create session");
 
+    // Complete indexing using IndexSession prior to session operations
+    let index_session = IndexSession::new(&workspace_session, test_project.build_dir.clone());
+    index_session.ensure_indexed().await.unwrap();
+
+    // Acquire session lock for LSP operations
     let mut locked_session = session.lock().await;
     let file_buffer_manager = Arc::new(Mutex::new(RealFileBufferManager::new_real()));
-
-    // Wait for clangd indexing to complete before searching
-    crate::mcp_server::tools::utils::wait_for_indexing(locked_session.index_monitor(), None).await;
 
     // Get Math class symbol
     let symbol = get_matching_symbol("Math", &mut locked_session)
@@ -100,11 +102,13 @@ async fn test_examples_function_usage() {
         .await
         .expect("Failed to create session");
 
+    // Complete indexing using IndexSession prior to session operations
+    let index_session = IndexSession::new(&workspace_session, test_project.build_dir.clone());
+    index_session.ensure_indexed().await.unwrap();
+
+    // Acquire session lock for LSP operations
     let mut locked_session = session.lock().await;
     let file_buffer_manager = Arc::new(Mutex::new(RealFileBufferManager::new_real()));
-
-    // Wait for clangd indexing to complete before searching
-    crate::mcp_server::tools::utils::wait_for_indexing(locked_session.index_monitor(), None).await;
 
     // Get factorial function symbol
     let symbol = get_matching_symbol("factorial", &mut locked_session)
@@ -167,11 +171,13 @@ async fn test_examples_with_max_limit() {
         .await
         .expect("Failed to create session");
 
+    // Complete indexing using IndexSession prior to session operations
+    let index_session = IndexSession::new(&workspace_session, test_project.build_dir.clone());
+    index_session.ensure_indexed().await.unwrap();
+
+    // Acquire session lock for LSP operations
     let mut locked_session = session.lock().await;
     let file_buffer_manager = Arc::new(Mutex::new(RealFileBufferManager::new_real()));
-
-    // Wait for clangd indexing to complete before searching
-    crate::mcp_server::tools::utils::wait_for_indexing(locked_session.index_monitor(), None).await;
 
     // Get Math class symbol (should have multiple usage examples)
     let symbol = get_matching_symbol("Math", &mut locked_session)
@@ -242,11 +248,13 @@ async fn test_examples_method_usage() {
         .await
         .expect("Failed to create session");
 
+    // Complete indexing using IndexSession prior to session operations
+    let index_session = IndexSession::new(&workspace_session, test_project.build_dir.clone());
+    index_session.ensure_indexed().await.unwrap();
+
+    // Acquire session lock for LSP operations
     let mut locked_session = session.lock().await;
     let file_buffer_manager = Arc::new(Mutex::new(RealFileBufferManager::new_real()));
-
-    // Wait for clangd indexing to complete before searching
-    crate::mcp_server::tools::utils::wait_for_indexing(locked_session.index_monitor(), None).await;
 
     // Get a method symbol
     let symbol = get_matching_symbol("Math::Complex::add", &mut locked_session)

@@ -343,9 +343,6 @@ mod tests {
 
         let mut buffer = FileBuffer::new_with_filesystem(&test_path, filesystem).unwrap();
 
-        println!("Content chars: {:?}", content.chars().collect::<Vec<_>>());
-        println!("Line starts: {:?}", buffer.line_starts);
-
         // Extract ASCII text
         let start = FilePosition::new(0, 0);
         let end = FilePosition::new(0, 5);

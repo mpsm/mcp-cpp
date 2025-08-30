@@ -36,22 +36,6 @@ pub enum ProgressEvent {
     IndexingFailed { error: String },
 }
 
-/// Trait for handling progress events
-pub trait ProgressHandler: Send + Sync {
-    /// Handle a progress event
-    fn handle_event(&self, event: ProgressEvent);
-}
-
-/// Blanket implementation for closures
-impl<F> ProgressHandler for F
-where
-    F: Fn(ProgressEvent) + Send + Sync,
-{
-    fn handle_event(&self, event: ProgressEvent) {
-        self(event);
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -70,21 +54,5 @@ mod tests {
             }
             _ => panic!("Wrong event type"),
         }
-    }
-
-    #[test]
-    fn test_progress_handler_trait() {
-        let handler = |event: ProgressEvent| {
-            if let ProgressEvent::FileIndexingStarted { .. } = event {
-                // Handle the event
-            }
-        };
-
-        let event = ProgressEvent::FileIndexingStarted {
-            path: PathBuf::from("/test.cpp"),
-            digest: "TEST".to_string(),
-        };
-
-        handler.handle_event(event);
     }
 }

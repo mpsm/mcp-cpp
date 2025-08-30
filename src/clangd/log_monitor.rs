@@ -4,12 +4,12 @@
 //! structured progress events. This complements the LSP progress notifications
 //! with more detailed file-level progress information.
 
-use crate::clangd::index::{ProgressEvent, ProgressHandler};
+use crate::clangd::index::ProgressEvent;
 use regex::Regex;
 use std::path::PathBuf;
-use std::sync::Arc;
 use tokio::io::{AsyncBufReadExt, BufReader};
-use tracing::{debug, trace};
+use tokio::sync::mpsc;
+use tracing::{debug, trace, warn};
 
 /// Log parser trait for testing and extensibility
 pub trait LogParser: Send + Sync {
@@ -18,6 +18,7 @@ pub trait LogParser: Send + Sync {
 }
 
 /// Default clangd log parser using regex patterns
+#[derive(Clone)]
 pub struct ClangdLogParser {
     indexing_start_regex: Regex,
     indexing_complete_regex: Regex,
@@ -109,37 +110,36 @@ impl LogParser for ClangdLogParser {
 
 /// Log monitor that processes clangd stderr output
 pub struct LogMonitor {
-    parser: Box<dyn LogParser>,
-    handler: Arc<std::sync::Mutex<Option<Arc<dyn ProgressHandler>>>>,
+    parser: ClangdLogParser,
+    event_sender: Option<mpsc::Sender<ProgressEvent>>,
 }
 
 impl LogMonitor {
-    /// Create a new log monitor with the default parser
+    /// Create a new log monitor with the default parser (no progress events)
     pub fn new() -> Self {
         Self {
-            parser: Box::new(ClangdLogParser::default()),
-            handler: Arc::new(std::sync::Mutex::new(None)),
+            parser: ClangdLogParser::default(),
+            event_sender: None,
         }
     }
 
-    /// Create a log monitor with a custom parser
-    pub fn with_parser(parser: Box<dyn LogParser>) -> Self {
+    /// Create a log monitor with the default parser and progress event sender
+    pub fn with_sender(sender: mpsc::Sender<ProgressEvent>) -> Self {
+        Self {
+            parser: ClangdLogParser::default(),
+            event_sender: Some(sender),
+        }
+    }
+
+    /// Create a log monitor with a custom parser and progress event sender
+    pub fn with_parser_and_sender(
+        parser: ClangdLogParser,
+        sender: mpsc::Sender<ProgressEvent>,
+    ) -> Self {
         Self {
             parser,
-            handler: Arc::new(std::sync::Mutex::new(None)),
+            event_sender: Some(sender),
         }
-    }
-
-    /// Set the progress handler
-    pub fn set_handler(&mut self, handler: Arc<dyn ProgressHandler>) {
-        if let Ok(mut handler_guard) = self.handler.lock() {
-            *handler_guard = Some(handler);
-        }
-    }
-
-    /// Get a mutable reference to set the handler
-    pub fn handler_mut(&mut self) -> Arc<std::sync::Mutex<Option<Arc<dyn ProgressHandler>>>> {
-        Arc::clone(&self.handler)
     }
 
     /// Process a single log line
@@ -149,10 +149,11 @@ impl LogMonitor {
         if let Some(event) = self.parser.parse_line(line) {
             trace!("LogMonitor: Parsed event from stderr: {:?}", event);
 
-            if let Ok(handler_guard) = self.handler.lock()
-                && let Some(ref handler) = *handler_guard
-            {
-                handler.handle_event(event);
+            if let Some(ref sender) = self.event_sender {
+                // Non-blocking send - drop event if channel is full
+                if sender.try_send(event).is_err() {
+                    warn!("LogMonitor: Progress event channel full, dropping event");
+                }
             }
         } else {
             trace!("LogMonitor: No event parsed from line: {}", line);
@@ -161,8 +162,9 @@ impl LogMonitor {
 
     /// Create a stderr line processor that can be used as a callback
     pub fn create_stderr_processor(&self) -> impl Fn(String) + Send + Sync + 'static {
-        let parser = ClangdLogParser::default();
-        let handler_ref = Arc::clone(&self.handler);
+        // Clone the existing parser instead of creating a duplicate
+        let parser = self.parser.clone();
+        let sender = self.event_sender.clone();
 
         move |line: String| {
             trace!("LogMonitor: Processing stderr line: {}", line);
@@ -170,10 +172,11 @@ impl LogMonitor {
             if let Some(event) = parser.parse_line(&line) {
                 trace!("LogMonitor: Parsed event from stderr: {:?}", event);
 
-                if let Ok(handler_guard) = handler_ref.lock()
-                    && let Some(ref handler) = *handler_guard
-                {
-                    handler.handle_event(event);
+                if let Some(ref tx) = sender {
+                    // Non-blocking send - drop event if channel is full
+                    if tx.try_send(event).is_err() {
+                        warn!("LogMonitor: Progress event channel full, dropping event");
+                    }
                 }
             } else {
                 trace!("LogMonitor: No event parsed from line: {}", line);
@@ -208,18 +211,7 @@ impl Default for LogMonitor {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::{Arc, Mutex};
-
-    #[derive(Default)]
-    struct TestHandler {
-        events: Arc<Mutex<Vec<ProgressEvent>>>,
-    }
-
-    impl ProgressHandler for TestHandler {
-        fn handle_event(&self, event: ProgressEvent) {
-            self.events.lock().unwrap().push(event);
-        }
-    }
+    use tokio::sync::mpsc;
 
     #[test]
     fn test_clangd_log_parser_creation() {
@@ -316,27 +308,23 @@ mod tests {
     #[test]
     fn test_log_monitor_creation() {
         let monitor = LogMonitor::new();
-        assert!(monitor.handler.lock().unwrap().is_none());
+        assert!(monitor.event_sender.is_none());
     }
 
-    #[test]
-    fn test_log_monitor_with_handler() {
-        let mut monitor = LogMonitor::new();
-        let handler = Arc::new(TestHandler::default());
-
-        monitor.set_handler(handler.clone());
-        assert!(monitor.handler.lock().unwrap().is_some());
+    #[tokio::test]
+    async fn test_log_monitor_with_channel() {
+        let (tx, mut rx) = mpsc::channel(10);
+        let monitor = LogMonitor::with_sender(tx);
 
         // Test processing a line
         let line = "V[14:23:45.123] Indexing /test.cpp (digest:=0xABC)";
         monitor.process_line(line);
 
-        let events = handler.events.lock().unwrap();
-        assert_eq!(events.len(), 1);
-
-        match &events[0] {
+        // Receive the event
+        let event = rx.recv().await.expect("Should receive event");
+        match event {
             ProgressEvent::FileIndexingStarted { path, digest } => {
-                assert_eq!(*path, PathBuf::from("/test.cpp"));
+                assert_eq!(path, PathBuf::from("/test.cpp"));
                 assert_eq!(digest, "0xABC");
             }
             _ => panic!("Wrong event type"),
@@ -344,19 +332,18 @@ mod tests {
     }
 
     #[test]
-    fn test_log_monitor_no_handler() {
+    fn test_log_monitor_no_sender() {
         let monitor = LogMonitor::new();
 
-        // Should not panic when no handler is set
+        // Should not panic when no sender is set
         let line = "V[14:23:45.123] Indexing /test.cpp (digest:=0xABC)";
         monitor.process_line(line);
     }
 
     #[tokio::test]
     async fn test_monitor_stream() {
-        let mut monitor = LogMonitor::new();
-        let handler = Arc::new(TestHandler::default());
-        monitor.set_handler(handler.clone());
+        let (tx, mut rx) = mpsc::channel(10);
+        let monitor = LogMonitor::with_sender(tx);
 
         let log_data = "V[14:23:45.123] Indexing /test1.cpp (digest:=0xABC)\n\
                        I[14:23:46.456] Indexed /test1.cpp (42 symbols, 10 refs, 3 files)\n\
@@ -368,8 +355,11 @@ mod tests {
         // Monitor the stream
         monitor.monitor_stream(cursor).await.unwrap();
 
-        // Check captured events
-        let events = handler.events.lock().unwrap();
+        // Collect all events
+        let mut events = Vec::new();
+        while let Ok(event) = rx.try_recv() {
+            events.push(event);
+        }
         assert_eq!(events.len(), 3);
 
         match &events[0] {

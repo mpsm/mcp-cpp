@@ -3,11 +3,13 @@
 //! Provides async monitoring of clangd's background indexing process by listening
 //! to LSP progress notifications and enabling code to wait for indexing completion.
 
+use crate::clangd::index::{IndexLatch, LatchError};
 use crate::lsp::protocol::JsonRpcNotification;
 use lsp_types::{notification::Notification, request::Request};
 use serde_json::Value;
 use std::sync::Arc;
-use tokio::sync::{Mutex, oneshot};
+use std::time::Duration;
+use tokio::sync::Mutex;
 use tracing::{debug, trace};
 
 // ============================================================================
@@ -33,17 +35,10 @@ pub enum IndexingStatus {
 }
 
 /// Errors that can occur during indexing monitoring
-#[derive(Debug, thiserror::Error)]
-pub enum IndexingError {
-    #[error("Indexing was cancelled")]
-    Cancelled,
-
-    #[error("Indexing failed: {0}")]
-    Failed(String),
-
-    #[error("Timeout waiting for indexing completion")]
-    Timeout,
-}
+///
+/// Re-exports LatchError for backward compatibility
+#[allow(unused_imports)]
+pub use crate::clangd::index::LatchError as IndexingError;
 
 // ============================================================================
 // Internal State
@@ -56,8 +51,6 @@ struct IndexingState {
     status: IndexingStatus,
     /// Progress token from clangd (usually "backgroundIndexProgress")
     progress_token: Option<String>,
-    /// Channels to notify when indexing completes
-    completion_waiters: Vec<oneshot::Sender<Result<(), IndexingError>>>,
 }
 
 impl Default for IndexingState {
@@ -65,7 +58,6 @@ impl Default for IndexingState {
         Self {
             status: IndexingStatus::NotStarted,
             progress_token: None,
-            completion_waiters: Vec::new(),
         }
     }
 }
@@ -77,11 +69,13 @@ impl Default for IndexingState {
 /// Monitor for clangd indexing progress
 ///
 /// Listens to LSP progress notifications and provides async waiting capabilities
-/// for indexing completion.
+/// for indexing completion with single waiter enforcement and custom timeouts.
 #[derive(Clone)]
 pub struct IndexMonitor {
     /// Shared state protected by mutex
     state: Arc<Mutex<IndexingState>>,
+    /// Event latch for completion waiting
+    latch: IndexLatch,
 }
 
 impl IndexMonitor {
@@ -89,44 +83,45 @@ impl IndexMonitor {
     pub fn new() -> Self {
         Self {
             state: Arc::new(Mutex::new(IndexingState::default())),
+            latch: IndexLatch::new(),
         }
     }
 
     /// Create a notification handler that can be registered with LSP client
     ///
     /// Returns a handler that satisfies the 'static lifetime requirement
-    /// by capturing only the shared state Arc.
+    /// by capturing only the shared state Arc and latch.
     pub fn create_handler(&self) -> impl Fn(JsonRpcNotification) + Send + Sync + 'static {
         let state = Arc::clone(&self.state);
+        let latch = self.latch.clone();
         move |notification| {
             let state = Arc::clone(&state);
+            let latch = latch.clone();
             // Process notification in background to avoid blocking LSP transport
             tokio::spawn(async move {
-                Self::process_notification_internal(notification, state).await;
+                Self::process_notification_internal(notification, state, latch).await;
             });
         }
     }
 
-    /// Wait for indexing to complete
+    /// Wait for indexing to complete with default timeout
     ///
     /// Returns immediately if indexing is already complete, otherwise waits
-    /// until completion or failure.
-    pub async fn wait_for_indexing_completion(&self) -> Result<(), IndexingError> {
-        let mut state = self.state.lock().await;
+    /// until completion or failure. Uses default 30 second timeout.
+    /// Enforces single waiter constraint.
+    pub async fn wait_for_indexing_completion(&self) -> Result<(), LatchError> {
+        self.latch.wait_default().await
+    }
 
-        match &state.status {
-            IndexingStatus::Completed => Ok(()),
-            IndexingStatus::Failed(err) => Err(IndexingError::Failed(err.clone())),
-            _ => {
-                // Create a oneshot channel to wait for completion
-                let (sender, receiver) = oneshot::channel();
-                state.completion_waiters.push(sender);
-                drop(state); // Release lock before awaiting
-
-                // Wait for completion signal
-                receiver.await.map_err(|_| IndexingError::Cancelled)?
-            }
-        }
+    /// Wait for indexing to complete with custom timeout
+    ///
+    /// Returns immediately if indexing is already complete, otherwise waits
+    /// until completion or failure. Enforces single waiter constraint.
+    pub async fn wait_for_indexing_completion_with_timeout(
+        &self,
+        timeout: Duration,
+    ) -> Result<(), LatchError> {
+        self.latch.wait(timeout).await
     }
 
     /// Get current indexing progress without waiting
@@ -139,13 +134,15 @@ impl IndexMonitor {
     pub async fn reset(&self) {
         let mut state = self.state.lock().await;
         *state = IndexingState::default();
-        debug!("IndexMonitor: Reset indexing state");
+        self.latch.reset().await;
+        debug!("IndexMonitor: Reset indexing state and latch");
     }
 
     /// Internal notification processing
     async fn process_notification_internal(
         notification: JsonRpcNotification,
         state: Arc<Mutex<IndexingState>>,
+        latch: IndexLatch,
     ) {
         trace!(
             "IndexMonitor: Processing notification: {}",
@@ -157,7 +154,7 @@ impl IndexMonitor {
                 Self::handle_progress_create(notification.params, state).await;
             }
             lsp_types::notification::Progress::METHOD => {
-                Self::handle_progress_update(notification.params, state).await;
+                Self::handle_progress_update(notification.params, state, latch).await;
             }
             _ => {
                 // Not a progress notification we care about
@@ -182,7 +179,11 @@ impl IndexMonitor {
     }
 
     /// Handle $/progress notification
-    async fn handle_progress_update(params: Option<Value>, state: Arc<Mutex<IndexingState>>) {
+    async fn handle_progress_update(
+        params: Option<Value>,
+        state: Arc<Mutex<IndexingState>>,
+        latch: IndexLatch,
+    ) {
         if let Some(params) = params {
             let token = params.get("token").and_then(|t| t.as_str());
 
@@ -250,11 +251,10 @@ impl IndexMonitor {
                     Some("end") => {
                         let mut state = state.lock().await;
                         state.status = IndexingStatus::Completed;
+                        drop(state); // Release lock before triggering latch
 
-                        // Notify all waiters
-                        for sender in state.completion_waiters.drain(..) {
-                            let _ = sender.send(Ok(()));
-                        }
+                        // Trigger completion latch
+                        latch.trigger_success().await;
 
                         debug!("IndexMonitor: Indexing completed");
                     }
@@ -372,7 +372,7 @@ mod tests {
             }
         });
 
-        IndexMonitor::handle_progress_update(Some(params), state.clone()).await;
+        IndexMonitor::handle_progress_update(Some(params), state.clone(), IndexLatch::new()).await;
 
         let state = state.lock().await;
         if let IndexingStatus::InProgress {
@@ -400,17 +400,25 @@ mod tests {
             }
         });
 
-        IndexMonitor::handle_progress_update(Some(params), state.clone()).await;
+        let latch = IndexLatch::new();
+        IndexMonitor::handle_progress_update(Some(params), state.clone(), latch.clone()).await;
 
         let state = state.lock().await;
         assert_eq!(state.status, IndexingStatus::Completed);
+        drop(state); // Release lock before checking latch
+
+        // Check that latch was triggered
+        assert!(latch.is_completed().await);
     }
 
     #[tokio::test]
     async fn test_wait_for_completion_already_done() {
         let monitor = IndexMonitor::new();
 
-        // Set status to completed
+        // Trigger latch success
+        monitor.latch.trigger_success().await;
+
+        // Update status for consistency
         {
             let mut state = monitor.state.lock().await;
             state.status = IndexingStatus::Completed;
@@ -425,19 +433,60 @@ mod tests {
     async fn test_wait_for_completion_already_failed() {
         let monitor = IndexMonitor::new();
 
-        // Set status to failed
+        // Trigger latch failure
+        let error_msg = "test error".to_string();
+        monitor.latch.trigger_failure(error_msg.clone()).await;
+
+        // Update status for consistency
         {
             let mut state = monitor.state.lock().await;
-            state.status = IndexingStatus::Failed("test error".to_string());
+            state.status = IndexingStatus::Failed(error_msg.clone());
         }
 
         // Should return error immediately
         let result = monitor.wait_for_indexing_completion().await;
         assert!(result.is_err());
-        if let Err(IndexingError::Failed(msg)) = result {
-            assert_eq!(msg, "test error");
-        } else {
-            panic!("Expected Failed error");
+        match result {
+            Err(LatchError::IndexingFailed(msg)) => assert_eq!(msg, error_msg),
+            _ => panic!("Expected IndexingFailed error"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_single_waiter_enforcement() {
+        let monitor = IndexMonitor::new();
+
+        // Start first waiter
+        let monitor1 = monitor.clone();
+        let waiter1 = tokio::spawn(async move { monitor1.wait_for_indexing_completion().await });
+
+        // Give first waiter time to register
+        tokio::time::sleep(Duration::from_millis(10)).await;
+
+        // Second waiter should fail immediately
+        let result = monitor.wait_for_indexing_completion().await;
+        match result {
+            Err(LatchError::MultipleWaiters) => {} // Expected
+            _ => panic!("Expected MultipleWaiters error, got: {:?}", result),
+        }
+
+        // Trigger success for first waiter
+        monitor.latch.trigger_success().await;
+        let result1 = waiter1.await.unwrap();
+        assert!(result1.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_timeout_with_custom_duration() {
+        let monitor = IndexMonitor::new();
+
+        // Wait with short timeout, should timeout
+        let result = monitor
+            .wait_for_indexing_completion_with_timeout(Duration::from_millis(50))
+            .await;
+        match result {
+            Err(LatchError::Timeout) => {} // Expected
+            _ => panic!("Expected Timeout error, got: {:?}", result),
         }
     }
 }
@@ -501,7 +550,7 @@ mod integration_tests {
     }
 
     #[tokio::test]
-    async fn test_multiple_waiters() {
+    async fn test_single_waiter_enforcement() {
         // Create test project
         let test_project = TestProject::new().await.unwrap();
         test_project.cmake_configure().await.unwrap();
@@ -518,11 +567,16 @@ mod integration_tests {
         let mut session = ClangdSession::new(config).await.unwrap();
         let monitor = session.index_monitor();
 
-        // Start multiple waiters concurrently
+        // Start first waiter
         let waiter1 = tokio::spawn({
             let monitor = monitor.clone();
             async move { monitor.wait_for_indexing_completion().await }
         });
+
+        // Give first waiter time to register
+        tokio::time::sleep(Duration::from_millis(10)).await;
+
+        // Try to start additional waiters - these should fail with MultipleWaiters error
         let waiter2 = tokio::spawn({
             let monitor = monitor.clone();
             async move { monitor.wait_for_indexing_completion().await }
@@ -536,17 +590,25 @@ mod integration_tests {
         let main_cpp_path = test_project.project_root.join("src/main.cpp");
         session.ensure_file_ready(&main_cpp_path).await.unwrap();
 
-        // All waiters should complete successfully
+        // Wait for all tasks to complete
         let (result1, result2, result3) = tokio::time::timeout(Duration::from_secs(30), async {
             tokio::join!(waiter1, waiter2, waiter3)
         })
         .await
-        .expect("Timeout waiting for multiple waiters");
+        .expect("Timeout waiting for waiters");
 
-        // Check that all tasks completed successfully
-        result1.unwrap().unwrap(); // Task result -> IndexingError result
-        result2.unwrap().unwrap();
-        result3.unwrap().unwrap();
+        // First waiter should succeed
+        result1.unwrap().unwrap();
+
+        // Additional waiters should fail with MultipleWaiters error
+        match result2.unwrap() {
+            Err(LatchError::MultipleWaiters) => {} // Expected
+            other => panic!("Expected MultipleWaiters error, got: {:?}", other),
+        }
+        match result3.unwrap() {
+            Err(LatchError::MultipleWaiters) => {} // Expected
+            other => panic!("Expected MultipleWaiters error, got: {:?}", other),
+        }
 
         session.close().await.unwrap();
     }

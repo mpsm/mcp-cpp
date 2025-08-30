@@ -5,14 +5,13 @@
 
 use async_trait::async_trait;
 use std::path::PathBuf;
-use std::sync::Arc;
 use std::time::Instant;
 use tracing::{debug, info, warn};
 
 use crate::clangd::config::ClangdConfig;
 use crate::clangd::error::ClangdSessionError;
 use crate::clangd::file_manager::ClangdFileManager;
-use crate::clangd::index::{IndexMonitor, ProgressHandler};
+use crate::clangd::index::IndexMonitor;
 use crate::clangd::log_monitor::LogMonitor;
 use crate::clangd::session_builder::ClangdSessionBuilder;
 use crate::io::{ChildProcessManager, ProcessManager, StderrMonitor, StdioTransport, StopMode};
@@ -94,9 +93,6 @@ where
 
     /// Session start timestamp
     started_at: Instant,
-
-    /// External progress handler (genuinely optional)
-    progress_handler: Option<Arc<dyn ProgressHandler>>,
 }
 
 impl<P, C> ClangdSession<P, C>
@@ -126,7 +122,6 @@ where
             index_monitor,
             log_monitor,
             started_at,
-            progress_handler: None,
         }
     }
 }
@@ -194,12 +189,6 @@ where
     /// Get reference to the indexing monitor
     pub fn index_monitor(&self) -> &IndexMonitor {
         &self.index_monitor
-    }
-
-    /// Set a progress handler for indexing events
-    pub fn set_progress_handler(&mut self, handler: Arc<dyn ProgressHandler>) {
-        self.progress_handler = Some(handler.clone());
-        self.log_monitor.set_handler(handler);
     }
 
     /// Get reference to the log monitor

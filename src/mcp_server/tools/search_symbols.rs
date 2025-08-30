@@ -32,7 +32,7 @@ use tracing::{info, instrument};
 use crate::clangd::session::{ClangdSession, ClangdSessionTrait};
 use crate::mcp_server::tools::lsp_helpers::document_symbols::SymbolSearchBuilder;
 use crate::mcp_server::tools::lsp_helpers::workspace_symbols::WorkspaceSymbolSearchBuilder;
-use crate::project::{ProjectComponent, ProjectWorkspace};
+use crate::project::{ProjectComponent, ProjectWorkspace, index::IndexSession};
 use crate::symbol::Symbol;
 
 /// Search result structure for search_symbols tool
@@ -93,9 +93,10 @@ pub struct SearchSymbolsTool {
 }
 
 impl SearchSymbolsTool {
-    #[instrument(name = "search_symbols", skip(self, session, workspace))]
+    #[instrument(name = "search_symbols", skip(self, index_session, session, workspace))]
     pub async fn call_tool(
         &self,
+        index_session: IndexSession<'_>,
         session: Arc<Mutex<ClangdSession>>,
         workspace: &ProjectWorkspace,
     ) -> Result<CallToolResult, CallToolError> {
@@ -126,8 +127,10 @@ impl SearchSymbolsTool {
 
         let mut session_guard = session.lock().await;
 
-        // Wait for clangd indexing to complete before searching
-        super::utils::wait_for_indexing(session_guard.index_monitor(), None).await;
+        // Ensure indexing completion before searching
+        index_session.ensure_indexed().await.map_err(|e| {
+            CallToolError::new(std::io::Error::other(format!("Indexing failed: {}", e)))
+        })?;
 
         // Get the component for this session's build directory
         let build_dir = session_guard.build_directory();

@@ -11,7 +11,7 @@ use super::tools::analyze_symbols::AnalyzeSymbolContextTool;
 use super::tools::project_tools::GetProjectDetailsTool;
 use super::tools::search_symbols::SearchSymbolsTool;
 use crate::io::file_manager::RealFileBufferManager;
-use crate::project::{ProjectError, ProjectWorkspace, WorkspaceSession};
+use crate::project::{ProjectError, ProjectWorkspace, WorkspaceSession, index::IndexSession};
 use crate::register_tools;
 use crate::{log_mcp_message, log_timing};
 use std::path::PathBuf;
@@ -68,7 +68,7 @@ impl McpToolHandler<SearchSymbolsTool> for CppServerHandler {
 
         let clangd_session = self
             .workspace_session
-            .get_or_create_session(build_dir)
+            .get_or_create_session(build_dir.clone())
             .await
             .map_err(|e| {
                 CallToolError::new(std::io::Error::other(format!(
@@ -77,7 +77,10 @@ impl McpToolHandler<SearchSymbolsTool> for CppServerHandler {
                 )))
             })?;
 
-        tool.call_tool(clangd_session, &self.project_workspace)
+        let index_session = IndexSession::new(&self.workspace_session, build_dir)
+            .with_timeout(std::time::Duration::from_secs(30));
+
+        tool.call_tool(index_session, clangd_session, &self.project_workspace)
             .await
     }
 }
@@ -93,7 +96,7 @@ impl McpToolHandler<AnalyzeSymbolContextTool> for CppServerHandler {
 
         let clangd_session = self
             .workspace_session
-            .get_or_create_session(build_dir)
+            .get_or_create_session(build_dir.clone())
             .await
             .map_err(|e| {
                 CallToolError::new(std::io::Error::other(format!(
@@ -102,7 +105,11 @@ impl McpToolHandler<AnalyzeSymbolContextTool> for CppServerHandler {
                 )))
             })?;
 
+        let index_session = IndexSession::new(&self.workspace_session, build_dir)
+            .with_timeout(std::time::Duration::from_secs(30));
+
         tool.call_tool(
+            index_session,
             clangd_session,
             &self.project_workspace,
             self.file_buffer_manager.clone(),

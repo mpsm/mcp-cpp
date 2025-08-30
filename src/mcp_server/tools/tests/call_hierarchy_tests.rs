@@ -6,7 +6,7 @@
 
 use crate::io::file_manager::RealFileBufferManager;
 use crate::mcp_server::tools::analyze_symbols::{AnalyzeSymbolContextTool, AnalyzerResult};
-use crate::project::{ProjectScanner, WorkspaceSession};
+use crate::project::{ProjectScanner, WorkspaceSession, index::IndexSession};
 use crate::test_utils::integration::TestProject;
 use std::sync::Arc;
 use tokio::sync::Mutex;
@@ -44,8 +44,9 @@ async fn test_analyzer_call_hierarchy_function() {
         location_hint: None,
     };
 
+    let index_session = IndexSession::new(&workspace_session, test_project.build_dir.clone());
     let result = tool
-        .call_tool(session, &workspace, file_buffer_manager)
+        .call_tool(index_session, session, &workspace, file_buffer_manager)
         .await;
 
     assert!(result.is_ok());
@@ -114,8 +115,9 @@ async fn test_analyzer_call_hierarchy_method() {
         location_hint: None,
     };
 
+    let index_session = IndexSession::new(&workspace_session, test_project.build_dir.clone());
     let result = tool
-        .call_tool(session, &workspace, file_buffer_manager)
+        .call_tool(index_session, session, &workspace, file_buffer_manager)
         .await;
 
     assert!(result.is_ok());
@@ -183,8 +185,9 @@ async fn test_analyzer_call_hierarchy_non_function() {
         location_hint: None,
     };
 
+    let index_session = IndexSession::new(&workspace_session, test_project.build_dir.clone());
     let result = tool
-        .call_tool(session, &workspace, file_buffer_manager)
+        .call_tool(index_session, session, &workspace, file_buffer_manager)
         .await;
 
     assert!(result.is_ok());
@@ -260,8 +263,14 @@ async fn test_analyzer_call_hierarchy_coherence() {
         location_hint: Some(variance_location),
     };
 
+    let index_session = IndexSession::new(&workspace_session, test_project.build_dir.clone());
     let variance_result = variance_tool
-        .call_tool(session_arc.clone(), &workspace, file_buffer_manager.clone())
+        .call_tool(
+            index_session,
+            session_arc.clone(),
+            &workspace,
+            file_buffer_manager.clone(),
+        )
         .await
         .expect("Failed to analyze variance");
 
@@ -291,8 +300,14 @@ async fn test_analyzer_call_hierarchy_coherence() {
         location_hint: None,
     };
 
+    let index_session = IndexSession::new(&workspace_session, test_project.build_dir.clone());
     let mean_result = mean_tool
-        .call_tool(session_arc.clone(), &workspace, file_buffer_manager.clone())
+        .call_tool(
+            index_session,
+            session_arc.clone(),
+            &workspace,
+            file_buffer_manager.clone(),
+        )
         .await
         .expect("Failed to analyze mean");
 
@@ -322,8 +337,14 @@ async fn test_analyzer_call_hierarchy_coherence() {
         location_hint: None,
     };
 
+    let index_session = IndexSession::new(&workspace_session, test_project.build_dir.clone());
     let std_dev_result = std_dev_tool
-        .call_tool(session_arc.clone(), &workspace, file_buffer_manager.clone())
+        .call_tool(
+            index_session,
+            session_arc.clone(),
+            &workspace,
+            file_buffer_manager.clone(),
+        )
         .await
         .expect("Failed to analyze standardDeviation");
 

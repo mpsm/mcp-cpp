@@ -6,7 +6,7 @@
 
 use crate::io::file_manager::RealFileBufferManager;
 use crate::mcp_server::tools::analyze_symbols::{AnalyzeSymbolContextTool, AnalyzerResult};
-use crate::project::{ProjectScanner, WorkspaceSession};
+use crate::project::{ProjectScanner, WorkspaceSession, index::IndexSession};
 use crate::test_utils::integration::TestProject;
 use std::sync::Arc;
 use tokio::sync::Mutex;
@@ -44,8 +44,9 @@ async fn test_analyzer_type_hierarchy_interface() {
         location_hint: None,
     };
 
+    let index_session = IndexSession::new(&workspace_session, test_project.build_dir.clone());
     let result = tool
-        .call_tool(session, &workspace, file_buffer_manager)
+        .call_tool(index_session, session, &workspace, file_buffer_manager)
         .await;
 
     assert!(result.is_ok());
@@ -112,8 +113,9 @@ async fn test_analyzer_type_hierarchy_derived_class() {
         location_hint: None,
     };
 
+    let index_session = IndexSession::new(&workspace_session, test_project.build_dir.clone());
     let result = tool
-        .call_tool(session, &workspace, file_buffer_manager)
+        .call_tool(index_session, session, &workspace, file_buffer_manager)
         .await;
 
     assert!(result.is_ok());
@@ -178,8 +180,9 @@ async fn test_analyzer_type_hierarchy_non_class() {
         location_hint: None,
     };
 
+    let index_session = IndexSession::new(&workspace_session, test_project.build_dir.clone());
     let result = tool
-        .call_tool(session, &workspace, file_buffer_manager)
+        .call_tool(index_session, session, &workspace, file_buffer_manager)
         .await;
 
     assert!(result.is_ok());

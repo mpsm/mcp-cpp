@@ -5,7 +5,7 @@
 //! finding symbols, handling multiple matches, and no-match cases.
 
 use crate::mcp_server::tools::lsp_helpers::symbol_resolution::get_matching_symbol;
-use crate::project::{ProjectScanner, WorkspaceSession};
+use crate::project::{ProjectScanner, WorkspaceSession, index::IndexSession};
 use crate::test_utils::integration::TestProject;
 use tracing::info;
 
@@ -31,10 +31,11 @@ async fn test_symbol_resolution_single_match() {
         .await
         .expect("Failed to create session");
 
-    let mut locked_session = session.lock().await;
+    // Ensure indexing completion using IndexSession
+    let index_session = IndexSession::new(&workspace_session, test_project.build_dir.clone());
+    index_session.ensure_indexed().await.unwrap();
 
-    // Wait for clangd indexing to complete before searching
-    crate::mcp_server::tools::utils::wait_for_indexing(locked_session.index_monitor(), None).await;
+    let mut locked_session = session.lock().await;
 
     // Test finding a unique symbol
     let result = get_matching_symbol("Math", &mut locked_session).await;
@@ -69,10 +70,11 @@ async fn test_symbol_resolution_function() {
         .await
         .expect("Failed to create session");
 
-    let mut locked_session = session.lock().await;
+    // Ensure indexing completion using IndexSession
+    let index_session = IndexSession::new(&workspace_session, test_project.build_dir.clone());
+    index_session.ensure_indexed().await.unwrap();
 
-    // Wait for clangd indexing to complete before searching
-    crate::mcp_server::tools::utils::wait_for_indexing(locked_session.index_monitor(), None).await;
+    let mut locked_session = session.lock().await;
 
     // Test finding a function symbol
     let result = get_matching_symbol("factorial", &mut locked_session).await;
@@ -107,10 +109,11 @@ async fn test_symbol_resolution_no_match() {
         .await
         .expect("Failed to create session");
 
-    let mut locked_session = session.lock().await;
+    // Ensure indexing completion using IndexSession
+    let index_session = IndexSession::new(&workspace_session, test_project.build_dir.clone());
+    index_session.ensure_indexed().await.unwrap();
 
-    // Wait for clangd indexing to complete before searching
-    crate::mcp_server::tools::utils::wait_for_indexing(locked_session.index_monitor(), None).await;
+    let mut locked_session = session.lock().await;
 
     // Test searching for a non-existent symbol
     let result = get_matching_symbol("NonExistentSymbol", &mut locked_session).await;
@@ -147,10 +150,11 @@ async fn test_symbol_resolution_qualified_name() {
         .await
         .expect("Failed to create session");
 
-    let mut locked_session = session.lock().await;
+    // Ensure indexing completion using IndexSession
+    let index_session = IndexSession::new(&workspace_session, test_project.build_dir.clone());
+    index_session.ensure_indexed().await.unwrap();
 
-    // Wait for clangd indexing to complete before searching
-    crate::mcp_server::tools::utils::wait_for_indexing(locked_session.index_monitor(), None).await;
+    let mut locked_session = session.lock().await;
 
     // Test finding a qualified symbol name
     let result = get_matching_symbol("Math::Complex::add", &mut locked_session).await;

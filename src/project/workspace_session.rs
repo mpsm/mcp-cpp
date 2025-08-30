@@ -21,6 +21,10 @@ use crate::project::index::state::IndexState;
 use crate::project::index::storage::IndexStorage;
 use crate::project::index::storage::filesystem::FilesystemIndexStorage;
 use crate::project::{ProjectError, ProjectWorkspace};
+use tokio::sync::mpsc;
+
+/// Channel buffer size for progress event processing
+const PROGRESS_CHANNEL_BUFFER_SIZE: usize = 10_000;
 
 /// Manages ClangdSession instances for a project workspace with index tracking
 ///
@@ -56,11 +60,26 @@ impl WorkspaceSession {
             clangd_version.major, clangd_version.minor, clangd_version.patch
         );
 
+        // Initialize IndexState for all components to enable immediate coverage reporting
+        let mut index_states = HashMap::new();
+        for component in &workspace.components {
+            let index_state = IndexState::from_compilation_db(&component.compilation_database)
+                .map_err(|e| {
+                    ProjectError::SessionCreation(format!(
+                        "Failed to create index state for {}: {}",
+                        component.build_dir_path.display(),
+                        e
+                    ))
+                })?;
+
+            index_states.insert(component.build_dir_path.clone(), index_state);
+        }
+
         Ok(Self {
             workspace,
             sessions: Arc::new(Mutex::new(HashMap::new())),
             clangd_path,
-            index_states: Arc::new(Mutex::new(HashMap::new())),
+            index_states: Arc::new(Mutex::new(index_states)),
             index_readers: Arc::new(Mutex::new(HashMap::new())),
             clangd_version,
         })
@@ -123,9 +142,27 @@ impl WorkspaceSession {
             .build()
             .map_err(|e| ProjectError::SessionCreation(format!("Failed to build config: {}", e)))?;
 
-        // Create session using builder
+        // Initialize progress event channel for index state tracking
+        let (progress_tx, mut progress_rx) = mpsc::channel(PROGRESS_CHANNEL_BUFFER_SIZE);
+
+        // Launch background processor for progress events
+        let index_states = Arc::clone(&self.index_states);
+        let build_dir_clone = build_dir.clone();
+        tokio::spawn(async move {
+            while let Some(event) = progress_rx.recv().await {
+                Self::handle_progress_event_async(
+                    Arc::clone(&index_states),
+                    build_dir_clone.clone(),
+                    event,
+                )
+                .await;
+            }
+        });
+
+        // Construct ClangdSession with progress event integration
         let session = ClangdSessionBuilder::new()
             .with_config(config)
+            .with_progress_sender(progress_tx)
             .build()
             .await
             .map_err(|e| {
@@ -137,10 +174,6 @@ impl WorkspaceSession {
 
         // Initialize index components for this build directory first
         self.initialize_index_components(&build_dir).await?;
-
-        // Register progress event handler to update IndexState
-        self.register_progress_handler(&build_dir, Arc::clone(&session_arc))
-            .await?;
 
         // Trigger clangd indexing by opening a representative source file.
         // clangd requires at least one textDocument/didOpen to initiate background indexing.
@@ -177,18 +210,7 @@ impl WorkspaceSession {
 
     /// Initialize index components for a build directory
     async fn initialize_index_components(&self, build_dir: &Path) -> Result<(), ProjectError> {
-        let component = self
-            .workspace
-            .get_component_by_build_dir(&build_dir.to_path_buf())
-            .ok_or_else(|| {
-                ProjectError::SessionCreation("Component not found for build directory".to_string())
-            })?;
-
-        // Initialize index state from compilation database
-        let index_state = IndexState::from_compilation_db(&component.compilation_database)
-            .map_err(|e| {
-                ProjectError::SessionCreation(format!("Failed to create index state: {}", e))
-            })?;
+        // Create IndexReader for build directory (IndexState initialized during construction)
 
         // Create filesystem index storage for clangd index files
         let index_directory = build_dir.join(".cache/clangd/index");
@@ -208,19 +230,14 @@ impl WorkspaceSession {
 
         let index_reader = IndexReader::new(storage, self.clangd_version.clone());
 
-        // Store components
-        {
-            let mut states = self.index_states.lock().await;
-            states.insert(build_dir.to_path_buf(), index_state);
-        }
-
+        // Register IndexReader for build directory operations
         {
             let mut readers = self.index_readers.lock().await;
             readers.insert(build_dir.to_path_buf(), index_reader);
         }
 
         debug!(
-            "Initialized index components for build dir: {}",
+            "Initialized index reader for build dir: {}",
             build_dir.display()
         );
         Ok(())
@@ -231,42 +248,6 @@ impl WorkspaceSession {
     pub async fn get_indexing_coverage(&self, build_dir: &Path) -> Option<f32> {
         let states = self.index_states.lock().await;
         states.get(build_dir).map(|state| state.coverage())
-    }
-
-    /// Register progress event handler for a build directory
-    async fn register_progress_handler(
-        &self,
-        build_dir: &Path,
-        session: Arc<Mutex<ClangdSession>>,
-    ) -> Result<(), ProjectError> {
-        use crate::clangd::index::{ProgressEvent, ProgressHandler};
-        use std::sync::Arc;
-
-        // Create a progress handler that updates our IndexState
-        let index_states = Arc::clone(&self.index_states);
-        let build_dir_clone = build_dir.to_path_buf();
-
-        let handler = Arc::new(move |event: ProgressEvent| {
-            let index_states = Arc::clone(&index_states);
-            let build_dir = build_dir_clone.clone();
-
-            tokio::spawn(async move {
-                Self::handle_progress_event_async(index_states, build_dir, event).await;
-            });
-        }) as Arc<dyn ProgressHandler>;
-
-        // Register the handler with the session
-        {
-            let mut session_guard = session.lock().await;
-            session_guard.set_progress_handler(handler);
-        }
-
-        debug!(
-            "Progress event handler registered for build dir: {}",
-            build_dir.display()
-        );
-
-        Ok(())
     }
 
     /// Handle progress events asynchronously with proper error handling
@@ -346,27 +327,44 @@ impl WorkspaceSession {
         }
     }
 
-    /// Wait for indexing completion with coverage assurance
+    /// Wait for indexing completion with coverage assurance using default timeout
+    ///
+    /// This method waits for clangd to complete indexing and ensures that all files
+    /// in the compilation database have been indexed. If coverage is incomplete after
+    /// initial indexing, it will trigger indexing for unindexed files.
+    /// Uses a default 5 minute timeout.
+    #[allow(dead_code)]
+    pub async fn wait_for_indexing_completion(&self, build_dir: &Path) -> Result<(), ProjectError> {
+        const DEFAULT_INDEXING_TIMEOUT: Duration = Duration::from_secs(300);
+        self.wait_for_indexing_completion_with_timeout(build_dir, DEFAULT_INDEXING_TIMEOUT)
+            .await
+    }
+
+    /// Wait for indexing completion with coverage assurance using custom timeout
     ///
     /// This method waits for clangd to complete indexing and ensures that all files
     /// in the compilation database have been indexed. If coverage is incomplete after
     /// initial indexing, it will trigger indexing for unindexed files.
     #[allow(dead_code)]
-    pub async fn wait_for_indexing_completion(&self, build_dir: &Path) -> Result<(), ProjectError> {
-        const INDEXING_TIMEOUT: Duration = Duration::from_secs(300); // 5 minutes for large codebases
+    pub async fn wait_for_indexing_completion_with_timeout(
+        &self,
+        build_dir: &Path,
+        timeout: Duration,
+    ) -> Result<(), ProjectError> {
         let start_time = tokio::time::Instant::now();
 
         let session = self.get_session_for_build_dir(build_dir).await?;
         info!(
-            "Waiting for indexing completion for build dir: {}",
-            build_dir.display()
+            "Waiting for indexing completion for build dir: {} (timeout: {:?})",
+            build_dir.display(),
+            timeout
         );
 
         // Wait for initial indexing completion
-        self.wait_for_initial_indexing(&session).await?;
+        self.wait_for_initial_indexing(&session, timeout).await?;
 
         // Ensure complete coverage
-        self.ensure_complete_indexing(build_dir, &session, start_time, INDEXING_TIMEOUT)
+        self.ensure_complete_indexing(build_dir, &session, start_time, timeout)
             .await?;
 
         Ok(())
@@ -386,15 +384,16 @@ impl WorkspaceSession {
         })
     }
 
-    /// Wait for initial indexing to complete
+    /// Wait for initial indexing to complete with custom timeout
     async fn wait_for_initial_indexing(
         &self,
         session: &Arc<Mutex<ClangdSession>>,
+        timeout: Duration,
     ) -> Result<(), ProjectError> {
         let session_guard = session.lock().await;
         session_guard
             .index_monitor()
-            .wait_for_indexing_completion()
+            .wait_for_indexing_completion_with_timeout(timeout)
             .await
             .map_err(|e| {
                 ProjectError::IndexingTimeout(format!("Initial indexing wait failed: {}", e))
@@ -455,9 +454,11 @@ impl WorkspaceSession {
         if let Err(e) = session_guard.ensure_file_ready(file).await {
             warn!("Failed to trigger indexing for file {:?}: {}", file, e);
         } else {
+            // Apply reduced timeout for individual file indexing operations
+            let file_timeout = Duration::from_secs(60);
             session_guard
                 .index_monitor()
-                .wait_for_indexing_completion()
+                .wait_for_indexing_completion_with_timeout(file_timeout)
                 .await
                 .map_err(|e| {
                     ProjectError::IndexingTimeout(format!("File indexing wait failed: {}", e))
