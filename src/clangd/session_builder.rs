@@ -8,7 +8,7 @@ use tracing::{debug, info};
 use crate::clangd::config::ClangdConfig;
 use crate::clangd::error::ClangdSessionError;
 use crate::clangd::file_manager::ClangdFileManager;
-use crate::clangd::index::{IndexMonitor, ProgressEvent};
+use crate::clangd::index::{IndexLatch, IndexProgressMonitor, ProgressEvent};
 use crate::clangd::log_monitor::LogMonitor;
 use crate::clangd::session::ClangdSession;
 use crate::io::{ChildProcessManager, ProcessManager, StderrMonitor, StdioTransport};
@@ -149,14 +149,16 @@ impl ClangdSessionBuilder<HasConfig, NoProcessManager, NoLspClient> {
 
         let mut lsp_client =
             Self::create_lsp_client(&config, process_manager.create_stdio_transport()?).await?;
-        let index_monitor =
+        let index_progress_monitor =
             Self::setup_monitoring(&mut lsp_client, self.progress_sender.clone()).await;
+        let index_latch = IndexLatch::new();
 
         Self::finalize_session(
             config,
             process_manager,
             lsp_client,
-            index_monitor,
+            index_progress_monitor,
+            index_latch,
             log_monitor,
         )
     }
@@ -175,11 +177,12 @@ where
         let lsp_client = self.lsp_client.unwrap(); // Safe: C != NoLspClient guarantees this
 
         let file_manager = ClangdFileManager::new();
-        let index_monitor = if let Some(ref progress_sender) = self.progress_sender {
-            IndexMonitor::with_sender(progress_sender.clone())
+        let index_progress_monitor = if let Some(ref progress_sender) = self.progress_sender {
+            IndexProgressMonitor::with_sender(progress_sender.clone())
         } else {
-            IndexMonitor::new()
+            IndexProgressMonitor::new()
         };
+        let index_latch = IndexLatch::new();
         let log_monitor = if let Some(progress_sender) = self.progress_sender {
             LogMonitor::with_sender(progress_sender)
         } else {
@@ -191,7 +194,8 @@ where
             process_manager,
             lsp_client,
             file_manager,
-            index_monitor,
+            index_progress_monitor,
+            index_latch,
             log_monitor,
         );
 
@@ -275,14 +279,14 @@ impl ClangdSessionBuilder<HasConfig, NoProcessManager, NoLspClient> {
     async fn setup_monitoring(
         lsp_client: &mut LspClient<StdioTransport>,
         progress_sender: Option<mpsc::Sender<ProgressEvent>>,
-    ) -> IndexMonitor {
-        debug!("Creating and wiring IndexMonitor");
-        let index_monitor = if let Some(sender) = progress_sender {
-            IndexMonitor::with_sender(sender)
+    ) -> IndexProgressMonitor {
+        debug!("Creating and wiring IndexProgressMonitor");
+        let index_progress_monitor = if let Some(sender) = progress_sender {
+            IndexProgressMonitor::with_sender(sender)
         } else {
-            IndexMonitor::new()
+            IndexProgressMonitor::new()
         };
-        let notification_handler = index_monitor.create_handler();
+        let notification_handler = index_progress_monitor.create_handler();
         lsp_client
             .register_notification_handler(notification_handler)
             .await;
@@ -291,8 +295,8 @@ impl ClangdSessionBuilder<HasConfig, NoProcessManager, NoLspClient> {
             .register_request_handler(Self::create_request_handler())
             .await;
 
-        debug!("IndexMonitor and request handler wired successfully");
-        index_monitor
+        debug!("IndexProgressMonitor and request handler wired successfully");
+        index_progress_monitor
     }
 
     /// Create the standard LSP request handler
@@ -323,7 +327,8 @@ impl ClangdSessionBuilder<HasConfig, NoProcessManager, NoLspClient> {
         config: ClangdConfig,
         process_manager: ChildProcessManager,
         lsp_client: LspClient<StdioTransport>,
-        index_monitor: IndexMonitor,
+        index_progress_monitor: IndexProgressMonitor,
+        index_latch: IndexLatch,
         log_monitor: LogMonitor,
     ) -> Result<ClangdSession<ChildProcessManager, LspClient<StdioTransport>>, ClangdSessionError>
     {
@@ -336,7 +341,8 @@ impl ClangdSessionBuilder<HasConfig, NoProcessManager, NoLspClient> {
             process_manager,
             lsp_client,
             file_manager,
-            index_monitor,
+            index_progress_monitor,
+            index_latch,
             log_monitor,
         );
 

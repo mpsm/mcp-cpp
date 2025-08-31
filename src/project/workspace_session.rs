@@ -12,7 +12,7 @@ use tokio::sync::Mutex;
 use tracing::{debug, info, instrument, trace, warn};
 
 use crate::clangd::config::DEFAULT_WORKSPACE_SYMBOL_LIMIT;
-use crate::clangd::index::ProgressEvent;
+use crate::clangd::index::{IndexLatch, ProgressEvent};
 use crate::clangd::version::ClangdVersion;
 use crate::clangd::{ClangdConfigBuilder, ClangdSession, ClangdSessionBuilder};
 use crate::io::file_system::RealFileSystem;
@@ -43,6 +43,8 @@ pub struct WorkspaceSession {
     index_states: Arc<Mutex<HashMap<PathBuf, IndexState>>>,
     /// Index readers for each build directory
     index_readers: Arc<Mutex<HashMap<PathBuf, IndexReader>>>,
+    /// Index latches for each build directory
+    index_latches: Arc<Mutex<HashMap<PathBuf, IndexLatch>>>,
     /// Clangd version information
     clangd_version: ClangdVersion,
 }
@@ -81,6 +83,7 @@ impl WorkspaceSession {
             clangd_path,
             index_states: Arc::new(Mutex::new(index_states)),
             index_readers: Arc::new(Mutex::new(HashMap::new())),
+            index_latches: Arc::new(Mutex::new(HashMap::new())),
             clangd_version,
         })
     }
@@ -147,11 +150,13 @@ impl WorkspaceSession {
 
         // Launch background processor for progress events
         let index_states = Arc::clone(&self.index_states);
+        let index_latches = Arc::clone(&self.index_latches);
         let build_dir_clone = build_dir.clone();
         tokio::spawn(async move {
             while let Some(event) = progress_rx.recv().await {
                 Self::handle_progress_event_async(
                     Arc::clone(&index_states),
+                    Arc::clone(&index_latches),
                     build_dir_clone.clone(),
                     event,
                 )
@@ -171,6 +176,12 @@ impl WorkspaceSession {
 
         // Wrap in Arc<Mutex> for sharing
         let session_arc = Arc::new(Mutex::new(session));
+
+        // Create index latch for this build directory
+        {
+            let mut latches = self.index_latches.lock().await;
+            latches.insert(build_dir.clone(), IndexLatch::new());
+        }
 
         // Initialize index components for this build directory first
         self.initialize_index_components(&build_dir).await?;
@@ -260,6 +271,7 @@ impl WorkspaceSession {
     /// Handle progress events asynchronously with proper error handling
     async fn handle_progress_event_async(
         index_states: Arc<Mutex<HashMap<PathBuf, IndexState>>>,
+        index_latches: Arc<Mutex<HashMap<PathBuf, IndexLatch>>>,
         build_dir: PathBuf,
         event: ProgressEvent,
     ) {
@@ -329,6 +341,19 @@ impl WorkspaceSession {
                     "Overall indexing completed for build directory: {}",
                     build_dir.display()
                 );
+
+                // Trigger completion latch
+                if let Ok(latches) = index_latches.try_lock() {
+                    if let Some(latch) = latches.get(&build_dir) {
+                        latch.trigger_success().await;
+                        debug!(
+                            "Triggered completion latch for build directory: {}",
+                            build_dir.display()
+                        );
+                    }
+                } else {
+                    warn!("Could not acquire lock on index latches to trigger completion");
+                }
             }
             ProgressEvent::IndexingFailed { error } => {
                 warn!(
@@ -336,6 +361,19 @@ impl WorkspaceSession {
                     build_dir.display(),
                     error
                 );
+
+                // Trigger failure latch
+                if let Ok(latches) = index_latches.try_lock() {
+                    if let Some(latch) = latches.get(&build_dir) {
+                        latch.trigger_failure(error.clone()).await;
+                        debug!(
+                            "Triggered failure latch for build directory: {}",
+                            build_dir.display()
+                        );
+                    }
+                } else {
+                    warn!("Could not acquire lock on index latches to trigger failure");
+                }
             }
         }
     }
@@ -374,7 +412,7 @@ impl WorkspaceSession {
         );
 
         // Wait for initial indexing completion
-        self.wait_for_initial_indexing(&session, timeout).await?;
+        self.wait_for_initial_indexing(build_dir, timeout).await?;
 
         // Ensure complete coverage
         self.ensure_complete_indexing(build_dir, &session, start_time, timeout)
@@ -400,17 +438,21 @@ impl WorkspaceSession {
     /// Wait for initial indexing to complete with custom timeout
     async fn wait_for_initial_indexing(
         &self,
-        session: &Arc<Mutex<ClangdSession>>,
+        build_dir: &Path,
         timeout: Duration,
     ) -> Result<(), ProjectError> {
-        let session_guard = session.lock().await;
-        session_guard
-            .index_monitor()
-            .wait_for_indexing_completion_with_timeout(timeout)
-            .await
-            .map_err(|e| {
-                ProjectError::IndexingTimeout(format!("Initial indexing wait failed: {}", e))
-            })
+        let latches = self.index_latches.lock().await;
+        let Some(latch) = latches.get(build_dir) else {
+            return Err(ProjectError::IndexingTimeout(
+                "No latch found for build directory".to_string(),
+            ));
+        };
+        let latch = latch.clone();
+        drop(latches); // Release lock before waiting
+
+        latch.wait(timeout).await.map_err(|e| {
+            ProjectError::IndexingTimeout(format!("Initial indexing wait failed: {}", e))
+        })
     }
 
     /// Get unindexed files for a build directory  
@@ -450,7 +492,7 @@ impl WorkspaceSession {
             debug!("Found {} unindexed files remaining", unindexed_files.len());
 
             if let Some(file) = unindexed_files.first() {
-                self.trigger_file_indexing(session, file).await?;
+                self.trigger_file_indexing(build_dir, session, file).await?;
             }
         }
     }
@@ -458,6 +500,7 @@ impl WorkspaceSession {
     /// Trigger indexing for a specific file
     async fn trigger_file_indexing(
         &self,
+        build_dir: &Path,
         session: &Arc<Mutex<ClangdSession>>,
         file: &Path,
     ) -> Result<(), ProjectError> {
@@ -469,13 +512,20 @@ impl WorkspaceSession {
         } else {
             // Apply reduced timeout for individual file indexing operations
             let file_timeout = Duration::from_secs(60);
-            session_guard
-                .index_monitor()
-                .wait_for_indexing_completion_with_timeout(file_timeout)
-                .await
-                .map_err(|e| {
-                    ProjectError::IndexingTimeout(format!("File indexing wait failed: {}", e))
-                })?;
+
+            // Get latch and wait for indexing completion
+            let latches = self.index_latches.lock().await;
+            let Some(latch) = latches.get(build_dir) else {
+                return Err(ProjectError::IndexingTimeout(
+                    "No latch found for build directory".to_string(),
+                ));
+            };
+            let latch = latch.clone();
+            drop(latches); // Release lock before waiting
+
+            latch.wait(file_timeout).await.map_err(|e| {
+                ProjectError::IndexingTimeout(format!("File indexing wait failed: {}", e))
+            })?;
         }
 
         Ok(())
@@ -511,17 +561,22 @@ impl WorkspaceSession {
             stats.compilation_db_indexed, stats.compilation_db_files
         );
 
-        // Access sessions to trigger appropriate action
-        let sessions = self.sessions.lock().await;
-        if let Some(session) = sessions.get(build_dir) {
-            let mut session_guard = session.lock().await;
-            if stats.is_complete() {
-                // All files indexed - trigger completion latch
-                let monitor = session_guard.index_monitor();
-                monitor.mark_complete_from_disk().await;
-                debug!("Triggered IndexMonitor completion: all files already indexed");
-            } else {
-                // Some files need indexing - get unindexed files and trigger on first
+        // Trigger appropriate action based on completion status
+        if stats.is_complete() {
+            // All files indexed - trigger completion latch
+            let latches = self.index_latches.lock().await;
+            if let Some(latch) = latches.get(build_dir) {
+                latch.trigger_success().await;
+                debug!(
+                    "Triggered completion latch: all files already indexed for {}",
+                    build_dir.display()
+                );
+            }
+        } else {
+            // Some files need indexing - get unindexed files and trigger on first
+            let sessions = self.sessions.lock().await;
+            if let Some(session) = sessions.get(build_dir) {
+                let mut session_guard = session.lock().await;
                 let unindexed_files = {
                     let index_states = self.index_states.lock().await;
                     let Some(index_state) = index_states.get(build_dir) else {
@@ -551,6 +606,13 @@ impl WorkspaceSession {
         }
 
         Ok(())
+    }
+
+    /// Get latch for a build directory to wait for indexing completion
+    #[allow(dead_code)]
+    pub async fn get_index_latch(&self, build_dir: &Path) -> Option<IndexLatch> {
+        let latches = self.index_latches.lock().await;
+        latches.get(build_dir).cloned()
     }
 
     /// Get dependencies needed for index refresh

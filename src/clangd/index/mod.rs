@@ -6,10 +6,10 @@
 
 pub mod hash;
 pub mod latch;
-pub mod monitor;
 pub mod progress_events;
+pub mod progress_monitor;
 pub mod project_index;
 
 pub use latch::{IndexLatch, LatchError};
-pub use monitor::IndexMonitor;
 pub use progress_events::ProgressEvent;
+pub use progress_monitor::IndexProgressMonitor;

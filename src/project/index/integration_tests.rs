@@ -49,7 +49,6 @@ async fn test_indexing_progress_tracking_with_real_clangd() {
         session
             .lock()
             .await
-            .index_monitor()
             .wait_for_indexing_completion()
             .await
     })
