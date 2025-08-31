@@ -133,8 +133,8 @@ impl ClangdSessionBuilder<HasConfig, NoProcessManager, NoLspClient> {
 
         let config = self.config.unwrap();
 
-        let log_monitor = if let Some(progress_sender) = self.progress_sender {
-            LogMonitor::with_sender(progress_sender)
+        let log_monitor = if let Some(ref progress_sender) = self.progress_sender {
+            LogMonitor::with_sender(progress_sender.clone())
         } else {
             LogMonitor::new()
         };
@@ -149,7 +149,8 @@ impl ClangdSessionBuilder<HasConfig, NoProcessManager, NoLspClient> {
 
         let mut lsp_client =
             Self::create_lsp_client(&config, process_manager.create_stdio_transport()?).await?;
-        let index_monitor = Self::setup_monitoring(&mut lsp_client).await;
+        let index_monitor =
+            Self::setup_monitoring(&mut lsp_client, self.progress_sender.clone()).await;
 
         Self::finalize_session(
             config,
@@ -174,7 +175,11 @@ where
         let lsp_client = self.lsp_client.unwrap(); // Safe: C != NoLspClient guarantees this
 
         let file_manager = ClangdFileManager::new();
-        let index_monitor = IndexMonitor::new();
+        let index_monitor = if let Some(ref progress_sender) = self.progress_sender {
+            IndexMonitor::with_sender(progress_sender.clone())
+        } else {
+            IndexMonitor::new()
+        };
         let log_monitor = if let Some(progress_sender) = self.progress_sender {
             LogMonitor::with_sender(progress_sender)
         } else {
@@ -267,9 +272,16 @@ impl ClangdSessionBuilder<HasConfig, NoProcessManager, NoLspClient> {
     }
 
     /// Setup monitoring and request handlers
-    async fn setup_monitoring(lsp_client: &mut LspClient<StdioTransport>) -> IndexMonitor {
+    async fn setup_monitoring(
+        lsp_client: &mut LspClient<StdioTransport>,
+        progress_sender: Option<mpsc::Sender<ProgressEvent>>,
+    ) -> IndexMonitor {
         debug!("Creating and wiring IndexMonitor");
-        let index_monitor = IndexMonitor::new();
+        let index_monitor = if let Some(sender) = progress_sender {
+            IndexMonitor::with_sender(sender)
+        } else {
+            IndexMonitor::new()
+        };
         let notification_handler = index_monitor.create_handler();
         lsp_client
             .register_notification_handler(notification_handler)

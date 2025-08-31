@@ -3,14 +3,14 @@
 //! Provides async monitoring of clangd's background indexing process by listening
 //! to LSP progress notifications and enabling code to wait for indexing completion.
 
-use crate::clangd::index::{IndexLatch, LatchError};
+use crate::clangd::index::{IndexLatch, LatchError, ProgressEvent};
 use crate::lsp::protocol::JsonRpcNotification;
 use lsp_types::{notification::Notification, request::Request};
 use serde_json::Value;
 use std::sync::Arc;
 use std::time::Duration;
-use tokio::sync::Mutex;
-use tracing::{debug, trace};
+use tokio::sync::{Mutex, mpsc};
+use tracing::{debug, trace, warn};
 
 // ============================================================================
 // Types and Errors
@@ -76,6 +76,8 @@ pub struct IndexMonitor {
     state: Arc<Mutex<IndexingState>>,
     /// Event latch for completion waiting
     latch: IndexLatch,
+    /// Optional progress event sender
+    progress_sender: Option<mpsc::Sender<ProgressEvent>>,
 }
 
 impl IndexMonitor {
@@ -84,6 +86,16 @@ impl IndexMonitor {
         Self {
             state: Arc::new(Mutex::new(IndexingState::default())),
             latch: IndexLatch::new(),
+            progress_sender: None,
+        }
+    }
+
+    /// Create a new index monitor with progress event sender
+    pub fn with_sender(sender: mpsc::Sender<ProgressEvent>) -> Self {
+        Self {
+            state: Arc::new(Mutex::new(IndexingState::default())),
+            latch: IndexLatch::new(),
+            progress_sender: Some(sender),
         }
     }
 
@@ -94,12 +106,15 @@ impl IndexMonitor {
     pub fn create_handler(&self) -> impl Fn(JsonRpcNotification) + Send + Sync + 'static {
         let state = Arc::clone(&self.state);
         let latch = self.latch.clone();
+        let progress_sender = self.progress_sender.clone();
         move |notification| {
             let state = Arc::clone(&state);
             let latch = latch.clone();
+            let progress_sender = progress_sender.clone();
             // Process notification in background to avoid blocking LSP transport
             tokio::spawn(async move {
-                Self::process_notification_internal(notification, state, latch).await;
+                Self::process_notification_internal(notification, state, latch, progress_sender)
+                    .await;
             });
         }
     }
@@ -152,11 +167,33 @@ impl IndexMonitor {
         debug!("IndexMonitor: Marked indexing as complete based on disk state");
     }
 
+    /// Mark indexing as failed and emit failure event
+    pub async fn mark_failed(&self, error: String) {
+        let mut state = self.state.lock().await;
+        state.status = IndexingStatus::Failed(error.clone());
+        drop(state); // Release lock before triggering latch
+
+        // Trigger failure latch
+        self.latch.trigger_failure(error.clone()).await;
+
+        // Emit indexing failed event
+        if let Some(ref sender) = self.progress_sender
+            && sender
+                .try_send(ProgressEvent::IndexingFailed { error })
+                .is_err()
+        {
+            warn!("IndexMonitor: Failed to send IndexingFailed event");
+        }
+
+        debug!("IndexMonitor: Marked indexing as failed");
+    }
+
     /// Internal notification processing
     async fn process_notification_internal(
         notification: JsonRpcNotification,
         state: Arc<Mutex<IndexingState>>,
         latch: IndexLatch,
+        progress_sender: Option<mpsc::Sender<ProgressEvent>>,
     ) {
         trace!(
             "IndexMonitor: Processing notification: {}",
@@ -168,7 +205,8 @@ impl IndexMonitor {
                 Self::handle_progress_create(notification.params, state).await;
             }
             lsp_types::notification::Progress::METHOD => {
-                Self::handle_progress_update(notification.params, state, latch).await;
+                Self::handle_progress_update(notification.params, state, latch, progress_sender)
+                    .await;
             }
             _ => {
                 // Not a progress notification we care about
@@ -197,6 +235,7 @@ impl IndexMonitor {
         params: Option<Value>,
         state: Arc<Mutex<IndexingState>>,
         latch: IndexLatch,
+        progress_sender: Option<mpsc::Sender<ProgressEvent>>,
     ) {
         if let Some(params) = params {
             let token = params.get("token").and_then(|t| t.as_str());
@@ -229,6 +268,15 @@ impl IndexMonitor {
                             "IndexMonitor: Indexing started - {}",
                             title.unwrap_or("indexing")
                         );
+
+                        // Emit overall indexing started event
+                        if let Some(ref sender) = progress_sender
+                            && sender
+                                .try_send(ProgressEvent::OverallIndexingStarted)
+                                .is_err()
+                        {
+                            warn!("IndexMonitor: Failed to send OverallIndexingStarted event");
+                        }
                     }
                     Some("report") => {
                         let percentage = value
@@ -261,6 +309,19 @@ impl IndexMonitor {
                             percentage,
                             message.unwrap_or("")
                         );
+
+                        // Emit overall progress event
+                        if let Some(ref sender) = progress_sender {
+                            let event = ProgressEvent::OverallProgress {
+                                current,
+                                total,
+                                percentage,
+                                message: message.map(|s| s.to_string()),
+                            };
+                            if sender.try_send(event).is_err() {
+                                warn!("IndexMonitor: Failed to send OverallProgress event");
+                            }
+                        }
                     }
                     Some("end") => {
                         let mut state = state.lock().await;
@@ -271,6 +332,13 @@ impl IndexMonitor {
                         latch.trigger_success().await;
 
                         debug!("IndexMonitor: Indexing completed");
+
+                        // Emit overall indexing completed event
+                        if let Some(ref sender) = progress_sender
+                            && sender.try_send(ProgressEvent::OverallCompleted).is_err()
+                        {
+                            warn!("IndexMonitor: Failed to send OverallCompleted event");
+                        }
                     }
                     _ => {
                         trace!("IndexMonitor: Unknown progress kind: {:?}", kind);
@@ -386,7 +454,8 @@ mod tests {
             }
         });
 
-        IndexMonitor::handle_progress_update(Some(params), state.clone(), IndexLatch::new()).await;
+        IndexMonitor::handle_progress_update(Some(params), state.clone(), IndexLatch::new(), None)
+            .await;
 
         let state = state.lock().await;
         if let IndexingStatus::InProgress {
@@ -415,7 +484,8 @@ mod tests {
         });
 
         let latch = IndexLatch::new();
-        IndexMonitor::handle_progress_update(Some(params), state.clone(), latch.clone()).await;
+        IndexMonitor::handle_progress_update(Some(params), state.clone(), latch.clone(), None)
+            .await;
 
         let state = state.lock().await;
         assert_eq!(state.status, IndexingStatus::Completed);

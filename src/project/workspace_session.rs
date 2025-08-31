@@ -307,6 +307,12 @@ impl WorkspaceSession {
                     symbols, filtered
                 );
             }
+            ProgressEvent::OverallIndexingStarted => {
+                info!(
+                    "Overall indexing started for build directory: {}",
+                    build_dir.display()
+                );
+            }
             ProgressEvent::OverallProgress {
                 current,
                 total,
@@ -527,10 +533,19 @@ impl WorkspaceSession {
                 };
 
                 if let Some(first_file) = unindexed_files.first() {
-                    debug!("Triggering indexing on first unindexed file: {}", first_file.display());
-                    session_guard.ensure_file_ready(first_file).await.map_err(|e| {
-                        ProjectError::SessionCreation(format!("Failed to trigger indexing: {}", e))
-                    })?;
+                    debug!(
+                        "Triggering indexing on first unindexed file: {}",
+                        first_file.display()
+                    );
+                    session_guard
+                        .ensure_file_ready(first_file)
+                        .await
+                        .map_err(|e| {
+                            ProjectError::SessionCreation(format!(
+                                "Failed to trigger indexing: {}",
+                                e
+                            ))
+                        })?;
                 }
             }
         }

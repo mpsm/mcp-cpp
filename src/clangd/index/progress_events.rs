@@ -23,6 +23,8 @@ pub enum ProgressEvent {
     },
     /// Standard library indexing completed
     StandardLibraryCompleted { symbols: u32, filtered: u32 },
+    /// Overall indexing started
+    OverallIndexingStarted,
     /// Overall indexing progress update
     OverallProgress {
         current: u32,

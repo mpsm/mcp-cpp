@@ -134,17 +134,21 @@ impl<F: FileSystemTrait + 'static> FilesystemIndexStorage<F> {
 impl<F: FileSystemTrait + 'static> IndexStorage for FilesystemIndexStorage<F> {
     async fn read_index(&self, source_path: &Path) -> Result<IndexData, IndexError> {
         // Find the actual index file by pattern matching instead of hash computation
-        let source_filename = source_path.file_name()
-            .ok_or_else(|| IndexError::FileNotFound { 
-                path: source_path.to_path_buf() 
+        let source_filename = source_path
+            .file_name()
+            .ok_or_else(|| IndexError::FileNotFound {
+                path: source_path.to_path_buf(),
             })?
             .to_string_lossy();
-        
+
         // Look for files matching the pattern: SourceFile.HASH.idx
         let pattern_prefix = format!("{}.", source_filename);
-        
-        let index_files = self.list_index_files(&self.index_directory).await.unwrap_or_default();
-        
+
+        let index_files = self
+            .list_index_files(&self.index_directory)
+            .await
+            .unwrap_or_default();
+
         for index_file in index_files {
             if let Some(filename) = index_file.file_name() {
                 let filename_str = filename.to_string_lossy();
@@ -157,10 +161,10 @@ impl<F: FileSystemTrait + 'static> IndexStorage for FilesystemIndexStorage<F> {
                 }
             }
         }
-        
+
         // No index file found for this source file
-        Err(IndexError::FileNotFound { 
-            path: source_path.to_path_buf() 
+        Err(IndexError::FileNotFound {
+            path: source_path.to_path_buf(),
         })
     }
 
