@@ -61,6 +61,18 @@ impl CompilationDatabase {
         Ok(Self { path, entries })
     }
 
+    /// Create a compilation database from entries for testing
+    ///
+    /// This bypasses filesystem operations and creates a CompilationDatabase
+    /// directly from provided entries, useful for unit tests.
+    #[cfg(test)]
+    pub fn from_entries(entries: Vec<Entry>) -> Self {
+        Self {
+            path: PathBuf::from("/test/compile_commands.json"),
+            entries,
+        }
+    }
+
     /// Get all compilation database entries
     pub fn entries(&self) -> &[Entry] {
         &self.entries

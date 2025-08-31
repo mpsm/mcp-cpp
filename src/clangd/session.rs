@@ -191,7 +191,6 @@ where
         &self.index_progress_monitor
     }
 
-
     /// Get reference to the log monitor
     pub fn log_monitor(&self) -> &LogMonitor {
         &self.log_monitor

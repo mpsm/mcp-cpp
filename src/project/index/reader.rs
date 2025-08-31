@@ -5,6 +5,7 @@
 
 use super::storage::{IndexError, IndexStorage};
 use crate::clangd::version::ClangdVersion;
+use async_trait::async_trait;
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -81,6 +82,20 @@ impl IndexEntry {
             FileIndexStatus::Invalid(reason) => format!("Index invalid: {}", reason),
         }
     }
+}
+
+/// Trait for index reading operations with testability support
+#[async_trait]
+#[cfg_attr(test, mockall::automock)]
+pub trait IndexReaderTrait: Send + Sync {
+    /// Read index for a specific source file with automatic staleness detection
+    async fn read_index_for_file(&self, source_path: &Path) -> Result<IndexEntry, IndexError>;
+
+    /// Clear the cache
+    async fn clear_cache(&self);
+
+    /// Get cache statistics (total entries, valid entries)
+    async fn cache_stats(&self) -> (usize, usize);
 }
 
 /// Index reader with caching and automatic staleness detection
@@ -239,6 +254,21 @@ impl IndexReader {
     }
 }
 
+#[async_trait]
+impl IndexReaderTrait for IndexReader {
+    async fn read_index_for_file(&self, source_path: &Path) -> Result<IndexEntry, IndexError> {
+        self.read_index_for_file(source_path).await
+    }
+
+    async fn clear_cache(&self) {
+        self.clear_cache().await
+    }
+
+    async fn cache_stats(&self) -> (usize, usize) {
+        self.cache_stats().await
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -257,73 +287,26 @@ mod tests {
         }
     }
 
-    #[test]
-    fn test_file_index_status() {
-        assert!(FileIndexStatus::Done.is_valid());
-        assert!(!FileIndexStatus::None.is_valid());
-        assert!(!FileIndexStatus::Stale.is_valid());
-
-        assert!(FileIndexStatus::None.needs_update());
-        assert!(FileIndexStatus::Stale.needs_update());
-        assert!(!FileIndexStatus::Done.needs_update());
+    async fn create_test_source_file(
+        temp_dir: &std::path::Path,
+        name: &str,
+        content: &str,
+    ) -> PathBuf {
+        use tokio::fs;
+        let file_path = temp_dir.join(name);
+        fs::write(&file_path, content).await.unwrap();
+        file_path
     }
 
-    #[test]
-    fn test_index_entry_creation() {
-        let entry = IndexEntry {
-            absolute_path: PathBuf::from("/test/file.cpp"),
-            status: FileIndexStatus::Done,
-            index_format_version: Some(19),
-            expected_format_version: 19,
-            index_content_hash: Some("ABC123".to_string()),
-            current_file_hash: Some("ABC123".to_string()),
-            symbols: vec!["test_symbol".to_string()],
-            index_file_size: Some(1024),
-            index_created_at: None,
-        };
-
-        assert!(entry.is_valid());
-        assert_eq!(entry.status_description(), "Index current");
-        assert_eq!(entry.symbols.len(), 1);
-    }
-
-    #[tokio::test]
-    async fn test_index_reader_creation() {
-        let temp_dir = TempDir::new().unwrap();
+    async fn create_test_reader_with_storage(temp_dir: &std::path::Path) -> IndexReader {
         let filesystem = crate::io::file_system::TestFileSystem::new();
         let storage = Arc::new(FilesystemIndexStorage::new(
-            temp_dir.path().to_path_buf(),
+            temp_dir.to_path_buf(),
             19,
             filesystem,
         ));
         let clangd_version = create_test_clangd_version();
-
-        let reader = IndexReader::new(storage, clangd_version);
-        let (total, _valid) = reader.cache_stats().await;
-
-        assert_eq!(total, 0);
-    }
-
-    #[tokio::test]
-    async fn test_cache_operations() {
-        let temp_dir = TempDir::new().unwrap();
-        let filesystem = crate::io::file_system::TestFileSystem::new();
-        let storage = Arc::new(FilesystemIndexStorage::new(
-            temp_dir.path().to_path_buf(),
-            19,
-            filesystem,
-        ));
-        let clangd_version = create_test_clangd_version();
-        let reader = IndexReader::new(storage, clangd_version);
-
-        // Cache should be empty initially
-        let (total, _valid) = reader.cache_stats().await;
-        assert_eq!(total, 0);
-
-        // Test cache clearing
-        reader.clear_cache().await;
-        let (total, _valid) = reader.cache_stats().await;
-        assert_eq!(total, 0);
+        IndexReader::new(storage, clangd_version)
     }
 
     #[test]
@@ -354,5 +337,110 @@ mod tests {
 
             assert_eq!(entry.status_description(), expected);
         }
+    }
+
+    #[tokio::test]
+    async fn test_read_index_for_nonexistent_file() {
+        let temp_dir = TempDir::new().unwrap();
+        let reader = create_test_reader_with_storage(temp_dir.path()).await;
+
+        let nonexistent_file = temp_dir.path().join("nonexistent.cpp");
+        let result = reader.read_index_for_file(&nonexistent_file).await;
+
+        assert!(result.is_err());
+        if let Err(IndexError::Io(_)) = result {
+        } else {
+            panic!("Expected IndexError::Io, got: {:?}", result);
+        }
+    }
+
+    #[tokio::test]
+    async fn test_read_index_for_file_with_no_index() {
+        let temp_dir = TempDir::new().unwrap();
+        let reader = create_test_reader_with_storage(temp_dir.path()).await;
+
+        let source_file =
+            create_test_source_file(temp_dir.path(), "test.cpp", "int main() { return 0; }").await;
+
+        let result = reader.read_index_for_file(&source_file).await;
+
+        assert!(result.is_ok());
+        let entry = result.unwrap();
+        assert_eq!(entry.status, FileIndexStatus::None);
+        assert_eq!(entry.index_format_version, None);
+        assert_eq!(entry.symbols.len(), 0);
+    }
+
+    #[tokio::test]
+    async fn test_cache_hit_scenario() {
+        let temp_dir = TempDir::new().unwrap();
+        let reader = create_test_reader_with_storage(temp_dir.path()).await;
+
+        let source_file =
+            create_test_source_file(temp_dir.path(), "cached.cpp", "void test_function() {}").await;
+
+        let first_result = reader.read_index_for_file(&source_file).await.unwrap();
+        let (cache_total_before, _) = reader.cache_stats().await;
+
+        let second_result = reader.read_index_for_file(&source_file).await.unwrap();
+        let (cache_total_after, _) = reader.cache_stats().await;
+
+        assert_eq!(first_result.absolute_path, second_result.absolute_path);
+        assert_eq!(first_result.status, second_result.status);
+        assert_eq!(cache_total_before, 1);
+        assert_eq!(cache_total_after, 1);
+    }
+
+    #[tokio::test]
+    async fn test_cache_operations_with_entry() {
+        let temp_dir = TempDir::new().unwrap();
+        let reader = create_test_reader_with_storage(temp_dir.path()).await;
+
+        let source_file =
+            create_test_source_file(temp_dir.path(), "test_cache.cpp", "class TestClass {};").await;
+
+        let (initial_total, initial_valid) = reader.cache_stats().await;
+        assert_eq!(initial_total, 0);
+        assert_eq!(initial_valid, 0);
+
+        let entry = reader.read_index_for_file(&source_file).await.unwrap();
+        let (after_read_total, after_read_valid) = reader.cache_stats().await;
+        assert_eq!(after_read_total, 1);
+        assert_eq!(after_read_valid, if entry.is_valid() { 1 } else { 0 });
+
+        reader.clear_cache().await;
+        let (after_clear_total, after_clear_valid) = reader.cache_stats().await;
+        assert_eq!(after_clear_total, 0);
+        assert_eq!(after_clear_valid, 0);
+    }
+
+    #[tokio::test]
+    async fn test_compute_content_hash() {
+        let temp_dir = TempDir::new().unwrap();
+        let test_content = "int main() { return 42; }";
+        let source_file =
+            create_test_source_file(temp_dir.path(), "hash_test.cpp", test_content).await;
+
+        let hash = IndexReader::compute_content_hash(&source_file).await;
+        assert!(hash.is_ok());
+        let hash_value = hash.unwrap();
+        assert!(!hash_value.is_empty());
+        assert!(hash_value.len() == 64); // SHA256 hex length
+
+        let same_content_file =
+            create_test_source_file(temp_dir.path(), "hash_test2.cpp", test_content).await;
+        let hash2 = IndexReader::compute_content_hash(&same_content_file)
+            .await
+            .unwrap();
+        assert_eq!(hash_value, hash2);
+    }
+
+    #[tokio::test]
+    async fn test_compute_content_hash_nonexistent_file() {
+        let temp_dir = TempDir::new().unwrap();
+        let nonexistent_file = temp_dir.path().join("does_not_exist.cpp");
+
+        let result = IndexReader::compute_content_hash(&nonexistent_file).await;
+        assert!(result.is_err());
     }
 }

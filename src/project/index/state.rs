@@ -130,6 +130,31 @@ impl IndexState {
         Ok(state)
     }
 
+    /// Create index state from a compilation database for testing (bypasses filesystem)
+    ///
+    /// This method creates an IndexState without doing filesystem operations,
+    /// useful for unit tests where files don't actually exist.
+    #[cfg(test)]
+    pub fn from_compilation_db_test(comp_db: &CompilationDatabase) -> Self {
+        let mut state = Self::new();
+        debug!(
+            "Creating test index state from compilation database with {} entries",
+            comp_db.entries.len()
+        );
+
+        // Add all compilation database entries without canonicalizing paths
+        for entry in &comp_db.entries {
+            let metadata = FileMetadata::from_compilation_db(entry.file.clone());
+            state.files.insert(entry.file.clone(), metadata);
+        }
+        state.compilation_db_file_count = comp_db.entries.len();
+        debug!(
+            "Test index state created with {} compilation database files",
+            state.compilation_db_file_count
+        );
+        state
+    }
+
     /// Add a file to be tracked (not from compilation database)
     pub fn add_file(&mut self, path: PathBuf, is_compilation_db_entry: bool) {
         let absolute_path = match path.canonicalize() {

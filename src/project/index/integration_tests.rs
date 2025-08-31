@@ -46,7 +46,9 @@ async fn test_indexing_progress_tracking_with_real_clangd() {
 
     // Wait for indexing with timeout
     tokio::time::timeout(Duration::from_secs(30), async {
-        workspace_session.wait_for_indexing_completion(&test_project.build_dir).await
+        workspace_session
+            .wait_for_indexing_completion(&test_project.build_dir)
+            .await
     })
     .await
     .expect("Indexing timed out")
