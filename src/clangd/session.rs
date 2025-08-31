@@ -11,7 +11,7 @@ use tracing::{debug, info, warn};
 use crate::clangd::config::ClangdConfig;
 use crate::clangd::error::ClangdSessionError;
 use crate::clangd::file_manager::ClangdFileManager;
-use crate::clangd::index::{IndexLatch, IndexProgressMonitor};
+use crate::clangd::index::IndexProgressMonitor;
 use crate::clangd::log_monitor::LogMonitor;
 use crate::clangd::session_builder::ClangdSessionBuilder;
 use crate::io::{ChildProcessManager, ProcessManager, StderrMonitor, StdioTransport, StopMode};
@@ -88,9 +88,6 @@ where
     /// Indexing progress monitor
     index_progress_monitor: IndexProgressMonitor,
 
-    /// Indexing completion latch
-    index_latch: IndexLatch,
-
     /// Log monitor for stderr parsing
     log_monitor: LogMonitor,
 
@@ -113,7 +110,6 @@ where
         lsp_client: C,
         file_manager: ClangdFileManager,
         index_progress_monitor: IndexProgressMonitor,
-        index_latch: IndexLatch,
         log_monitor: LogMonitor,
     ) -> Self {
         let started_at = Instant::now();
@@ -124,7 +120,6 @@ where
             lsp_client: Box::new(lsp_client),
             file_manager,
             index_progress_monitor,
-            index_latch,
             log_monitor,
             started_at,
         }
@@ -196,20 +191,6 @@ where
         &self.index_progress_monitor
     }
 
-    /// Wait for indexing completion with default timeout
-    pub async fn wait_for_indexing_completion(
-        &self,
-    ) -> Result<(), crate::clangd::index::LatchError> {
-        self.index_latch.wait_default().await
-    }
-
-    /// Wait for indexing completion with custom timeout
-    pub async fn wait_for_indexing_completion_with_timeout(
-        &self,
-        timeout: std::time::Duration,
-    ) -> Result<(), crate::clangd::index::LatchError> {
-        self.index_latch.wait(timeout).await
-    }
 
     /// Get reference to the log monitor
     pub fn log_monitor(&self) -> &LogMonitor {

@@ -4,7 +4,7 @@
 //! build directories within a project workspace. This module handles pure session
 //! lifecycle management without build directory resolution policy.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
@@ -26,6 +26,68 @@ use tokio::sync::mpsc;
 /// Channel buffer size for progress event processing
 const PROGRESS_CHANNEL_BUFFER_SIZE: usize = 10_000;
 
+/// Component indexing states
+#[derive(Debug, Clone, PartialEq)]
+pub enum ComponentIndexingState {
+    /// Initial state - indexing not started
+    Init,
+    /// Indexing in progress with percentage (0.0 to 100.0)
+    InProgress(f32),
+    /// Indexing completed but not all CDB files indexed
+    Partial,
+    /// All CDB files successfully indexed
+    Completed,
+}
+
+/// Tracks indexing state for a single component
+#[derive(Debug, Clone)]
+pub struct ComponentIndexState {
+    /// Current indexing state
+    pub state: ComponentIndexingState,
+    /// Set of files from compilation database that should be indexed
+    pub cdb_files: HashSet<PathBuf>,
+    /// Total number of CDB files
+    pub total_cdb_files: usize,
+    /// Number of CDB files currently indexed
+    pub indexed_cdb_files: usize,
+    /// Last updated timestamp
+    pub last_updated: std::time::SystemTime,
+}
+
+impl ComponentIndexState {
+    /// Create new component index state from compilation database files
+    pub fn new(cdb_files: Vec<PathBuf>) -> Self {
+        let total_count = cdb_files.len();
+        Self {
+            state: ComponentIndexingState::Init,
+            cdb_files: cdb_files.into_iter().collect(),
+            total_cdb_files: total_count,
+            indexed_cdb_files: 0,
+            last_updated: std::time::SystemTime::now(),
+        }
+    }
+
+    /// Update the indexing state
+    pub fn update_state(&mut self, new_state: ComponentIndexingState) {
+        self.state = new_state;
+        self.last_updated = std::time::SystemTime::now();
+    }
+
+    /// Get current coverage (0.0 to 1.0)
+    pub fn coverage(&self) -> f32 {
+        if self.total_cdb_files == 0 {
+            1.0
+        } else {
+            self.indexed_cdb_files as f32 / self.total_cdb_files as f32
+        }
+    }
+
+    /// Check if indexing is complete (all CDB files indexed)
+    pub fn is_complete(&self) -> bool {
+        self.indexed_cdb_files >= self.total_cdb_files
+    }
+}
+
 /// Manages ClangdSession instances for a project workspace with index tracking
 ///
 /// `WorkspaceSession` provides pure session lifecycle management, handling the creation,
@@ -45,6 +107,8 @@ pub struct WorkspaceSession {
     index_readers: Arc<Mutex<HashMap<PathBuf, IndexReader>>>,
     /// Index latches for each build directory
     index_latches: Arc<Mutex<HashMap<PathBuf, IndexLatch>>>,
+    /// Component index states for each build directory
+    component_index_states: Arc<Mutex<HashMap<PathBuf, ComponentIndexState>>>,
     /// Clangd version information
     clangd_version: ClangdVersion,
 }
@@ -64,6 +128,8 @@ impl WorkspaceSession {
 
         // Initialize IndexState for all components to enable immediate coverage reporting
         let mut index_states = HashMap::new();
+        let mut component_index_states = HashMap::new();
+
         for component in &workspace.components {
             let index_state = IndexState::from_compilation_db(&component.compilation_database)
                 .map_err(|e| {
@@ -74,7 +140,17 @@ impl WorkspaceSession {
                     ))
                 })?;
 
+            // Create component index state with CDB files
+            let cdb_files = component
+                .compilation_database
+                .source_files()
+                .iter()
+                .map(|p| p.to_path_buf())
+                .collect();
+            let component_index_state = ComponentIndexState::new(cdb_files);
+
             index_states.insert(component.build_dir_path.clone(), index_state);
+            component_index_states.insert(component.build_dir_path.clone(), component_index_state);
         }
 
         Ok(Self {
@@ -84,6 +160,7 @@ impl WorkspaceSession {
             index_states: Arc::new(Mutex::new(index_states)),
             index_readers: Arc::new(Mutex::new(HashMap::new())),
             index_latches: Arc::new(Mutex::new(HashMap::new())),
+            component_index_states: Arc::new(Mutex::new(component_index_states)),
             clangd_version,
         })
     }
@@ -151,12 +228,14 @@ impl WorkspaceSession {
         // Launch background processor for progress events
         let index_states = Arc::clone(&self.index_states);
         let index_latches = Arc::clone(&self.index_latches);
+        let component_index_states = Arc::clone(&self.component_index_states);
         let build_dir_clone = build_dir.clone();
         tokio::spawn(async move {
             while let Some(event) = progress_rx.recv().await {
                 Self::handle_progress_event_async(
                     Arc::clone(&index_states),
                     Arc::clone(&index_latches),
+                    Arc::clone(&component_index_states),
                     build_dir_clone.clone(),
                     event,
                 )
@@ -268,10 +347,18 @@ impl WorkspaceSession {
         states.get(build_dir).map(|state| state.coverage())
     }
 
+    /// Get component indexing state for a build directory
+    #[allow(dead_code)]
+    pub async fn get_component_index_state(&self, build_dir: &Path) -> Option<ComponentIndexState> {
+        let states = self.component_index_states.lock().await;
+        states.get(build_dir).cloned()
+    }
+
     /// Handle progress events asynchronously with proper error handling
     async fn handle_progress_event_async(
         index_states: Arc<Mutex<HashMap<PathBuf, IndexState>>>,
         index_latches: Arc<Mutex<HashMap<PathBuf, IndexLatch>>>,
+        component_index_states: Arc<Mutex<HashMap<PathBuf, ComponentIndexState>>>,
         build_dir: PathBuf,
         event: ProgressEvent,
     ) {
@@ -286,6 +373,15 @@ impl WorkspaceSession {
                 build_dir.display()
             );
             return;
+        };
+
+        // Handle component state transitions
+        let mut component_states = match component_index_states.try_lock() {
+            Ok(states) => states,
+            Err(_) => {
+                warn!("Could not acquire lock on component index states");
+                return;
+            }
         };
 
         match event {
@@ -303,6 +399,18 @@ impl WorkspaceSession {
                     path, symbols, refs
                 );
                 index_state.mark_indexed(&path);
+
+                // Update component state: increment indexed CDB file count if this is a CDB file
+                if let Some(component_state) = component_states.get_mut(&build_dir)
+                    && component_state.cdb_files.contains(&path) {
+                    component_state.indexed_cdb_files += 1;
+                    debug!(
+                        "CDB file indexed: {:?} ({}/{})",
+                        path,
+                        component_state.indexed_cdb_files,
+                        component_state.total_cdb_files
+                    );
+                }
             }
             ProgressEvent::StandardLibraryStarted {
                 stdlib_version,
@@ -324,6 +432,15 @@ impl WorkspaceSession {
                     "Overall indexing started for build directory: {}",
                     build_dir.display()
                 );
+
+                // Transition component state from Init to InProgress
+                if let Some(component_state) = component_states.get_mut(&build_dir) {
+                    component_state.update_state(ComponentIndexingState::InProgress(0.0));
+                    debug!(
+                        "Component state transitioned to InProgress for {}",
+                        build_dir.display()
+                    );
+                }
             }
             ProgressEvent::OverallProgress {
                 current,
@@ -335,6 +452,17 @@ impl WorkspaceSession {
                     "Overall indexing progress: {}/{} ({}%) - {:?}",
                     current, total, percentage, message
                 );
+
+                // Update component state with progress percentage
+                if let Some(component_state) = component_states.get_mut(&build_dir) {
+                    component_state
+                        .update_state(ComponentIndexingState::InProgress(percentage as f32));
+                    trace!(
+                        "Component progress updated to {}% for {}",
+                        percentage,
+                        build_dir.display()
+                    );
+                }
             }
             ProgressEvent::OverallCompleted => {
                 info!(
@@ -342,12 +470,47 @@ impl WorkspaceSession {
                     build_dir.display()
                 );
 
-                // Trigger completion latch
+                // Determine component final state based on CDB coverage
+                let component_final_state =
+                    if let Some(component_state) = component_states.get(&build_dir) {
+                        if component_state.is_complete() {
+                            debug!(
+                                "All CDB files indexed ({}/{}), transitioning to Completed",
+                                component_state.indexed_cdb_files, component_state.total_cdb_files
+                            );
+                            ComponentIndexingState::Completed
+                        } else {
+                            debug!(
+                                "Partial CDB coverage ({}/{}), transitioning to Partial",
+                                component_state.indexed_cdb_files, component_state.total_cdb_files
+                            );
+                            ComponentIndexingState::Partial
+                        }
+                    } else {
+                        warn!(
+                            "No component state found for build directory: {}",
+                            build_dir.display()
+                        );
+                        ComponentIndexingState::Partial // Default to partial on error
+                    };
+
+                // Update component state to final state
+                if let Some(component_state) = component_states.get_mut(&build_dir) {
+                    component_state.update_state(component_final_state);
+                    info!(
+                        "Component state transitioned to {:?} for {} (coverage: {:.1}%)",
+                        component_state.state,
+                        build_dir.display(),
+                        component_state.coverage() * 100.0
+                    );
+                }
+
+                // Trigger latch now that initial indexing has ended (either Partial or Completed)
                 if let Ok(latches) = index_latches.try_lock() {
                     if let Some(latch) = latches.get(&build_dir) {
                         latch.trigger_success().await;
                         debug!(
-                            "Triggered completion latch for build directory: {}",
+                            "Triggered completion latch for build directory: {} (initial indexing ended)",
                             build_dir.display()
                         );
                     }

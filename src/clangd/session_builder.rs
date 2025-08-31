@@ -8,7 +8,7 @@ use tracing::{debug, info};
 use crate::clangd::config::ClangdConfig;
 use crate::clangd::error::ClangdSessionError;
 use crate::clangd::file_manager::ClangdFileManager;
-use crate::clangd::index::{IndexLatch, IndexProgressMonitor, ProgressEvent};
+use crate::clangd::index::{IndexProgressMonitor, ProgressEvent};
 use crate::clangd::log_monitor::LogMonitor;
 use crate::clangd::session::ClangdSession;
 use crate::io::{ChildProcessManager, ProcessManager, StderrMonitor, StdioTransport};
@@ -151,14 +151,12 @@ impl ClangdSessionBuilder<HasConfig, NoProcessManager, NoLspClient> {
             Self::create_lsp_client(&config, process_manager.create_stdio_transport()?).await?;
         let index_progress_monitor =
             Self::setup_monitoring(&mut lsp_client, self.progress_sender.clone()).await;
-        let index_latch = IndexLatch::new();
 
         Self::finalize_session(
             config,
             process_manager,
             lsp_client,
             index_progress_monitor,
-            index_latch,
             log_monitor,
         )
     }
@@ -182,7 +180,6 @@ where
         } else {
             IndexProgressMonitor::new()
         };
-        let index_latch = IndexLatch::new();
         let log_monitor = if let Some(progress_sender) = self.progress_sender {
             LogMonitor::with_sender(progress_sender)
         } else {
@@ -195,7 +192,6 @@ where
             lsp_client,
             file_manager,
             index_progress_monitor,
-            index_latch,
             log_monitor,
         );
 
@@ -328,7 +324,6 @@ impl ClangdSessionBuilder<HasConfig, NoProcessManager, NoLspClient> {
         process_manager: ChildProcessManager,
         lsp_client: LspClient<StdioTransport>,
         index_progress_monitor: IndexProgressMonitor,
-        index_latch: IndexLatch,
         log_monitor: LogMonitor,
     ) -> Result<ClangdSession<ChildProcessManager, LspClient<StdioTransport>>, ClangdSessionError>
     {
@@ -342,7 +337,6 @@ impl ClangdSessionBuilder<HasConfig, NoProcessManager, NoLspClient> {
             lsp_client,
             file_manager,
             index_progress_monitor,
-            index_latch,
             log_monitor,
         );
 

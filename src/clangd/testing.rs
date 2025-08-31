@@ -308,7 +308,7 @@ pub mod test_helpers {
         crate::lsp::testing::MockLspClientTrait,
     > {
         use crate::clangd::file_manager::ClangdFileManager;
-        use crate::clangd::index::{IndexLatch, IndexProgressMonitor};
+        use crate::clangd::index::IndexProgressMonitor;
         use crate::io::process::MockProcessManager;
         use crate::lsp::testing::MockLspClientTrait;
 
@@ -328,7 +328,6 @@ pub mod test_helpers {
             .returning(|_, _, _, _| Box::pin(async { Ok(()) }));
         let file_manager = ClangdFileManager::new();
         let index_progress_monitor = IndexProgressMonitor::new();
-        let index_latch = IndexLatch::new();
         let log_monitor = crate::clangd::log_monitor::LogMonitor::new();
 
         super::super::session::ClangdSession::with_dependencies(
@@ -337,7 +336,6 @@ pub mod test_helpers {
             mock_lsp,
             file_manager,
             index_progress_monitor,
-            index_latch,
             log_monitor,
         )
     }

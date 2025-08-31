@@ -10,6 +10,6 @@ pub mod progress_events;
 pub mod progress_monitor;
 pub mod project_index;
 
-pub use latch::{IndexLatch, LatchError};
+pub use latch::IndexLatch;
 pub use progress_events::ProgressEvent;
 pub use progress_monitor::IndexProgressMonitor;
