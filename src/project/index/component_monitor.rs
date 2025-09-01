@@ -3,16 +3,15 @@
 //! This module provides ComponentIndexMonitor which consolidates index state management,
 //! progress tracking, and completion coordination for individual project components.
 
-use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::Mutex;
 use tracing::{debug, info, trace, warn};
 
-use crate::clangd::index::{IndexLatch, ProgressEvent};
+use crate::clangd::index::{ComponentIndex, IndexLatch, ProgressEvent};
+use crate::clangd::version::ClangdVersion;
 use crate::project::index::reader::IndexReaderTrait;
-use crate::project::index::state::IndexState;
 use crate::project::{CompilationDatabase, ProjectError};
 
 /// Component indexing states
@@ -28,41 +27,46 @@ pub enum ComponentIndexingState {
     Completed,
 }
 
-/// Tracks indexing state for a single component
+/// High-level component state wrapper for compatibility
 #[derive(Debug, Clone)]
 pub struct ComponentIndexState {
     /// Current indexing state
+    #[allow(dead_code)]
     pub state: ComponentIndexingState,
-    /// Set of files from compilation database that should be indexed
-    pub cdb_files: HashSet<PathBuf>,
     /// Total number of CDB files
+    #[allow(dead_code)]
     pub total_cdb_files: usize,
     /// Number of CDB files currently indexed
+    #[allow(dead_code)]
     pub indexed_cdb_files: usize,
     /// Last updated timestamp
+    #[allow(dead_code)]
     pub last_updated: std::time::SystemTime,
 }
 
 impl ComponentIndexState {
-    /// Create new component index state from compilation database files
-    pub fn new(cdb_files: Vec<PathBuf>) -> Self {
-        let total_count = cdb_files.len();
+    /// Create from ComponentIndex for compatibility
+    pub fn from_component_index(
+        component_index: &ComponentIndex,
+        state: ComponentIndexingState,
+    ) -> Self {
         Self {
-            state: ComponentIndexingState::Init,
-            cdb_files: cdb_files.into_iter().collect(),
-            total_cdb_files: total_count,
-            indexed_cdb_files: 0,
+            state,
+            total_cdb_files: component_index.total_files_count(),
+            indexed_cdb_files: component_index.indexed_count(),
             last_updated: std::time::SystemTime::now(),
         }
     }
 
     /// Update the indexing state
+    #[allow(dead_code)]
     pub fn update_state(&mut self, new_state: ComponentIndexingState) {
         self.state = new_state;
         self.last_updated = std::time::SystemTime::now();
     }
 
     /// Get current coverage (0.0 to 1.0)
+    #[allow(dead_code)]
     pub fn coverage(&self) -> f32 {
         if self.total_cdb_files == 0 {
             1.0
@@ -72,6 +76,7 @@ impl ComponentIndexState {
     }
 
     /// Check if indexing is complete (all CDB files indexed)
+    #[allow(dead_code)]
     pub fn is_complete(&self) -> bool {
         self.indexed_cdb_files >= self.total_cdb_files
     }
@@ -80,16 +85,20 @@ impl ComponentIndexState {
 /// Consolidated index state for a single component (behind single mutex)
 struct IndexMonitorState {
     /// Core index tracking (file status, coverage calculation)
-    index_state: IndexState,
+    component_index: ComponentIndex,
 
     /// Index file reader for disk synchronization
+    #[allow(dead_code)]
     index_reader: Arc<dyn IndexReaderTrait>,
 
     /// Component-level indexing state (Init, InProgress, Partial, Complete)
-    component_state: ComponentIndexState,
+    current_indexing_state: ComponentIndexingState,
 
     /// Synchronization latch for completion waiting
     completion_latch: IndexLatch,
+
+    /// Last updated timestamp
+    last_updated: std::time::SystemTime,
 }
 
 /// Manages all index-related state and operations for a single build directory
@@ -111,36 +120,59 @@ impl ComponentIndexMonitor {
         build_directory: PathBuf,
         compilation_db: &CompilationDatabase,
         index_reader: Arc<dyn IndexReaderTrait>,
+        clangd_version: &ClangdVersion,
     ) -> Result<Self, ProjectError> {
-        // Create index state from compilation database
-        #[cfg(test)]
-        let index_state = IndexState::from_compilation_db_test(compilation_db);
-
-        #[cfg(not(test))]
-        let index_state = IndexState::from_compilation_db(compilation_db).map_err(|e| {
+        // Create component index from compilation database
+        let component_index = ComponentIndex::new(compilation_db, clangd_version).map_err(|e| {
             ProjectError::SessionCreation(format!(
-                "Failed to create index state for {}: {}",
+                "Failed to create component index for {}: {}",
                 build_directory.display(),
                 e
             ))
         })?;
 
-        // Create component index state with CDB files
-        let cdb_files = compilation_db
-            .source_files()
-            .iter()
-            .map(|p| p.to_path_buf())
-            .collect();
-        let component_state = ComponentIndexState::new(cdb_files);
+        // Create completion latch
+        let completion_latch = IndexLatch::new();
+
+        let monitor_state = IndexMonitorState {
+            component_index,
+            index_reader,
+            current_indexing_state: ComponentIndexingState::Init,
+            completion_latch,
+            last_updated: std::time::SystemTime::now(),
+        };
+
+        debug!(
+            "Created ComponentIndexMonitor for build dir: {}",
+            build_directory.display()
+        );
+
+        Ok(Self {
+            build_directory,
+            state: Arc::new(Mutex::new(monitor_state)),
+        })
+    }
+
+    /// Create monitor for testing without filesystem dependencies
+    #[cfg(test)]
+    pub async fn new_for_test(
+        build_directory: PathBuf,
+        compilation_db: &CompilationDatabase,
+        index_reader: Arc<dyn IndexReaderTrait>,
+        clangd_version: &ClangdVersion,
+    ) -> Result<Self, ProjectError> {
+        // Create component index from compilation database (test version)
+        let component_index = ComponentIndex::new_for_test(compilation_db, clangd_version);
 
         // Create completion latch
         let completion_latch = IndexLatch::new();
 
         let monitor_state = IndexMonitorState {
-            index_state,
+            component_index,
             index_reader,
-            component_state,
+            current_indexing_state: ComponentIndexingState::Init,
             completion_latch,
+            last_updated: std::time::SystemTime::now(),
         };
 
         debug!(
@@ -170,7 +202,7 @@ impl ComponentIndexMonitor {
         match event {
             ProgressEvent::FileIndexingStarted { path, .. } => {
                 debug!("File indexing started: {:?}", path);
-                state.index_state.mark_indexing(&path);
+                state.component_index.mark_file_in_progress(&path);
             }
             ProgressEvent::FileIndexingCompleted {
                 path,
@@ -181,18 +213,14 @@ impl ComponentIndexMonitor {
                     "File indexing completed: {:?} ({} symbols, {} refs)",
                     path, symbols, refs
                 );
-                state.index_state.mark_indexed(&path);
+                state.component_index.mark_file_indexed(&path);
 
-                // Update component state: increment indexed CDB file count if this is a CDB file
-                if state.component_state.cdb_files.contains(&path) {
-                    state.component_state.indexed_cdb_files += 1;
-                    debug!(
-                        "CDB file indexed: {:?} ({}/{})",
-                        path,
-                        state.component_state.indexed_cdb_files,
-                        state.component_state.total_cdb_files
-                    );
-                }
+                debug!(
+                    "CDB file indexed: {:?} ({}/{})",
+                    path,
+                    state.component_index.indexed_count(),
+                    state.component_index.total_files_count()
+                );
             }
             ProgressEvent::StandardLibraryStarted {
                 stdlib_version,
@@ -216,9 +244,8 @@ impl ComponentIndexMonitor {
                 );
 
                 // Transition component state from Init to InProgress
-                state
-                    .component_state
-                    .update_state(ComponentIndexingState::InProgress(0.0));
+                state.current_indexing_state = ComponentIndexingState::InProgress(0.0);
+                state.last_updated = std::time::SystemTime::now();
                 debug!(
                     "Component state transitioned to InProgress for {}",
                     self.build_directory.display()
@@ -236,9 +263,9 @@ impl ComponentIndexMonitor {
                 );
 
                 // Update component state with progress percentage
-                state
-                    .component_state
-                    .update_state(ComponentIndexingState::InProgress(percentage as f32));
+                state.current_indexing_state =
+                    ComponentIndexingState::InProgress(percentage as f32);
+                state.last_updated = std::time::SystemTime::now();
                 trace!(
                     "Component progress updated to {}% for {}",
                     percentage,
@@ -251,30 +278,73 @@ impl ComponentIndexMonitor {
                     self.build_directory.display()
                 );
 
-                // Determine component final state based on CDB coverage
-                let component_final_state = if state.component_state.is_complete() {
+                // Release the state lock before calling the async rescan method
+                drop(state);
+
+                // Critical: Rescan and validate files that were already indexed but not reported by clangd
+                // This uses proper IndexReader validation to ensure index files are valid
+                debug!(
+                    "Starting validation of untracked index files after overall completion for {}",
+                    self.build_directory.display()
+                );
+
+                if let Err(e) = self.rescan_and_validate_untracked_files().await {
+                    warn!(
+                        "Failed to rescan untracked index files for {}: {}",
+                        self.build_directory.display(),
+                        e
+                    );
+                }
+
+                // Re-acquire state lock for final state determination
+                let mut state = match self.state.try_lock() {
+                    Ok(state) => state,
+                    Err(_) => {
+                        warn!(
+                            "Could not acquire lock after rescan for {}",
+                            self.build_directory.display()
+                        );
+                        return;
+                    }
+                };
+
+                // Determine component final state based on CDB coverage AFTER validation
+                let component_final_state = if state.component_index.is_fully_indexed() {
                     debug!(
                         "All CDB files indexed ({}/{}), transitioning to Completed",
-                        state.component_state.indexed_cdb_files,
-                        state.component_state.total_cdb_files
+                        state.component_index.indexed_count(),
+                        state.component_index.total_files_count()
                     );
                     ComponentIndexingState::Completed
                 } else {
                     debug!(
                         "Partial CDB coverage ({}/{}), transitioning to Partial",
-                        state.component_state.indexed_cdb_files,
-                        state.component_state.total_cdb_files
+                        state.component_index.indexed_count(),
+                        state.component_index.total_files_count()
                     );
                     ComponentIndexingState::Partial
                 };
 
                 // Update component state to final state
-                state.component_state.update_state(component_final_state);
+                state.current_indexing_state = component_final_state;
+                state.last_updated = std::time::SystemTime::now();
                 info!(
                     "Component state transitioned to {:?} for {} (coverage: {:.1}%)",
-                    state.component_state.state,
+                    state.current_indexing_state,
                     self.build_directory.display(),
-                    state.component_state.coverage() * 100.0
+                    state.component_index.coverage() * 100.0
+                );
+
+                // Log detailed indexing summary for diagnostics
+                let summary = state.component_index.get_indexing_summary();
+                debug!(
+                    "Final indexing summary for {}: {} total, {} indexed, {} pending, {} in-progress, {} failed",
+                    self.build_directory.display(),
+                    summary.total_files,
+                    summary.indexed_count,
+                    summary.pending_count,
+                    summary.in_progress_count,
+                    summary.failed_count
                 );
 
                 // Trigger latch now that initial indexing has ended (either Partial or Completed)
@@ -311,13 +381,23 @@ impl ComponentIndexMonitor {
     /// Get current component indexing state
     pub async fn get_component_state(&self) -> ComponentIndexState {
         let state = self.state.lock().await;
-        state.component_state.clone()
+        ComponentIndexState::from_component_index(
+            &state.component_index,
+            state.current_indexing_state.clone(),
+        )
     }
 
     /// Get indexing coverage (0.0 to 1.0)
     pub async fn get_coverage(&self) -> f32 {
         let state = self.state.lock().await;
-        state.index_state.coverage()
+        state.component_index.coverage()
+    }
+
+    /// Get comprehensive indexing summary with detailed state information
+    #[allow(dead_code)] // Public API for future use
+    pub async fn get_indexing_summary(&self) -> crate::clangd::index::IndexingSummary {
+        let state = self.state.lock().await;
+        state.component_index.get_indexing_summary()
     }
 
     /// Wait for indexing completion with timeout
@@ -345,40 +425,17 @@ impl ComponentIndexMonitor {
 
         let mut state = self.state.lock().await;
 
-        // Get compilation database files for this component
-        let compilation_db_files = state.index_state.get_unindexed_files();
+        // Refresh the component index from disk
+        state.component_index.refresh_from_disk();
 
-        // Sync each file's state with disk
-        for file_path in &compilation_db_files {
-            match state.index_reader.read_index_for_file(file_path).await {
-                Ok(index_entry) => {
-                    use crate::project::index::reader::FileIndexStatus;
-                    match index_entry.status {
-                        FileIndexStatus::Done => state.index_state.mark_indexed(file_path),
-                        FileIndexStatus::Stale => state.index_state.mark_stale(file_path),
-                        FileIndexStatus::InProgress => state.index_state.mark_indexing(file_path),
-                        FileIndexStatus::None | FileIndexStatus::Invalid(_) => {
-                            // File not indexed or invalid - leave as None in state
-                        }
-                    }
-                }
-                Err(e) => {
-                    trace!("Could not read index for file {:?}: {}", file_path, e);
-                    // File likely not indexed yet
-                }
-            }
-        }
-
-        state.index_state.refresh();
-
-        let stats = state.index_state.get_statistics();
         debug!(
             "Index state after disk sync: {}/{} files indexed",
-            stats.compilation_db_indexed, stats.compilation_db_files
+            state.component_index.indexed_count(),
+            state.component_index.total_files_count()
         );
 
         // Trigger completion latch if all files are indexed
-        if stats.is_complete() {
+        if state.component_index.is_fully_indexed() {
             let latch = state.completion_latch.clone();
             tokio::spawn(async move {
                 latch.trigger_success().await;
@@ -392,11 +449,140 @@ impl ComponentIndexMonitor {
         Ok(())
     }
 
+    /// Rescan and validate untracked index files using proper validation
+    ///
+    /// This method:
+    /// 1. Identifies files currently in Pending state
+    /// 2. Uses IndexReader to check if index files exist and are valid
+    /// 3. Validates format version and index content
+    /// 4. Updates ComponentIndex state only for valid files
+    /// 5. Provides detailed logging about discovered/rejected files
+    async fn rescan_and_validate_untracked_files(&self) -> Result<(), ProjectError> {
+        debug!(
+            "Starting rescan and validation of untracked index files for build dir: {}",
+            self.build_directory.display()
+        );
+
+        let mut state = self.state.lock().await;
+        let pending_files: Vec<_> = state
+            .component_index
+            .get_pending_files()
+            .iter()
+            .map(|p| p.to_path_buf())
+            .collect();
+
+        if pending_files.is_empty() {
+            debug!(
+                "No pending files to rescan for build dir: {}",
+                self.build_directory.display()
+            );
+            return Ok(());
+        }
+
+        debug!(
+            "Found {} pending files to validate for build dir: {}",
+            pending_files.len(),
+            self.build_directory.display()
+        );
+
+        let mut files_validated = 0;
+        let mut files_invalid = 0;
+        let mut validation_errors = Vec::new();
+
+        for source_file in &pending_files {
+            match state.index_reader.read_index_for_file(source_file).await {
+                Ok(index_entry) => {
+                    match &index_entry.status {
+                        crate::project::index::reader::FileIndexStatus::Done => {
+                            // Valid index file found - mark as indexed
+                            state.component_index.mark_file_indexed(source_file);
+                            files_validated += 1;
+                            trace!(
+                                "Validated existing index for file: {:?} (format: v{}, {} symbols)",
+                                source_file,
+                                index_entry.expected_format_version,
+                                index_entry.symbols.len()
+                            );
+                        }
+                        crate::project::index::reader::FileIndexStatus::Invalid(reason) => {
+                            // Index file exists but is invalid
+                            files_invalid += 1;
+                            let error_msg =
+                                format!("Invalid index for {:?}: {}", source_file, reason);
+                            validation_errors.push(error_msg.clone());
+                            debug!("{}", error_msg);
+                            // Leave as pending - will be re-indexed
+                        }
+                        crate::project::index::reader::FileIndexStatus::Stale => {
+                            // Index file is stale
+                            files_invalid += 1;
+                            let error_msg = format!(
+                                "Stale index for {:?}: file modified since indexing",
+                                source_file
+                            );
+                            validation_errors.push(error_msg.clone());
+                            debug!("{}", error_msg);
+                            // Leave as pending - will be re-indexed
+                        }
+                        crate::project::index::reader::FileIndexStatus::None => {
+                            // No index file found - this is expected, leave as pending
+                            trace!("No existing index found for file: {:?}", source_file);
+                        }
+                        crate::project::index::reader::FileIndexStatus::InProgress => {
+                            // Another process is indexing this file - leave as pending
+                            trace!(
+                                "File currently being indexed by another process: {:?}",
+                                source_file
+                            );
+                        }
+                    }
+                }
+                Err(e) => {
+                    // Error reading index - leave as pending and log warning
+                    let error_msg = format!("Failed to read index for {:?}: {}", source_file, e);
+                    validation_errors.push(error_msg.clone());
+                    warn!("{}", error_msg);
+                }
+            }
+        }
+
+        // Log summary of validation results
+        if files_validated > 0 || files_invalid > 0 {
+            info!(
+                "Index validation complete for build dir {}: {} files validated, {} invalid/stale, {} errors",
+                self.build_directory.display(),
+                files_validated,
+                files_invalid,
+                validation_errors.len()
+            );
+        }
+
+        if files_validated > 0 {
+            debug!(
+                "Discovered {} previously indexed files on disk for build dir: {}",
+                files_validated,
+                self.build_directory.display()
+            );
+        }
+
+        // Log validation errors at debug level for diagnostics
+        for error in &validation_errors {
+            debug!("Validation error: {}", error);
+        }
+
+        Ok(())
+    }
+
     /// Get unindexed files needing attention
     #[allow(dead_code)]
     pub async fn get_unindexed_files(&self) -> Vec<PathBuf> {
         let state = self.state.lock().await;
-        state.index_state.get_unindexed_files()
+        state
+            .component_index
+            .get_pending_files()
+            .iter()
+            .map(|p| p.to_path_buf())
+            .collect()
     }
 
     /// Get the build directory this monitor tracks
@@ -417,12 +603,10 @@ mod tests {
     use super::*;
     use crate::clangd::index::ProgressEvent;
     use crate::project::compilation_database::CompilationDatabase;
-    use crate::project::index::reader::{
-        FileIndexStatus, IndexEntry, IndexReaderTrait, MockIndexReaderTrait,
-    };
+    use crate::project::index::reader::{IndexReaderTrait, MockIndexReaderTrait};
     use std::path::PathBuf;
     use std::sync::Arc;
-    use std::time::{Duration, SystemTime};
+    use std::time::Duration;
 
     /// Create a test compilation database with a single file
     fn create_test_compilation_db() -> CompilationDatabase {
@@ -438,15 +622,32 @@ mod tests {
         CompilationDatabase::from_entries(entries)
     }
 
+    /// Create a test clangd version
+    fn create_test_clangd_version() -> ClangdVersion {
+        ClangdVersion {
+            major: 18,
+            minor: 1,
+            patch: 8,
+            variant: None,
+            date: None,
+        }
+    }
+
     #[tokio::test]
     async fn test_component_monitor_creation() {
         let mock_reader = Arc::new(MockIndexReaderTrait::new()) as Arc<dyn IndexReaderTrait>;
         let compilation_db = create_test_compilation_db();
         let build_dir = PathBuf::from("/test/project/build");
+        let clangd_version = create_test_clangd_version();
 
-        let monitor = ComponentIndexMonitor::new(build_dir.clone(), &compilation_db, mock_reader)
-            .await
-            .expect("Failed to create ComponentIndexMonitor");
+        let monitor = ComponentIndexMonitor::new_for_test(
+            build_dir.clone(),
+            &compilation_db,
+            mock_reader,
+            &clangd_version,
+        )
+        .await
+        .expect("Failed to create ComponentIndexMonitor");
 
         assert_eq!(monitor.build_directory(), Path::new("/test/project/build"));
 
@@ -463,9 +664,14 @@ mod tests {
         let compilation_db = create_test_compilation_db();
         let build_dir = PathBuf::from("/test/project/build");
 
-        let monitor = ComponentIndexMonitor::new(build_dir, &compilation_db, mock_reader)
-            .await
-            .expect("Failed to create ComponentIndexMonitor");
+        let monitor = ComponentIndexMonitor::new_for_test(
+            build_dir,
+            &compilation_db,
+            mock_reader,
+            &create_test_clangd_version(),
+        )
+        .await
+        .expect("Failed to create ComponentIndexMonitor");
 
         // Test overall indexing started event
         monitor
@@ -482,9 +688,14 @@ mod tests {
         let compilation_db = create_test_compilation_db();
         let build_dir = PathBuf::from("/test/project/build");
 
-        let monitor = ComponentIndexMonitor::new(build_dir, &compilation_db, mock_reader)
-            .await
-            .expect("Failed to create ComponentIndexMonitor");
+        let monitor = ComponentIndexMonitor::new_for_test(
+            build_dir,
+            &compilation_db,
+            mock_reader,
+            &create_test_clangd_version(),
+        )
+        .await
+        .expect("Failed to create ComponentIndexMonitor");
 
         let file_path = PathBuf::from("/test/project/src/main.cpp");
 
@@ -512,9 +723,14 @@ mod tests {
         let compilation_db = create_test_compilation_db();
         let build_dir = PathBuf::from("/test/project/build");
 
-        let monitor = ComponentIndexMonitor::new(build_dir, &compilation_db, mock_reader)
-            .await
-            .expect("Failed to create ComponentIndexMonitor");
+        let monitor = ComponentIndexMonitor::new_for_test(
+            build_dir,
+            &compilation_db,
+            mock_reader,
+            &create_test_clangd_version(),
+        )
+        .await
+        .expect("Failed to create ComponentIndexMonitor");
 
         // Start indexing
         monitor
@@ -541,9 +757,14 @@ mod tests {
         let compilation_db = create_test_compilation_db();
         let build_dir = PathBuf::from("/test/project/build");
 
-        let monitor = ComponentIndexMonitor::new(build_dir, &compilation_db, mock_reader)
-            .await
-            .expect("Failed to create ComponentIndexMonitor");
+        let monitor = ComponentIndexMonitor::new_for_test(
+            build_dir,
+            &compilation_db,
+            mock_reader,
+            &create_test_clangd_version(),
+        )
+        .await
+        .expect("Failed to create ComponentIndexMonitor");
 
         let file_path = PathBuf::from("/test/project/src/main.cpp");
 
@@ -571,7 +792,33 @@ mod tests {
 
     #[tokio::test]
     async fn test_indexing_completion_with_partial_coverage() {
-        let mock_reader = Arc::new(MockIndexReaderTrait::new()) as Arc<dyn IndexReaderTrait>;
+        let mut mock_reader = MockIndexReaderTrait::new();
+
+        // Set up mock expectations for the rescan operation
+        // The rescan will check the remaining pending file (utils.cpp)
+        mock_reader
+            .expect_read_index_for_file()
+            .with(mockall::predicate::eq(PathBuf::from(
+                "/test/project/src/utils.cpp",
+            )))
+            .returning(|_| {
+                Box::pin(async {
+                    Ok(crate::project::index::reader::IndexEntry {
+                        absolute_path: PathBuf::from("/test/project/src/utils.cpp"),
+                        status: crate::project::index::reader::FileIndexStatus::None, // No existing index
+                        index_format_version: None,
+                        expected_format_version: 19,
+                        index_content_hash: None,
+                        current_file_hash: None,
+                        symbols: vec![],
+                        index_file_size: None,
+                        index_created_at: None,
+                    })
+                })
+            })
+            .times(1);
+
+        let mock_reader = Arc::new(mock_reader) as Arc<dyn IndexReaderTrait>;
 
         // Create compilation database with multiple files
         use json_compilation_db::Entry;
@@ -594,9 +841,14 @@ mod tests {
 
         let build_dir = PathBuf::from("/test/project/build");
 
-        let monitor = ComponentIndexMonitor::new(build_dir, &compilation_db, mock_reader)
-            .await
-            .expect("Failed to create ComponentIndexMonitor");
+        let monitor = ComponentIndexMonitor::new_for_test(
+            build_dir,
+            &compilation_db,
+            mock_reader,
+            &create_test_clangd_version(),
+        )
+        .await
+        .expect("Failed to create ComponentIndexMonitor");
 
         let file_path = PathBuf::from("/test/project/src/main.cpp");
 
@@ -629,9 +881,14 @@ mod tests {
         let compilation_db = create_test_compilation_db();
         let build_dir = PathBuf::from("/test/project/build");
 
-        let monitor = ComponentIndexMonitor::new(build_dir, &compilation_db, mock_reader)
-            .await
-            .expect("Failed to create ComponentIndexMonitor");
+        let monitor = ComponentIndexMonitor::new_for_test(
+            build_dir,
+            &compilation_db,
+            mock_reader,
+            &create_test_clangd_version(),
+        )
+        .await
+        .expect("Failed to create ComponentIndexMonitor");
 
         // Test indexing failure
         monitor
@@ -650,43 +907,30 @@ mod tests {
 
     #[tokio::test]
     async fn test_refresh_from_disk() {
-        let mut mock_reader = MockIndexReaderTrait::new();
-
-        // Set up expectations using mockall - much more powerful than manual mock
-        mock_reader
-            .expect_read_index_for_file()
-            .times(1) // Expect exactly one call
-            .withf(|path| path == Path::new("/test/project/src/main.cpp")) // Verify correct path
-            .returning(|_| {
-                Box::pin(async move {
-                    Ok(IndexEntry {
-                        absolute_path: PathBuf::from("/test/project/src/main.cpp"),
-                        status: FileIndexStatus::Done,
-                        index_format_version: Some(19),
-                        expected_format_version: 19,
-                        index_content_hash: Some("hash123".to_string()),
-                        current_file_hash: Some("hash123".to_string()),
-                        symbols: vec!["main".to_string()],
-                        index_file_size: Some(1024),
-                        index_created_at: Some(SystemTime::now()),
-                    })
-                })
-            });
-
+        let mock_reader = Arc::new(MockIndexReaderTrait::new()) as Arc<dyn IndexReaderTrait>;
         let compilation_db = create_test_compilation_db();
         let build_dir = PathBuf::from("/test/project/build");
 
-        let monitor = ComponentIndexMonitor::new(build_dir, &compilation_db, Arc::new(mock_reader))
-            .await
-            .expect("Failed to create ComponentIndexMonitor");
+        let monitor = ComponentIndexMonitor::new_for_test(
+            build_dir,
+            &compilation_db,
+            mock_reader,
+            &create_test_clangd_version(),
+        )
+        .await
+        .expect("Failed to create ComponentIndexMonitor");
 
-        // Refresh from disk - this will automatically verify expectations
+        // Test that refresh works without filesystem dependencies
+        // Since we're using ComponentIndex::refresh_from_disk() which checks actual files,
+        // and our test doesn't have real files, it should just skip updating states
         monitor
             .refresh_from_disk()
             .await
             .expect("Failed to refresh from disk");
 
-        // Mockall automatically verifies that expectations were met when mock is dropped
+        // Verify the state remains unchanged since no real index files exist
+        let coverage = monitor.get_coverage().await;
+        assert_eq!(coverage, 0.0); // No files should be marked as indexed
     }
 
     #[tokio::test]
@@ -695,9 +939,14 @@ mod tests {
         let compilation_db = create_test_compilation_db();
         let build_dir = PathBuf::from("/test/project/build");
 
-        let monitor = ComponentIndexMonitor::new(build_dir, &compilation_db, mock_reader)
-            .await
-            .expect("Failed to create ComponentIndexMonitor");
+        let monitor = ComponentIndexMonitor::new_for_test(
+            build_dir,
+            &compilation_db,
+            mock_reader,
+            &create_test_clangd_version(),
+        )
+        .await
+        .expect("Failed to create ComponentIndexMonitor");
 
         // Start a task that will trigger completion immediately
         let monitor_clone = Arc::new(monitor);
@@ -730,10 +979,14 @@ mod tests {
         let mock_reader = Arc::new(MockIndexReaderTrait::new()) as Arc<dyn IndexReaderTrait>;
         let compilation_db = create_test_compilation_db();
 
-        let monitor =
-            ComponentIndexMonitor::new(PathBuf::from("/test/build"), &compilation_db, mock_reader)
-                .await
-                .unwrap();
+        let monitor = ComponentIndexMonitor::new_for_test(
+            PathBuf::from("/test/build"),
+            &compilation_db,
+            mock_reader,
+            &create_test_clangd_version(),
+        )
+        .await
+        .unwrap();
 
         monitor
             .handle_progress_event(ProgressEvent::StandardLibraryStarted {
@@ -750,5 +1003,178 @@ mod tests {
             .await;
 
         // Events processed successfully - no panics occurred
+    }
+
+    #[tokio::test]
+    async fn test_overall_completed_with_rescanning() {
+        let mut mock_reader = MockIndexReaderTrait::new();
+
+        // Set up mock expectations for the rescan operation
+        // The rescan will check pending files for existing index files
+        mock_reader
+            .expect_read_index_for_file()
+            .with(mockall::predicate::eq(PathBuf::from(
+                "/test/project/src/utils.cpp",
+            )))
+            .returning(|_| {
+                Box::pin(async {
+                    Ok(crate::project::index::reader::IndexEntry {
+                        absolute_path: PathBuf::from("/test/project/src/utils.cpp"),
+                        status: crate::project::index::reader::FileIndexStatus::None, // No existing index
+                        index_format_version: None,
+                        expected_format_version: 19,
+                        index_content_hash: None,
+                        current_file_hash: None,
+                        symbols: vec![],
+                        index_file_size: None,
+                        index_created_at: None,
+                    })
+                })
+            })
+            .times(1);
+
+        let mock_reader = Arc::new(mock_reader) as Arc<dyn IndexReaderTrait>;
+
+        // Create compilation database with multiple files to test rescanning
+        use json_compilation_db::Entry;
+        let entries = vec![
+            Entry {
+                directory: PathBuf::from("/test/project"),
+                file: PathBuf::from("/test/project/src/main.cpp"),
+                arguments: vec!["clang++".to_string(), "src/main.cpp".to_string()],
+                output: Some(PathBuf::from("/test/project/build/main.o")),
+            },
+            Entry {
+                directory: PathBuf::from("/test/project"),
+                file: PathBuf::from("/test/project/src/utils.cpp"),
+                arguments: vec!["clang++".to_string(), "src/utils.cpp".to_string()],
+                output: Some(PathBuf::from("/test/project/build/utils.o")),
+            },
+        ];
+        let compilation_db = CompilationDatabase::from_entries(entries);
+
+        let monitor = ComponentIndexMonitor::new_for_test(
+            PathBuf::from("/test/project/build"),
+            &compilation_db,
+            mock_reader,
+            &create_test_clangd_version(),
+        )
+        .await
+        .expect("Failed to create ComponentIndexMonitor");
+
+        let main_file = PathBuf::from("/test/project/src/main.cpp");
+
+        // Start indexing and complete one file
+        monitor
+            .handle_progress_event(ProgressEvent::OverallIndexingStarted)
+            .await;
+        monitor
+            .handle_progress_event(ProgressEvent::FileIndexingCompleted {
+                path: main_file,
+                symbols: 10,
+                refs: 20,
+            })
+            .await;
+
+        // Before overall completion, we have partial coverage
+        let state = monitor.get_component_state().await;
+        assert_eq!(state.indexed_cdb_files, 1);
+        assert_eq!(state.total_cdb_files, 2);
+
+        // Complete overall indexing - this triggers rescan with validation
+        monitor
+            .handle_progress_event(ProgressEvent::OverallCompleted)
+            .await;
+
+        // After completion, the rescan should have been called (mock expectation verified)
+        // Since the mock returned None status, no additional files should be marked as indexed
+        let final_state = monitor.get_component_state().await;
+        assert_eq!(final_state.state, ComponentIndexingState::Partial); // Still partial since only 1/2 files indexed
+        assert_eq!(final_state.indexed_cdb_files, 1);
+    }
+
+    #[tokio::test]
+    async fn test_get_indexing_summary() {
+        let mock_reader = Arc::new(MockIndexReaderTrait::new()) as Arc<dyn IndexReaderTrait>;
+        let compilation_db = create_test_compilation_db();
+        let build_dir = PathBuf::from("/test/project/build");
+
+        let monitor = ComponentIndexMonitor::new_for_test(
+            build_dir,
+            &compilation_db,
+            mock_reader,
+            &create_test_clangd_version(),
+        )
+        .await
+        .expect("Failed to create ComponentIndexMonitor");
+
+        let file_path = PathBuf::from("/test/project/src/main.cpp");
+
+        // Progress through different states
+        monitor
+            .handle_progress_event(ProgressEvent::OverallIndexingStarted)
+            .await;
+        monitor
+            .handle_progress_event(ProgressEvent::FileIndexingStarted {
+                path: file_path.clone(),
+                digest: "ABC123".to_string(),
+            })
+            .await;
+
+        let summary = monitor.get_indexing_summary().await;
+
+        // Verify summary structure
+        assert_eq!(summary.total_files, 1);
+        assert_eq!(summary.in_progress_count, 1);
+        assert_eq!(summary.indexed_count, 0);
+        assert!(summary.has_active_indexing);
+        assert!(!summary.is_fully_indexed);
+        assert_eq!(summary.in_progress_files.len(), 1);
+        assert_eq!(summary.in_progress_files[0], file_path);
+    }
+
+    #[tokio::test]
+    async fn test_enhanced_logging_on_completion() {
+        let mock_reader = Arc::new(MockIndexReaderTrait::new()) as Arc<dyn IndexReaderTrait>;
+        let compilation_db = create_test_compilation_db();
+        let build_dir = PathBuf::from("/test/project/build");
+
+        let monitor = ComponentIndexMonitor::new_for_test(
+            build_dir,
+            &compilation_db,
+            mock_reader,
+            &create_test_clangd_version(),
+        )
+        .await
+        .expect("Failed to create ComponentIndexMonitor");
+
+        let file_path = PathBuf::from("/test/project/src/main.cpp");
+
+        // Complete full indexing cycle
+        monitor
+            .handle_progress_event(ProgressEvent::OverallIndexingStarted)
+            .await;
+        monitor
+            .handle_progress_event(ProgressEvent::FileIndexingCompleted {
+                path: file_path,
+                symbols: 10,
+                refs: 20,
+            })
+            .await;
+        monitor
+            .handle_progress_event(ProgressEvent::OverallCompleted)
+            .await;
+
+        // Verify final state shows completed indexing with enhanced tracking
+        let final_state = monitor.get_component_state().await;
+        assert_eq!(final_state.state, ComponentIndexingState::Completed);
+        assert!(final_state.is_complete());
+        assert!((final_state.coverage() - 1.0).abs() < 0.001);
+
+        let summary = monitor.get_indexing_summary().await;
+        assert!(summary.is_fully_indexed);
+        assert!(!summary.has_active_indexing);
+        assert_eq!(summary.indexed_count, 1);
+        assert_eq!(summary.pending_count, 0);
     }
 }

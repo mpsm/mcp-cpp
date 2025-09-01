@@ -36,6 +36,9 @@ pub enum IndexError {
 
     #[error("Hash computation failed: {0}")]
     HashComputation(String),
+
+    #[error("Index parsing failed: {0}")]
+    ParseError(String),
 }
 
 impl IndexError {
@@ -50,6 +53,11 @@ impl IndexError {
     /// Create an incompatible version error
     pub fn incompatible_version(found: u32, expected: u32) -> Self {
         Self::IncompatibleVersion { found, expected }
+    }
+
+    /// Create a parse error
+    pub fn parse_error(reason: impl Into<String>) -> Self {
+        Self::ParseError(reason.into())
     }
 }
 

@@ -5,6 +5,7 @@
 
 use super::{IndexData, IndexError, IndexMetadata, IndexStorage};
 use crate::clangd::index::hash::compute_file_hash;
+use crate::clangd::index::idx_parser::{IdxParseError, IdxParser};
 use crate::io::file_system::FileSystemTrait;
 use async_trait::async_trait;
 use std::path::{Path, PathBuf};
@@ -78,28 +79,55 @@ impl<F: FileSystemTrait + 'static> FilesystemIndexStorage<F> {
                 }
             })?;
 
-        // For now, we'll create a simplified parser
-        // In a real implementation, this would parse the binary format
-        // based on clangd's index file specification
-
+        // Read and parse the index file using the IDX parser
         let file_size = file_metadata.size;
         let created_at = Some(file_metadata.modified);
 
-        // Mock index data - in real implementation this would parse the binary format
-        // Based on clangd index spec, we'd extract:
-        // 1. Magic bytes and version
-        // 2. Source file mapping
-        // 3. Content hash
-        // 4. Symbol data
+        // Read file content using filesystem trait
+        let path = index_path.to_path_buf();
+        let filesystem = self.filesystem.clone();
 
-        // For now, derive source file from index filename (reverse mapping)
-        let source_file = self.derive_source_path_from_index(index_path)?;
+        let file_data = tokio::task::spawn_blocking(move || filesystem.read(&path))
+            .await
+            .map_err(|e| IndexError::Io(std::io::Error::other(e)))??;
+
+        // Parse the index file using the IDX parser
+        let parsed_data = IdxParser::parse(&file_data).map_err(|e| match e {
+            IdxParseError::UnsupportedVersion(v) => {
+                IndexError::incompatible_version(v, self.expected_version)
+            }
+            _ => IndexError::parse_error(e.to_string()),
+        })?;
+
+        // Extract source file information from the include graph
+        // Look for translation units first, then fall back to any file if no TUs found
+        let translation_units = parsed_data.translation_units();
+        let source_file = if !translation_units.is_empty() {
+            // Use the first translation unit as the primary source file
+            PathBuf::from(&translation_units[0].uri)
+        } else if !parsed_data.include_graph.is_empty() {
+            // Fall back to the first file in the include graph
+            PathBuf::from(&parsed_data.include_graph[0].uri)
+        } else {
+            // No files found in include graph, derive from filename
+            self.derive_source_path_from_index(index_path)?
+        };
+
+        // Extract content hash from the primary source file
+        let content_hash =
+            if let Some(node) = parsed_data.find_node_by_uri(&source_file.to_string_lossy()) {
+                hex::encode(node.digest)
+            } else if !translation_units.is_empty() {
+                hex::encode(translation_units[0].digest)
+            } else {
+                "UNKNOWN_HASH".to_string()
+            };
 
         let index_data = IndexData {
             source_file,
-            format_version: self.expected_version, // Would be read from file
-            content_hash: "PLACEHOLDER_HASH".to_string(), // Would be read from file
-            symbols: vec![],                       // Would be parsed from file
+            format_version: parsed_data.format_version,
+            content_hash,
+            symbols: vec![], // Could be extracted from symb chunk in the future
             metadata: IndexMetadata {
                 created_at,
                 file_size: Some(file_size),
@@ -107,8 +135,11 @@ impl<F: FileSystemTrait + 'static> FilesystemIndexStorage<F> {
         };
 
         debug!(
-            "Parsed index file: {} bytes, format version {}",
-            file_size, index_data.format_version
+            "Parsed index file: {} bytes, format version {}, {} include graph nodes, {} TUs",
+            file_size,
+            index_data.format_version,
+            parsed_data.include_graph.len(),
+            translation_units.len()
         );
 
         Ok(index_data)

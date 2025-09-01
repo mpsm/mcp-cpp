@@ -234,6 +234,7 @@ impl WorkspaceSession {
             build_dir.to_path_buf(),
             &component.compilation_database,
             index_reader,
+            &self.clangd_version,
         )
         .await?;
 
