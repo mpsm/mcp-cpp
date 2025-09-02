@@ -184,9 +184,6 @@ impl WorkspaceSession {
         // Drop sessions lock before index operations
         drop(sessions);
 
-        // Refresh index state and trigger appropriate action using ComponentIndexMonitor
-        component_monitor.refresh_from_disk().await?;
-
         Ok(session_arc)
     }
 
@@ -213,12 +210,8 @@ impl WorkspaceSession {
         // Create index reader with filesystem storage
         let index_directory = build_dir.join(".cache/clangd/index");
 
-        // Determine expected index version based on clangd version
-        let expected_version = match (self.clangd_version.major, self.clangd_version.minor) {
-            (14..=17, _) => 17, // Clangd 14-17 use index format v17
-            (18..=19, _) => 19, // Clangd 18-19 use index format v19
-            _ => 19,            // Default to latest known format
-        };
+        // Use the centralized version mapping from ClangdVersion
+        let expected_version = self.clangd_version.index_format_version();
 
         let storage: Arc<dyn IndexStorage> = Arc::new(FilesystemIndexStorage::new(
             index_directory,

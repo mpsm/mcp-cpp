@@ -186,7 +186,7 @@ where
             LogMonitor::new()
         };
 
-        let mut session = ClangdSession::with_dependencies(
+        let session = ClangdSession::with_dependencies(
             config,
             process_manager,
             lsp_client,
@@ -194,9 +194,6 @@ where
             index_progress_monitor,
             log_monitor,
         );
-
-        // Setup stderr processing for injected dependencies path too
-        session.setup_stderr_monitoring();
 
         Ok(session)
     }
@@ -331,7 +328,7 @@ impl ClangdSessionBuilder<HasConfig, NoProcessManager, NoLspClient> {
         let file_manager = ClangdFileManager::new();
 
         // Create session with all components
-        let mut session = ClangdSession::with_dependencies(
+        let session = ClangdSession::with_dependencies(
             config,
             process_manager,
             lsp_client,
@@ -339,9 +336,6 @@ impl ClangdSessionBuilder<HasConfig, NoProcessManager, NoLspClient> {
             index_progress_monitor,
             log_monitor,
         );
-
-        // Setup stderr processing after session creation
-        session.setup_stderr_monitoring();
 
         Ok(session)
     }

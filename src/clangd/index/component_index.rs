@@ -94,6 +94,9 @@ pub struct ComponentIndex {
 
 impl ComponentIndex {
     /// Create a new ComponentIndex from a compilation database and clangd version
+    ///
+    /// All files are initialized as Pending - the ComponentIndexMonitor is responsible
+    /// for checking disk state and updating file states appropriately.
     pub fn new(
         compilation_db: &CompilationDatabase,
         clangd_version: &ClangdVersion,
@@ -108,15 +111,6 @@ impl ComponentIndex {
             .join(".cache")
             .join("clangd")
             .join("index");
-
-        // Continue even if index directory doesn't exist - clangd will create it
-        if !index_dir.exists() {
-            // Directory doesn't exist yet, but that's ok - we'll mark all files as pending
-        } else if !index_dir.is_dir() {
-            return Err(ComponentIndexError::IndexDirectoryAccess {
-                path: index_dir.to_string_lossy().to_string(),
-            });
-        }
 
         let format_version = clangd_version.index_format_version();
         let mut file_to_index = HashMap::new();
@@ -142,17 +136,11 @@ impl ComponentIndex {
             let index_filename = format!("{basename}.{hash:016X}.idx");
             let index_path = index_dir.join(&index_filename);
 
-            // Add mapping regardless of whether index file exists
-            file_to_index.insert(source_file.to_path_buf(), index_path.clone());
+            // Add mapping
+            file_to_index.insert(source_file.to_path_buf(), index_path);
 
-            // Initialize file state based on whether index directory and file exists
-            // Only check if directory exists to avoid filesystem access on missing directory
-            let initial_state = if index_dir.exists() && index_path.exists() {
-                FileIndexState::Indexed
-            } else {
-                FileIndexState::Pending
-            };
-            file_states.insert(source_file.to_path_buf(), initial_state);
+            // Initialize all files as pending - ComponentIndexMonitor will update states based on disk
+            file_states.insert(source_file.to_path_buf(), FileIndexState::Pending);
         }
 
         Ok(ComponentIndex {
@@ -445,35 +433,6 @@ impl ComponentIndex {
         self.file_to_index.values().map(|p| p.as_path()).collect()
     }
 
-    /// Refresh index state by scanning disk for existing index files
-    pub fn refresh_from_disk(&mut self) {
-        // Only scan if index directory exists
-        if !self.index_dir.exists() {
-            // Index directory doesn't exist yet, keep all files as pending
-            return;
-        }
-
-        for source_file in &self.cdb_files {
-            if let Some(index_path) = self.file_to_index.get(source_file) {
-                let current_state = self.file_states.get(source_file);
-
-                // Only update if currently pending or failed
-                if matches!(
-                    current_state,
-                    Some(FileIndexState::Pending) | Some(FileIndexState::Failed(_))
-                ) {
-                    let new_state = if index_path.exists() {
-                        FileIndexState::Indexed
-                    } else {
-                        FileIndexState::Pending
-                    };
-                    self.file_states
-                        .insert(source_file.to_path_buf(), new_state);
-                }
-            }
-        }
-    }
-
     /// Get comprehensive indexing summary with detailed state information
     pub fn get_indexing_summary(&self) -> IndexingSummary {
         let pending_files: Vec<_> = self
@@ -560,12 +519,11 @@ mod tests {
         let build_dir = temp_dir.path();
 
         let compilation_db = create_test_compilation_database(build_dir)?;
-        let index_dir = build_dir.join(".cache").join("clangd").join("index");
-        fs::create_dir_all(&index_dir)?;
 
         let version = create_test_version();
         let component_index = ComponentIndex::new(&compilation_db, &version).unwrap();
 
+        // All files should start as pending (pure in-memory, no disk checks)
         assert_eq!(component_index.total_files_count(), 2);
         assert_eq!(component_index.pending_count(), 2);
         assert_eq!(component_index.indexed_count(), 0);
@@ -581,8 +539,6 @@ mod tests {
         let build_dir = temp_dir.path();
 
         let compilation_db = create_test_compilation_database(build_dir)?;
-        let index_dir = build_dir.join(".cache").join("clangd").join("index");
-        fs::create_dir_all(&index_dir)?;
 
         let version = create_test_version();
         let mut component_index = ComponentIndex::new(&compilation_db, &version).unwrap();
@@ -619,13 +575,11 @@ mod tests {
         let build_dir = temp_dir.path();
 
         let compilation_db = create_test_compilation_database(build_dir)?;
-        let index_dir = build_dir.join(".cache").join("clangd").join("index");
-        fs::create_dir_all(&index_dir)?;
 
         let version = create_test_version();
         let mut component_index = ComponentIndex::new(&compilation_db, &version).unwrap();
 
-        // Should return one of the pending files
+        // Should return one of the pending files (all start as pending now)
         let next_file = component_index.get_next_uncovered_file();
         assert!(next_file.is_some());
 
@@ -650,41 +604,11 @@ mod tests {
     }
 
     #[test]
-    fn test_refresh_from_disk() -> std::io::Result<()> {
-        let temp_dir = TempDir::new()?;
-        let build_dir = temp_dir.path();
-
-        let compilation_db = create_test_compilation_database(build_dir)?;
-        let index_dir = build_dir.join(".cache").join("clangd").join("index");
-        fs::create_dir_all(&index_dir)?;
-
-        let version = create_test_version();
-        let mut component_index = ComponentIndex::new(&compilation_db, &version).unwrap();
-
-        // Initially all files should be pending
-        assert_eq!(component_index.pending_count(), 2);
-
-        // Create an index file on disk
-        let main_cpp = Path::new("/test/project/main.cpp");
-        let index_file = component_index.get_index_file(main_cpp).unwrap();
-        fs::File::create(index_file)?;
-
-        // Refresh should detect the new index file
-        component_index.refresh_from_disk();
-        assert_eq!(component_index.indexed_count(), 1);
-        assert_eq!(component_index.pending_count(), 1);
-
-        Ok(())
-    }
-
-    #[test]
     fn test_file_collections() -> std::io::Result<()> {
         let temp_dir = TempDir::new()?;
         let build_dir = temp_dir.path();
 
         let compilation_db = create_test_compilation_database(build_dir)?;
-        let index_dir = build_dir.join(".cache").join("clangd").join("index");
-        fs::create_dir_all(&index_dir)?;
 
         let version = create_test_version();
         let mut component_index = ComponentIndex::new(&compilation_db, &version).unwrap();
@@ -718,8 +642,6 @@ mod tests {
         let build_dir = temp_dir.path();
 
         let compilation_db = create_test_compilation_database(build_dir)?;
-        let index_dir = build_dir.join(".cache").join("clangd").join("index");
-        fs::create_dir_all(&index_dir)?;
 
         let version = create_test_version();
         let mut component_index = ComponentIndex::new(&compilation_db, &version).unwrap();

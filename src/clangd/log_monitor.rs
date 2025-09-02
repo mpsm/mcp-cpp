@@ -146,18 +146,13 @@ impl LogMonitor {
     pub fn process_line(&self, line: &str) {
         trace!("LogMonitor: Processing stderr line: {}", line);
 
-        if let Some(event) = self.parser.parse_line(line) {
-            trace!("LogMonitor: Parsed event from stderr: {:?}", event);
-
-            if let Some(ref sender) = self.event_sender {
+        if let Some(event) = self.parser.parse_line(line)
+            && let Some(ref sender) = self.event_sender {
                 // Non-blocking send - drop event if channel is full
                 if sender.try_send(event).is_err() {
                     warn!("LogMonitor: Progress event channel full, dropping event");
                 }
             }
-        } else {
-            trace!("LogMonitor: No event parsed from line: {}", line);
-        }
     }
 
     /// Create a stderr line processor that can be used as a callback
@@ -167,8 +162,6 @@ impl LogMonitor {
         let sender = self.event_sender.clone();
 
         move |line: String| {
-            trace!("LogMonitor: Processing stderr line: {}", line);
-
             if let Some(event) = parser.parse_line(&line) {
                 trace!("LogMonitor: Parsed event from stderr: {:?}", event);
 
@@ -178,8 +171,6 @@ impl LogMonitor {
                         warn!("LogMonitor: Progress event channel full, dropping event");
                     }
                 }
-            } else {
-                trace!("LogMonitor: No event parsed from line: {}", line);
             }
         }
     }

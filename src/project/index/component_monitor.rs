@@ -122,7 +122,7 @@ impl ComponentIndexMonitor {
         index_reader: Arc<dyn IndexReaderTrait>,
         clangd_version: &ClangdVersion,
     ) -> Result<Self, ProjectError> {
-        // Create component index from compilation database
+        // Create component index from compilation database (all files start as Pending)
         let component_index = ComponentIndex::new(compilation_db, clangd_version).map_err(|e| {
             ProjectError::SessionCreation(format!(
                 "Failed to create component index for {}: {}",
@@ -142,15 +142,41 @@ impl ComponentIndexMonitor {
             last_updated: std::time::SystemTime::now(),
         };
 
-        debug!(
-            "Created ComponentIndexMonitor for build dir: {}",
-            build_directory.display()
-        );
-
-        Ok(Self {
+        let monitor = Self {
             build_directory,
             state: Arc::new(Mutex::new(monitor_state)),
-        })
+        };
+
+        debug!(
+            "Created ComponentIndexMonitor for build dir: {}",
+            monitor.build_directory.display()
+        );
+
+        // Perform initial disk scan to update state from existing index files
+        debug!(
+            "Performing initial disk scan for build dir: {}",
+            monitor.build_directory.display()
+        );
+
+        if let Err(e) = monitor.rescan_and_validate_untracked_files().await {
+            warn!(
+                "Failed to perform initial disk scan for {}: {}",
+                monitor.build_directory.display(),
+                e
+            );
+        }
+
+        {
+            let state = monitor.state.lock().await;
+            debug!(
+                "Initial state after disk scan: {}/{} files indexed for {}",
+                state.component_index.indexed_count(),
+                state.component_index.total_files_count(),
+                monitor.build_directory.display()
+            );
+        }
+
+        Ok(monitor)
     }
 
     /// Create monitor for testing without filesystem dependencies
@@ -416,18 +442,17 @@ impl ComponentIndexMonitor {
         })
     }
 
-    /// Refresh index state by syncing with disk
+    /// Refresh index state by syncing with disk using IndexReader
     pub async fn refresh_from_disk(&self) -> Result<(), ProjectError> {
         debug!(
             "Refreshing index state from disk for build dir: {}",
             self.build_directory.display()
         );
 
-        let mut state = self.state.lock().await;
+        // Use the existing rescan and validate method which properly uses IndexReader
+        self.rescan_and_validate_untracked_files().await?;
 
-        // Refresh the component index from disk
-        state.component_index.refresh_from_disk();
-
+        let state = self.state.lock().await;
         debug!(
             "Index state after disk sync: {}/{} files indexed",
             state.component_index.indexed_count(),
@@ -907,7 +932,26 @@ mod tests {
 
     #[tokio::test]
     async fn test_refresh_from_disk() {
-        let mock_reader = Arc::new(MockIndexReaderTrait::new()) as Arc<dyn IndexReaderTrait>;
+        let mut mock_reader = MockIndexReaderTrait::new();
+
+        // Configure mock to return FileIndexStatus::None for all files (no indexes found)
+        mock_reader.expect_read_index_for_file().returning(|_| {
+            Box::pin(async {
+                Ok(crate::project::index::reader::IndexEntry {
+                    absolute_path: PathBuf::from("/test/project/src/main.cpp"),
+                    status: crate::project::index::reader::FileIndexStatus::None,
+                    index_format_version: None,
+                    expected_format_version: 19,
+                    index_content_hash: None,
+                    current_file_hash: None,
+                    symbols: vec![],
+                    index_file_size: None,
+                    index_created_at: None,
+                })
+            })
+        });
+
+        let mock_reader = Arc::new(mock_reader) as Arc<dyn IndexReaderTrait>;
         let compilation_db = create_test_compilation_db();
         let build_dir = PathBuf::from("/test/project/build");
 
@@ -920,15 +964,14 @@ mod tests {
         .await
         .expect("Failed to create ComponentIndexMonitor");
 
-        // Test that refresh works without filesystem dependencies
-        // Since we're using ComponentIndex::refresh_from_disk() which checks actual files,
-        // and our test doesn't have real files, it should just skip updating states
+        // Test that refresh works by calling the rescan method
+        // which now properly uses IndexReader instead of direct filesystem access
         monitor
             .refresh_from_disk()
             .await
             .expect("Failed to refresh from disk");
 
-        // Verify the state remains unchanged since no real index files exist
+        // Verify the state remains unchanged since no valid index files exist
         let coverage = monitor.get_coverage().await;
         assert_eq!(coverage, 0.0); // No files should be marked as indexed
     }
