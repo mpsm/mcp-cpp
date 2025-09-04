@@ -36,6 +36,8 @@ pub enum ProgressEvent {
     },
     /// Overall indexing completed
     OverallCompleted,
+    /// File AST build failed
+    FileAstFailed { path: PathBuf },
     /// Indexing failed
     IndexingFailed { error: String },
 }
@@ -55,6 +57,20 @@ mod tests {
             ProgressEvent::FileIndexingStarted { path, digest } => {
                 assert_eq!(path, PathBuf::from("/test/file.cpp"));
                 assert_eq!(digest, "ABC123");
+            }
+            _ => panic!("Wrong event type"),
+        }
+    }
+
+    #[test]
+    fn test_file_ast_failed_event_creation() {
+        let event = ProgressEvent::FileAstFailed {
+            path: PathBuf::from("/test/failed.cpp"),
+        };
+
+        match event {
+            ProgressEvent::FileAstFailed { path } => {
+                assert_eq!(path, PathBuf::from("/test/failed.cpp"));
             }
             _ => panic!("Wrong event type"),
         }

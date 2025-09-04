@@ -324,6 +324,9 @@ impl ComponentIndexMonitor {
             ProgressEvent::FileAstIndexed { path } => {
                 self.handle_file_ast_indexed(path).await;
             }
+            ProgressEvent::FileAstFailed { path } => {
+                self.handle_file_ast_failed(path).await;
+            }
             ProgressEvent::StandardLibraryStarted {
                 stdlib_version,
                 context_file,
@@ -420,6 +423,71 @@ impl ComponentIndexMonitor {
 
         debug!(
             "AST indexed - marking file as indexed: {:?} ({}/{})",
+            path,
+            state.component_index.indexed_count(),
+            state.component_index.total_files_count()
+        );
+
+        // Trigger next file ONLY if we're in Init or Partial state
+        // During InProgress, we wait for clangd to finish and determine Partial/Completed
+        if matches!(
+            state.current_indexing_state,
+            ComponentIndexingState::Init | ComponentIndexingState::Partial
+        ) {
+            if let Some(next_file) = state.component_index.get_next_uncovered_file() {
+                debug!(
+                    "State is {:?}, triggering indexing for next file: {:?}",
+                    state.current_indexing_state, next_file
+                );
+
+                // Clone the path since we need to release the lock
+                let next_file_path = next_file.to_path_buf();
+
+                // Release the state lock before async operation
+                drop(state);
+
+                // Trigger indexing for the next file
+                if let Err(e) = self.trigger_indexing(&next_file_path).await {
+                    warn!(
+                        "Failed to trigger indexing for next file {:?}: {}",
+                        next_file_path, e
+                    );
+                }
+
+                // Don't re-acquire the lock since we're done
+            } else {
+                debug!("No more pending files to trigger");
+            }
+        } else {
+            debug!(
+                "Not triggering next file - state is {:?} (waiting for completion)",
+                state.current_indexing_state
+            );
+        }
+    }
+
+    /// Handle file AST failed event
+    async fn handle_file_ast_failed(&self, path: PathBuf) {
+        let mut state = match self.state.try_lock() {
+            Ok(state) => state,
+            Err(_) => {
+                warn!(
+                    "Could not acquire lock on component monitor state for {}",
+                    self.build_directory.display()
+                );
+                return;
+            }
+        };
+
+        debug!("File AST failed: {:?}", path);
+
+        // Mark this file as failed since AST build failed
+        state
+            .component_index
+            .mark_file_failed(&path, "AST build failed".to_string());
+
+        debug!(
+            "AST failed - marking file as failed: {:?} ({}/{})",
             path,
             state.component_index.indexed_count(),
             state.component_index.total_files_count()
@@ -1405,6 +1473,36 @@ mod tests {
             .wait_for_completion(Duration::from_secs(1))
             .await;
         assert!(result.is_ok(), "Wait for completion should succeed");
+    }
+
+    #[tokio::test]
+    async fn test_handle_file_ast_failed_event() {
+        let mock_reader = Arc::new(MockIndexReaderTrait::new()) as Arc<dyn IndexReaderTrait>;
+        let compilation_db = create_test_compilation_db();
+        let build_dir = PathBuf::from("/test/project/build");
+
+        let monitor = ComponentIndexMonitor::new_for_test(
+            build_dir,
+            &compilation_db,
+            mock_reader,
+            &create_test_clangd_version(),
+        )
+        .await
+        .expect("Failed to create ComponentIndexMonitor");
+
+        // Handle file AST failed event
+        let test_file_path = PathBuf::from("/test/project/src/main.cpp");
+        monitor
+            .handle_progress_event(ProgressEvent::FileAstFailed {
+                path: test_file_path.clone(),
+            })
+            .await;
+
+        // Verify file is marked as failed
+        let state = monitor.state.lock().await;
+        assert!(state.component_index.is_file_failed(&test_file_path));
+        assert_eq!(state.component_index.failed_count(), 1);
+        assert_eq!(state.component_index.indexed_count(), 0);
     }
 
     #[tokio::test]

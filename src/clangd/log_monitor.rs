@@ -23,6 +23,9 @@ pub struct ClangdLogParser {
     indexing_start_regex: Regex,
     indexing_complete_regex: Regex,
     ast_indexed_regex: Regex,
+    ast_failed_compiler_invocation_regex: Regex,
+    ast_failed_execute_regex: Regex,
+    ast_failed_begin_source_regex: Regex,
     stdlib_start_regex: Regex,
     stdlib_complete_regex: Regex,
 }
@@ -44,6 +47,21 @@ impl ClangdLogParser {
             // V[22:06:42.564] indexed file AST for /tmp/.tmpCSsikQ/src/Container.cpp version 1:
             ast_indexed_regex: Regex::new(
                 r"V\[\d{2}:\d{2}:\d{2}\.\d{3}\] indexed file AST for (.+?) version \d+",
+            )?,
+
+            // E[14:23:45.123] Could not build CompilerInvocation for file /path/to/file.cpp
+            ast_failed_compiler_invocation_regex: Regex::new(
+                r"[EW]\[\d{2}:\d{2}:\d{2}\.\d{3}\] Could not build CompilerInvocation for file (.+)",
+            )?,
+
+            // E[14:23:45.123] Execute() failed when building AST for /path/to/file.cpp: error message
+            ast_failed_execute_regex: Regex::new(
+                r"[EW]\[\d{2}:\d{2}:\d{2}\.\d{3}\] Execute\(\) failed when building AST for (.+?): .+",
+            )?,
+
+            // E[14:23:45.123] BeginSourceFile() failed when building AST for /path/to/file.cpp
+            ast_failed_begin_source_regex: Regex::new(
+                r"[EW]\[\d{2}:\d{2}:\d{2}\.\d{3}\] BeginSourceFile\(\) failed when building AST for (.+)",
             )?,
 
             // I[14:23:47.789] Indexing c++20 standard library in the context of /path/to/file.cpp
@@ -96,6 +114,28 @@ impl LogParser for ClangdLogParser {
             let path = captures.get(1)?.as_str();
 
             return Some(ProgressEvent::FileAstIndexed {
+                path: PathBuf::from(path),
+            });
+        }
+
+        // Try AST failed patterns
+        if let Some(captures) = self.ast_failed_compiler_invocation_regex.captures(line) {
+            let path = captures.get(1)?.as_str();
+            return Some(ProgressEvent::FileAstFailed {
+                path: PathBuf::from(path),
+            });
+        }
+
+        if let Some(captures) = self.ast_failed_execute_regex.captures(line) {
+            let path = captures.get(1)?.as_str();
+            return Some(ProgressEvent::FileAstFailed {
+                path: PathBuf::from(path),
+            });
+        }
+
+        if let Some(captures) = self.ast_failed_begin_source_regex.captures(line) {
+            let path = captures.get(1)?.as_str();
+            return Some(ProgressEvent::FileAstFailed {
                 path: PathBuf::from(path),
             });
         }
@@ -411,6 +451,72 @@ mod tests {
                 assert_eq!(*path, PathBuf::from("/test2.cpp"));
             }
             _ => panic!("Wrong event type at index 2"),
+        }
+    }
+
+    #[test]
+    fn test_parse_ast_failed_compiler_invocation() {
+        let parser = ClangdLogParser::default();
+        let line = "E[14:23:45.123] Could not build CompilerInvocation for file /path/to/file.cpp";
+
+        let event = parser.parse_line(line);
+
+        assert!(event.is_some());
+        match event.unwrap() {
+            ProgressEvent::FileAstFailed { path } => {
+                assert_eq!(path, PathBuf::from("/path/to/file.cpp"));
+            }
+            _ => panic!("Wrong event type"),
+        }
+    }
+
+    #[test]
+    fn test_parse_ast_failed_execute() {
+        let parser = ClangdLogParser::default();
+        let line =
+            "E[14:23:45.123] Execute() failed when building AST for /path/to/file.cpp: some error";
+
+        let event = parser.parse_line(line);
+
+        assert!(event.is_some());
+        match event.unwrap() {
+            ProgressEvent::FileAstFailed { path } => {
+                assert_eq!(path, PathBuf::from("/path/to/file.cpp"));
+            }
+            _ => panic!("Wrong event type"),
+        }
+    }
+
+    #[test]
+    fn test_parse_ast_failed_begin_source() {
+        let parser = ClangdLogParser::default();
+        let line =
+            "E[14:23:45.123] BeginSourceFile() failed when building AST for /path/to/file.cpp";
+
+        let event = parser.parse_line(line);
+
+        assert!(event.is_some());
+        match event.unwrap() {
+            ProgressEvent::FileAstFailed { path } => {
+                assert_eq!(path, PathBuf::from("/path/to/file.cpp"));
+            }
+            _ => panic!("Wrong event type"),
+        }
+    }
+
+    #[test]
+    fn test_parse_ast_failed_warning_level() {
+        let parser = ClangdLogParser::default();
+        let line = "W[14:23:45.123] Could not build CompilerInvocation for file /path/to/file.cpp";
+
+        let event = parser.parse_line(line);
+
+        assert!(event.is_some());
+        match event.unwrap() {
+            ProgressEvent::FileAstFailed { path } => {
+                assert_eq!(path, PathBuf::from("/path/to/file.cpp"));
+            }
+            _ => panic!("Wrong event type"),
         }
     }
 
