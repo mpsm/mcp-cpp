@@ -15,6 +15,18 @@ use crate::project::index::reader::IndexReaderTrait;
 use crate::project::index::trigger::IndexTrigger;
 use crate::project::{CompilationDatabase, ProjectError};
 
+/// Result of validating a single index entry
+enum IndexValidationResult {
+    /// Index is valid and file should be marked as indexed
+    Valid,
+    /// Index is invalid or stale, contains error message
+    Invalid(String),
+    /// No index file found (expected state)
+    NotFound,
+    /// File is currently being indexed by another process
+    InProgress,
+}
+
 /// Component indexing states
 #[derive(Debug, Clone, PartialEq)]
 pub enum ComponentIndexingState {
@@ -127,62 +139,15 @@ impl ComponentIndexMonitor {
         index_reader: Arc<dyn IndexReaderTrait>,
         clangd_version: &ClangdVersion,
     ) -> Result<Self, ProjectError> {
-        // Create component index from compilation database (all files start as Pending)
-        let component_index = ComponentIndex::new(compilation_db, clangd_version).map_err(|e| {
-            ProjectError::SessionCreation(format!(
-                "Failed to create component index for {}: {}",
-                build_directory.display(),
-                e
-            ))
-        })?;
-
-        // Create completion latch
-        let completion_latch = IndexLatch::new();
-
-        let monitor_state = IndexMonitorState {
-            component_index,
-            index_reader,
-            current_indexing_state: ComponentIndexingState::Init,
-            completion_latch,
-            last_updated: std::time::SystemTime::now(),
-        };
-
-        let monitor = Self {
+        Self::create_monitor(
             build_directory,
-            state: Arc::new(Mutex::new(monitor_state)),
-            index_trigger: None,
-        };
-
-        debug!(
-            "Created ComponentIndexMonitor for build dir: {}",
-            monitor.build_directory.display()
-        );
-
-        // Perform initial disk scan to update state from existing index files
-        debug!(
-            "Performing initial disk scan for build dir: {}",
-            monitor.build_directory.display()
-        );
-
-        if let Err(e) = monitor.rescan_and_validate_untracked_files().await {
-            warn!(
-                "Failed to perform initial disk scan for {}: {}",
-                monitor.build_directory.display(),
-                e
-            );
-        }
-
-        {
-            let state = monitor.state.lock().await;
-            debug!(
-                "Initial state after disk scan: {}/{} files indexed for {}",
-                state.component_index.indexed_count(),
-                state.component_index.total_files_count(),
-                monitor.build_directory.display()
-            );
-        }
-
-        Ok(monitor)
+            compilation_db,
+            index_reader,
+            clangd_version,
+            None,
+            false, // perform_scan = false for non-test version
+        )
+        .await
     }
 
     /// Create monitor for specific build directory with optional index trigger
@@ -193,25 +158,49 @@ impl ComponentIndexMonitor {
         clangd_version: &ClangdVersion,
         index_trigger: Option<Arc<dyn IndexTrigger>>,
     ) -> Result<Self, ProjectError> {
-        // Create component index from compilation database (all files start as Pending)
-        let component_index = ComponentIndex::new(compilation_db, clangd_version).map_err(|e| {
-            ProjectError::SessionCreation(format!(
-                "Failed to create component index for {}: {}",
-                build_directory.display(),
-                e
-            ))
-        })?;
-
-        // Create completion latch
-        let completion_latch = IndexLatch::new();
-
-        let monitor_state = IndexMonitorState {
-            component_index,
+        Self::create_monitor(
+            build_directory,
+            compilation_db,
             index_reader,
-            current_indexing_state: ComponentIndexingState::Init,
-            completion_latch,
-            last_updated: std::time::SystemTime::now(),
-        };
+            clangd_version,
+            index_trigger,
+            true, // perform_scan = true for production version
+        )
+        .await
+    }
+
+    /// Create monitor for testing without filesystem dependencies
+    #[cfg(test)]
+    pub async fn new_for_test(
+        build_directory: PathBuf,
+        compilation_db: &CompilationDatabase,
+        index_reader: Arc<dyn IndexReaderTrait>,
+        clangd_version: &ClangdVersion,
+    ) -> Result<Self, ProjectError> {
+        Self::create_monitor_for_test(
+            build_directory,
+            compilation_db,
+            index_reader,
+            clangd_version,
+        )
+        .await
+    }
+
+    /// Common monitor creation logic
+    async fn create_monitor(
+        build_directory: PathBuf,
+        compilation_db: &CompilationDatabase,
+        index_reader: Arc<dyn IndexReaderTrait>,
+        clangd_version: &ClangdVersion,
+        index_trigger: Option<Arc<dyn IndexTrigger>>,
+        perform_scan: bool,
+    ) -> Result<Self, ProjectError> {
+        let monitor_state = Self::create_monitor_state(
+            compilation_db,
+            index_reader,
+            clangd_version,
+            &build_directory,
+        )?;
 
         let monitor = Self {
             build_directory,
@@ -225,36 +214,16 @@ impl ComponentIndexMonitor {
             monitor.index_trigger.is_some()
         );
 
-        // Perform initial disk scan to update state from existing index files
-        debug!(
-            "Performing initial disk scan for build dir: {}",
-            monitor.build_directory.display()
-        );
-
-        if let Err(e) = monitor.rescan_and_validate_untracked_files().await {
-            warn!(
-                "Failed to perform initial disk scan for {}: {}",
-                monitor.build_directory.display(),
-                e
-            );
-        }
-
-        {
-            let state = monitor.state.lock().await;
-            debug!(
-                "Initial state after disk scan: {}/{} files indexed for {}",
-                state.component_index.indexed_count(),
-                state.component_index.total_files_count(),
-                monitor.build_directory.display()
-            );
+        if perform_scan {
+            monitor.perform_initial_scan().await;
         }
 
         Ok(monitor)
     }
 
-    /// Create monitor for testing without filesystem dependencies
+    /// Create monitor state for testing
     #[cfg(test)]
-    pub async fn new_for_test(
+    async fn create_monitor_for_test(
         build_directory: PathBuf,
         compilation_db: &CompilationDatabase,
         index_reader: Arc<dyn IndexReaderTrait>,
@@ -286,8 +255,109 @@ impl ComponentIndexMonitor {
         })
     }
 
+    /// Create common monitor state
+    fn create_monitor_state(
+        compilation_db: &CompilationDatabase,
+        index_reader: Arc<dyn IndexReaderTrait>,
+        clangd_version: &ClangdVersion,
+        build_directory: &Path,
+    ) -> Result<IndexMonitorState, ProjectError> {
+        // Create component index from compilation database (all files start as Pending)
+        let component_index = ComponentIndex::new(compilation_db, clangd_version).map_err(|e| {
+            ProjectError::SessionCreation(format!(
+                "Failed to create component index for {}: {}",
+                build_directory.display(),
+                e
+            ))
+        })?;
+
+        // Create completion latch
+        let completion_latch = IndexLatch::new();
+
+        Ok(IndexMonitorState {
+            component_index,
+            index_reader,
+            current_indexing_state: ComponentIndexingState::Init,
+            completion_latch,
+            last_updated: std::time::SystemTime::now(),
+        })
+    }
+
+    /// Perform initial disk scan to update state from existing index files
+    async fn perform_initial_scan(&self) {
+        debug!(
+            "Performing initial disk scan for build dir: {}",
+            self.build_directory.display()
+        );
+
+        if let Err(e) = self.rescan_and_validate_untracked_files().await {
+            warn!(
+                "Failed to perform initial disk scan for {}: {}",
+                self.build_directory.display(),
+                e
+            );
+        }
+
+        let state = self.state.lock().await;
+        debug!(
+            "Initial state after disk scan: {}/{} files indexed for {}",
+            state.component_index.indexed_count(),
+            state.component_index.total_files_count(),
+            self.build_directory.display()
+        );
+    }
+
     /// Handle progress event (single lock, focused responsibility)
     pub async fn handle_progress_event(&self, event: ProgressEvent) {
+        match event {
+            ProgressEvent::FileIndexingStarted { path, digest } => {
+                self.handle_file_indexing_started(path, digest).await;
+            }
+            ProgressEvent::FileIndexingCompleted {
+                path,
+                symbols,
+                refs,
+            } => {
+                self.handle_file_indexing_completed(path, symbols, refs)
+                    .await;
+            }
+            ProgressEvent::FileAstIndexed { path } => {
+                self.handle_file_ast_indexed(path).await;
+            }
+            ProgressEvent::StandardLibraryStarted {
+                stdlib_version,
+                context_file,
+            } => {
+                self.handle_standard_library_started(stdlib_version, context_file)
+                    .await;
+            }
+            ProgressEvent::StandardLibraryCompleted { symbols, filtered } => {
+                self.handle_standard_library_completed(symbols, filtered)
+                    .await;
+            }
+            ProgressEvent::OverallIndexingStarted => {
+                self.handle_overall_indexing_started().await;
+            }
+            ProgressEvent::OverallProgress {
+                current,
+                total,
+                percentage,
+                message,
+            } => {
+                self.handle_overall_progress(current, total, percentage, message)
+                    .await;
+            }
+            ProgressEvent::OverallCompleted => {
+                self.handle_overall_completed().await;
+            }
+            ProgressEvent::IndexingFailed { error } => {
+                self.handle_indexing_failed(error).await;
+            }
+        }
+    }
+
+    /// Handle file indexing started event
+    async fn handle_file_indexing_started(&self, path: PathBuf, _digest: String) {
         let mut state = match self.state.try_lock() {
             Ok(state) => state,
             Err(_) => {
@@ -299,282 +369,353 @@ impl ComponentIndexMonitor {
             }
         };
 
-        match event {
-            ProgressEvent::FileIndexingStarted { path, .. } => {
-                debug!("File indexing started: {:?}", path);
-                state.component_index.mark_file_in_progress(&path);
-            }
-            ProgressEvent::FileIndexingCompleted {
-                path,
-                symbols,
-                refs,
-            } => {
-                debug!(
-                    "File indexing completed: {:?} ({} symbols, {} refs)",
-                    path, symbols, refs
-                );
-                state.component_index.mark_file_indexed(&path);
+        debug!("File indexing started: {:?}", path);
+        state.component_index.mark_file_in_progress(&path);
+    }
 
-                debug!(
-                    "CDB file indexed: {:?} ({}/{})",
-                    path,
-                    state.component_index.indexed_count(),
-                    state.component_index.total_files_count()
-                );
-            }
-            ProgressEvent::FileAstIndexed { path } => {
-                debug!("File AST indexed: {:?}", path);
-
-                // Mark this file as indexed since AST is now available
-                state.component_index.mark_file_indexed(&path);
-
-                debug!(
-                    "AST indexed - marking file as indexed: {:?} ({}/{})",
-                    path,
-                    state.component_index.indexed_count(),
-                    state.component_index.total_files_count()
-                );
-
-                // Trigger next file ONLY if we're in Init or Partial state
-                // During InProgress, we wait for clangd to finish and determine Partial/Completed
-                if matches!(
-                    state.current_indexing_state,
-                    ComponentIndexingState::Init | ComponentIndexingState::Partial
-                ) {
-                    if let Some(next_file) = state.component_index.get_next_uncovered_file() {
-                        debug!(
-                            "State is {:?}, triggering indexing for next file: {:?}",
-                            state.current_indexing_state, next_file
-                        );
-
-                        // Clone the path since we need to release the lock
-                        let next_file_path = next_file.to_path_buf();
-
-                        // Release the state lock before async operation
-                        drop(state);
-
-                        // Trigger indexing for the next file
-                        if let Err(e) = self.trigger_indexing(&next_file_path).await {
-                            warn!(
-                                "Failed to trigger indexing for next file {:?}: {}",
-                                next_file_path, e
-                            );
-                        }
-
-                        // Don't re-acquire the lock since we're done
-                    } else {
-                        debug!("No more pending files to trigger");
-                    }
-                } else {
-                    debug!(
-                        "Not triggering next file - state is {:?} (waiting for completion)",
-                        state.current_indexing_state
-                    );
-                }
-            }
-            ProgressEvent::StandardLibraryStarted {
-                stdlib_version,
-                context_file,
-            } => {
-                debug!(
-                    "Standard library indexing started: {} (context: {:?})",
-                    stdlib_version, context_file
-                );
-            }
-            ProgressEvent::StandardLibraryCompleted { symbols, filtered } => {
-                debug!(
-                    "Standard library indexing completed: {} symbols, {} filtered",
-                    symbols, filtered
-                );
-            }
-            ProgressEvent::OverallIndexingStarted => {
-                info!(
-                    "Overall indexing started for build directory: {}",
+    /// Handle file indexing completed event
+    async fn handle_file_indexing_completed(&self, path: PathBuf, symbols: u32, refs: u32) {
+        let mut state = match self.state.try_lock() {
+            Ok(state) => state,
+            Err(_) => {
+                warn!(
+                    "Could not acquire lock on component monitor state for {}",
                     self.build_directory.display()
                 );
-
-                // Transition component state from Init to InProgress
-                state.current_indexing_state = ComponentIndexingState::InProgress(0.0);
-                state.last_updated = std::time::SystemTime::now();
-                debug!(
-                    "Component state transitioned to InProgress for {}",
-                    self.build_directory.display()
-                );
+                return;
             }
-            ProgressEvent::OverallProgress {
-                current,
-                total,
-                percentage,
-                message,
-            } => {
-                debug!(
-                    "Overall indexing progress: {}/{} ({}%) - {:?}",
-                    current, total, percentage, message
-                );
+        };
 
-                // Update component state with progress percentage
-                state.current_indexing_state =
-                    ComponentIndexingState::InProgress(percentage as f32);
-                state.last_updated = std::time::SystemTime::now();
-                trace!(
-                    "Component progress updated to {}% for {}",
-                    percentage,
+        debug!(
+            "File indexing completed: {:?} ({} symbols, {} refs)",
+            path, symbols, refs
+        );
+        state.component_index.mark_file_indexed(&path);
+
+        debug!(
+            "CDB file indexed: {:?} ({}/{})",
+            path,
+            state.component_index.indexed_count(),
+            state.component_index.total_files_count()
+        );
+    }
+
+    /// Handle file AST indexed event
+    async fn handle_file_ast_indexed(&self, path: PathBuf) {
+        let mut state = match self.state.try_lock() {
+            Ok(state) => state,
+            Err(_) => {
+                warn!(
+                    "Could not acquire lock on component monitor state for {}",
                     self.build_directory.display()
                 );
+                return;
             }
-            ProgressEvent::OverallCompleted => {
-                info!(
-                    "Overall indexing completed for build directory: {}",
-                    self.build_directory.display()
+        };
+
+        debug!("File AST indexed: {:?}", path);
+
+        // Mark this file as indexed since AST is now available
+        state.component_index.mark_file_indexed(&path);
+
+        debug!(
+            "AST indexed - marking file as indexed: {:?} ({}/{})",
+            path,
+            state.component_index.indexed_count(),
+            state.component_index.total_files_count()
+        );
+
+        // Trigger next file ONLY if we're in Init or Partial state
+        // During InProgress, we wait for clangd to finish and determine Partial/Completed
+        if matches!(
+            state.current_indexing_state,
+            ComponentIndexingState::Init | ComponentIndexingState::Partial
+        ) {
+            if let Some(next_file) = state.component_index.get_next_uncovered_file() {
+                debug!(
+                    "State is {:?}, triggering indexing for next file: {:?}",
+                    state.current_indexing_state, next_file
                 );
 
-                // Release the state lock before calling the async rescan method
+                // Clone the path since we need to release the lock
+                let next_file_path = next_file.to_path_buf();
+
+                // Release the state lock before async operation
                 drop(state);
 
-                // Critical: Rescan and validate files that were already indexed but not reported by clangd
-                // This uses proper IndexReader validation to ensure index files are valid
-                debug!(
-                    "Starting validation of untracked index files after overall completion for {}",
-                    self.build_directory.display()
-                );
-
-                if let Err(e) = self.rescan_and_validate_untracked_files().await {
+                // Trigger indexing for the next file
+                if let Err(e) = self.trigger_indexing(&next_file_path).await {
                     warn!(
-                        "Failed to rescan untracked index files for {}: {}",
-                        self.build_directory.display(),
-                        e
+                        "Failed to trigger indexing for next file {:?}: {}",
+                        next_file_path, e
                     );
                 }
 
-                // Re-acquire state lock for final state determination
-                let mut state = match self.state.try_lock() {
-                    Ok(state) => state,
-                    Err(_) => {
-                        warn!(
-                            "Could not acquire lock after rescan for {}",
-                            self.build_directory.display()
-                        );
-                        return;
-                    }
-                };
-
-                // Determine component final state based on CDB coverage AFTER validation
-                let should_trigger_next = if state.component_index.is_fully_indexed() {
-                    debug!(
-                        "All CDB files indexed ({}/{}), transitioning to Completed",
-                        state.component_index.indexed_count(),
-                        state.component_index.total_files_count()
-                    );
-
-                    // Update state to Completed
-                    state.current_indexing_state = ComponentIndexingState::Completed;
-                    state.last_updated = std::time::SystemTime::now();
-                    None // No next file to trigger
-                } else {
-                    debug!(
-                        "Partial CDB coverage ({}/{}), transitioning to Partial",
-                        state.component_index.indexed_count(),
-                        state.component_index.total_files_count()
-                    );
-
-                    // Update state to Partial
-                    state.current_indexing_state = ComponentIndexingState::Partial;
-                    state.last_updated = std::time::SystemTime::now();
-
-                    // Check if we should trigger next file after transitioning to Partial
-                    state
-                        .component_index
-                        .get_next_uncovered_file()
-                        .map(|p| p.to_path_buf())
-                };
-                info!(
-                    "Component state transitioned to {:?} for {} (coverage: {:.1}%)",
-                    state.current_indexing_state,
-                    self.build_directory.display(),
-                    state.component_index.coverage() * 100.0
-                );
-
-                // Log detailed indexing summary for diagnostics
-                let summary = state.component_index.get_indexing_summary();
-                debug!(
-                    "Final indexing summary for {}: {} total, {} indexed, {} pending, {} in-progress, {} failed",
-                    self.build_directory.display(),
-                    summary.total_files,
-                    summary.indexed_count,
-                    summary.pending_count,
-                    summary.in_progress_count,
-                    summary.failed_count
-                );
-
-                // If we determined we should trigger next file (in Partial state), do it now
-                if let Some(next_file_path) = should_trigger_next {
-                    debug!(
-                        "Triggering next unindexed file after Partial transition: {:?}",
-                        next_file_path
-                    );
-
-                    // Release state lock before async operation
-                    drop(state);
-
-                    // Trigger the next file
-                    if let Err(e) = self.trigger_indexing(&next_file_path).await {
-                        warn!(
-                            "Failed to trigger next file after Partial transition: {}",
-                            e
-                        );
-                    }
-
-                    // Re-acquire state lock for latch triggering
-                    let state = match self.state.try_lock() {
-                        Ok(state) => state,
-                        Err(_) => {
-                            warn!("Could not re-acquire state lock for latch triggering");
-                            return;
-                        }
-                    };
-
-                    // Continue with latch triggering using the re-acquired state
-                    let latch = state.completion_latch.clone();
-                    drop(state); // Release before spawning
-                    tokio::spawn(async move {
-                        latch.trigger_success().await;
-                    });
-                    debug!(
-                        "Triggered completion latch for build directory: {} (initial indexing ended)",
-                        self.build_directory.display()
-                    );
-                    return;
-                }
-
-                // Trigger latch now that initial indexing has ended (either Partial or Completed)
-                let latch = state.completion_latch.clone();
-                tokio::spawn(async move {
-                    latch.trigger_success().await;
-                });
-                debug!(
-                    "Triggered completion latch for build directory: {} (initial indexing ended)",
-                    self.build_directory.display()
-                );
+                // Don't re-acquire the lock since we're done
+            } else {
+                debug!("No more pending files to trigger");
             }
-            ProgressEvent::IndexingFailed { error } => {
-                warn!(
-                    "Indexing failed for build directory {}: {}",
-                    self.build_directory.display(),
-                    error
-                );
-
-                // Trigger failure latch
-                let latch = state.completion_latch.clone();
-                let error_clone = error.clone();
-                tokio::spawn(async move {
-                    latch.trigger_failure(error_clone).await;
-                });
-                debug!(
-                    "Triggered failure latch for build directory: {}",
-                    self.build_directory.display()
-                );
-            }
+        } else {
+            debug!(
+                "Not triggering next file - state is {:?} (waiting for completion)",
+                state.current_indexing_state
+            );
         }
+    }
+
+    /// Handle standard library indexing started event
+    async fn handle_standard_library_started(&self, stdlib_version: String, context_file: PathBuf) {
+        debug!(
+            "Standard library indexing started: {} (context: {:?})",
+            stdlib_version, context_file
+        );
+    }
+
+    /// Handle standard library indexing completed event
+    async fn handle_standard_library_completed(&self, symbols: u32, filtered: u32) {
+        debug!(
+            "Standard library indexing completed: {} symbols, {} filtered",
+            symbols, filtered
+        );
+    }
+
+    /// Handle overall indexing started event
+    async fn handle_overall_indexing_started(&self) {
+        let mut state = match self.state.try_lock() {
+            Ok(state) => state,
+            Err(_) => {
+                warn!(
+                    "Could not acquire lock on component monitor state for {}",
+                    self.build_directory.display()
+                );
+                return;
+            }
+        };
+
+        info!(
+            "Overall indexing started for build directory: {}",
+            self.build_directory.display()
+        );
+
+        // Transition component state from Init to InProgress
+        state.current_indexing_state = ComponentIndexingState::InProgress(0.0);
+        state.last_updated = std::time::SystemTime::now();
+        debug!(
+            "Component state transitioned to InProgress for {}",
+            self.build_directory.display()
+        );
+    }
+
+    /// Handle overall progress event
+    async fn handle_overall_progress(
+        &self,
+        current: u32,
+        total: u32,
+        percentage: u8,
+        message: Option<String>,
+    ) {
+        let mut state = match self.state.try_lock() {
+            Ok(state) => state,
+            Err(_) => {
+                warn!(
+                    "Could not acquire lock on component monitor state for {}",
+                    self.build_directory.display()
+                );
+                return;
+            }
+        };
+
+        debug!(
+            "Overall indexing progress: {}/{} ({}%) - {:?}",
+            current, total, percentage, message
+        );
+
+        // Update component state with progress percentage
+        state.current_indexing_state = ComponentIndexingState::InProgress(percentage as f32);
+        state.last_updated = std::time::SystemTime::now();
+        trace!(
+            "Component progress updated to {}% for {}",
+            percentage,
+            self.build_directory.display()
+        );
+    }
+
+    /// Handle overall completion event
+    async fn handle_overall_completed(&self) {
+        info!(
+            "Overall indexing completed for build directory: {}",
+            self.build_directory.display()
+        );
+
+        // Perform validation of untracked index files
+        self.perform_post_completion_validation().await;
+
+        // Determine final state and handle next file triggering
+        let should_trigger_next = self.determine_final_indexing_state().await;
+
+        // Trigger next file if needed or finalize completion
+        if let Some(next_file_path) = should_trigger_next {
+            self.trigger_next_file_and_finalize(next_file_path).await;
+        } else {
+            self.finalize_completion().await;
+        }
+    }
+
+    /// Perform validation of untracked index files after overall completion
+    async fn perform_post_completion_validation(&self) {
+        // Critical: Rescan and validate files that were already indexed but not reported by clangd
+        // This uses proper IndexReader validation to ensure index files are valid
+        debug!(
+            "Starting validation of untracked index files after overall completion for {}",
+            self.build_directory.display()
+        );
+
+        if let Err(e) = self.rescan_and_validate_untracked_files().await {
+            warn!(
+                "Failed to rescan untracked index files for {}: {}",
+                self.build_directory.display(),
+                e
+            );
+        }
+    }
+
+    /// Determine final indexing state and return next file to trigger if any
+    async fn determine_final_indexing_state(&self) -> Option<PathBuf> {
+        // Re-acquire state lock for final state determination
+        let mut state = match self.state.try_lock() {
+            Ok(state) => state,
+            Err(_) => {
+                warn!(
+                    "Could not acquire lock after rescan for {}",
+                    self.build_directory.display()
+                );
+                return None;
+            }
+        };
+
+        // Determine component final state based on CDB coverage AFTER validation
+        let should_trigger_next = if state.component_index.is_fully_indexed() {
+            debug!(
+                "All CDB files indexed ({}/{}), transitioning to Completed",
+                state.component_index.indexed_count(),
+                state.component_index.total_files_count()
+            );
+
+            // Update state to Completed
+            state.current_indexing_state = ComponentIndexingState::Completed;
+            state.last_updated = std::time::SystemTime::now();
+            None // No next file to trigger
+        } else {
+            debug!(
+                "Partial CDB coverage ({}/{}), transitioning to Partial",
+                state.component_index.indexed_count(),
+                state.component_index.total_files_count()
+            );
+
+            // Update state to Partial
+            state.current_indexing_state = ComponentIndexingState::Partial;
+            state.last_updated = std::time::SystemTime::now();
+
+            // Check if we should trigger next file after transitioning to Partial
+            state
+                .component_index
+                .get_next_uncovered_file()
+                .map(|p| p.to_path_buf())
+        };
+
+        info!(
+            "Component state transitioned to {:?} for {} (coverage: {:.1}%)",
+            state.current_indexing_state,
+            self.build_directory.display(),
+            state.component_index.coverage() * 100.0
+        );
+
+        // Log detailed indexing summary for diagnostics
+        let summary = state.component_index.get_indexing_summary();
+        debug!(
+            "Final indexing summary for {}: {} total, {} indexed, {} pending, {} in-progress, {} failed",
+            self.build_directory.display(),
+            summary.total_files,
+            summary.indexed_count,
+            summary.pending_count,
+            summary.in_progress_count,
+            summary.failed_count
+        );
+
+        should_trigger_next
+    }
+
+    /// Trigger next file and finalize completion
+    async fn trigger_next_file_and_finalize(&self, next_file_path: PathBuf) {
+        debug!(
+            "Triggering next unindexed file after Partial transition: {:?}",
+            next_file_path
+        );
+
+        // Trigger the next file
+        if let Err(e) = self.trigger_indexing(&next_file_path).await {
+            warn!(
+                "Failed to trigger next file after Partial transition: {}",
+                e
+            );
+        }
+
+        // Finalize with latch triggering
+        self.finalize_completion().await;
+    }
+
+    /// Finalize completion by triggering the completion latch
+    async fn finalize_completion(&self) {
+        // Re-acquire state lock for latch triggering
+        let state = match self.state.try_lock() {
+            Ok(state) => state,
+            Err(_) => {
+                warn!("Could not acquire state lock for latch triggering");
+                return;
+            }
+        };
+
+        // Trigger latch now that initial indexing has ended (either Partial or Completed)
+        let latch = state.completion_latch.clone();
+        drop(state); // Release before spawning
+        tokio::spawn(async move {
+            latch.trigger_success().await;
+        });
+        debug!(
+            "Triggered completion latch for build directory: {} (initial indexing ended)",
+            self.build_directory.display()
+        );
+    }
+
+    /// Handle indexing failed event
+    async fn handle_indexing_failed(&self, error: String) {
+        let state = match self.state.try_lock() {
+            Ok(state) => state,
+            Err(_) => {
+                warn!(
+                    "Could not acquire lock on component monitor state for {}",
+                    self.build_directory.display()
+                );
+                return;
+            }
+        };
+
+        warn!(
+            "Indexing failed for build directory {}: {}",
+            self.build_directory.display(),
+            error
+        );
+
+        // Trigger failure latch
+        let latch = state.completion_latch.clone();
+        let error_clone = error.clone();
+        tokio::spawn(async move {
+            latch.trigger_failure(error_clone).await;
+        });
+        debug!(
+            "Triggered failure latch for build directory: {}",
+            self.build_directory.display()
+        );
     }
 
     /// Get current component indexing state
@@ -647,6 +788,47 @@ impl ComponentIndexMonitor {
         Ok(())
     }
 
+    /// Validate a single index entry and return appropriate action
+    fn validate_index_entry(
+        &self,
+        source_file: &Path,
+        index_entry: &crate::project::index::reader::IndexEntry,
+    ) -> IndexValidationResult {
+        match &index_entry.status {
+            crate::project::index::reader::FileIndexStatus::Done => {
+                // Valid index file found - mark as indexed
+                trace!(
+                    "Validated existing index for file: {:?} (format: v{}, {} symbols)",
+                    source_file,
+                    index_entry.expected_format_version,
+                    index_entry.symbols.len()
+                );
+                IndexValidationResult::Valid
+            }
+            crate::project::index::reader::FileIndexStatus::Invalid(reason) => {
+                // Index file exists but is invalid
+                let error_msg = format!("Invalid index for {:?}: {}", source_file, reason);
+                IndexValidationResult::Invalid(error_msg)
+            }
+            crate::project::index::reader::FileIndexStatus::Stale => {
+                // Index file is stale
+                let error_msg = format!(
+                    "Stale index for {:?}: file modified since indexing",
+                    source_file
+                );
+                IndexValidationResult::Invalid(error_msg)
+            }
+            crate::project::index::reader::FileIndexStatus::None => {
+                // No index file found - this is expected, leave as pending
+                IndexValidationResult::NotFound
+            }
+            crate::project::index::reader::FileIndexStatus::InProgress => {
+                // Another process is indexing this file - leave as pending
+                IndexValidationResult::InProgress
+            }
+        }
+    }
+
     /// Rescan and validate untracked index files using proper validation
     ///
     /// This method:
@@ -690,44 +872,21 @@ impl ComponentIndexMonitor {
         for source_file in &pending_files {
             match state.index_reader.read_index_for_file(source_file).await {
                 Ok(index_entry) => {
-                    match &index_entry.status {
-                        crate::project::index::reader::FileIndexStatus::Done => {
-                            // Valid index file found - mark as indexed
+                    let validation_result = self.validate_index_entry(source_file, &index_entry);
+                    match validation_result {
+                        IndexValidationResult::Valid => {
                             state.component_index.mark_file_indexed(source_file);
                             files_validated += 1;
-                            trace!(
-                                "Validated existing index for file: {:?} (format: v{}, {} symbols)",
-                                source_file,
-                                index_entry.expected_format_version,
-                                index_entry.symbols.len()
-                            );
                         }
-                        crate::project::index::reader::FileIndexStatus::Invalid(reason) => {
-                            // Index file exists but is invalid
+                        IndexValidationResult::Invalid(error_msg) => {
                             files_invalid += 1;
-                            let error_msg =
-                                format!("Invalid index for {:?}: {}", source_file, reason);
                             validation_errors.push(error_msg.clone());
                             debug!("{}", error_msg);
-                            // Leave as pending - will be re-indexed
                         }
-                        crate::project::index::reader::FileIndexStatus::Stale => {
-                            // Index file is stale
-                            files_invalid += 1;
-                            let error_msg = format!(
-                                "Stale index for {:?}: file modified since indexing",
-                                source_file
-                            );
-                            validation_errors.push(error_msg.clone());
-                            debug!("{}", error_msg);
-                            // Leave as pending - will be re-indexed
-                        }
-                        crate::project::index::reader::FileIndexStatus::None => {
-                            // No index file found - this is expected, leave as pending
+                        IndexValidationResult::NotFound => {
                             trace!("No existing index found for file: {:?}", source_file);
                         }
-                        crate::project::index::reader::FileIndexStatus::InProgress => {
-                            // Another process is indexing this file - leave as pending
+                        IndexValidationResult::InProgress => {
                             trace!(
                                 "File currently being indexed by another process: {:?}",
                                 source_file
@@ -794,7 +953,6 @@ impl ComponentIndexMonitor {
         let state = self.state.lock().await;
         state.completion_latch.clone()
     }
-
     /// Trigger indexing for a specific file using the configured IndexTrigger
     ///
     /// This method delegates to the injected IndexTrigger to initiate indexing
