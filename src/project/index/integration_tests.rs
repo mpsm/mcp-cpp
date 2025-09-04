@@ -25,17 +25,17 @@ async fn test_indexing_progress_tracking_with_real_clangd() {
     let clangd_path = crate::test_utils::get_test_clangd_path();
     let workspace_session = WorkspaceSession::new(workspace, clangd_path).unwrap();
 
+    // Start clangd session first to create the monitor
+    let session = workspace_session
+        .get_or_create_session(test_project.build_dir.clone())
+        .await
+        .unwrap();
+
     // Get initial coverage (should be 0)
     let initial_coverage = workspace_session
         .get_indexing_coverage(&test_project.build_dir)
         .await;
     assert_eq!(initial_coverage, Some(0.0));
-
-    // Start clangd session and open a file to trigger indexing
-    let session = workspace_session
-        .get_or_create_session(test_project.build_dir.clone())
-        .await
-        .unwrap();
 
     let main_cpp_path = test_project.project_root.join("src/main.cpp");
     session

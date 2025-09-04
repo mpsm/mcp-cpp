@@ -19,7 +19,7 @@ use crate::io::file_system::RealFileSystem;
 use crate::project::index::reader::{IndexReader, IndexReaderTrait};
 use crate::project::index::storage::IndexStorage;
 use crate::project::index::storage::filesystem::FilesystemIndexStorage;
-use crate::project::index::{ComponentIndexMonitor, ComponentIndexState};
+use crate::project::index::{ClangdIndexTrigger, ComponentIndexMonitor, ComponentIndexState};
 use crate::project::{ProjectError, ProjectWorkspace};
 use tokio::sync::mpsc;
 
@@ -127,17 +127,6 @@ impl WorkspaceSession {
         // Initialize progress event channel for index state tracking
         let (progress_tx, mut progress_rx) = mpsc::channel(PROGRESS_CHANNEL_BUFFER_SIZE);
 
-        // Get or create ComponentIndexMonitor for this build directory
-        let component_monitor = self.get_or_create_component_monitor(&build_dir).await?;
-
-        // Launch background processor for progress events
-        let monitor_clone = Arc::clone(&component_monitor);
-        tokio::spawn(async move {
-            while let Some(event) = progress_rx.recv().await {
-                monitor_clone.handle_progress_event(event).await;
-            }
-        });
-
         // Construct ClangdSession with progress event integration
         let session = ClangdSessionBuilder::new()
             .with_config(config)
@@ -151,32 +140,18 @@ impl WorkspaceSession {
         // Wrap in Arc<Mutex> for sharing
         let session_arc = Arc::new(Mutex::new(session));
 
-        // Trigger clangd indexing by opening a representative source file.
-        // clangd requires at least one textDocument/didOpen to initiate background indexing.
-        // Without this, clangd remains idle and subsequent symbol queries return empty results.
-        let component = self
-            .workspace
-            .get_component_by_build_dir(&build_dir)
-            .ok_or_else(|| {
-                ProjectError::SessionCreation("Component not found for build directory".to_string())
-            })?;
+        // Create ComponentIndexMonitor for this build directory
+        let component_monitor = self
+            .create_component_monitor(&build_dir, Arc::clone(&session_arc))
+            .await?;
 
-        let source_files = component.compilation_database.source_files();
-        if let Some(&first_file) = source_files.first() {
-            debug!(
-                "Triggering indexing by opening first source file: {:?}",
-                first_file
-            );
-            let mut session_guard = session_arc.lock().await;
-            if let Err(e) = session_guard.ensure_file_ready(first_file).await {
-                warn!(
-                    "Failed to open first source file to trigger indexing: {}",
-                    e
-                );
+        // Launch background processor for progress events
+        let monitor_clone = Arc::clone(&component_monitor);
+        tokio::spawn(async move {
+            while let Some(event) = progress_rx.recv().await {
+                monitor_clone.handle_progress_event(event).await;
             }
-        } else {
-            warn!("No source files found in compilation database - indexing may not start");
-        }
+        });
 
         // Store the session for future reuse
         sessions.insert(build_dir.clone(), Arc::clone(&session_arc));
@@ -187,18 +162,22 @@ impl WorkspaceSession {
         Ok(session_arc)
     }
 
-    /// Get or create a ComponentIndexMonitor for the specified build directory
-    async fn get_or_create_component_monitor(
+    /// Get an existing ComponentIndexMonitor for the specified build directory
+    pub async fn get_component_monitor(
         &self,
         build_dir: &Path,
+    ) -> Option<Arc<ComponentIndexMonitor>> {
+        let monitors = self.index_monitors.lock().await;
+        monitors.get(build_dir).map(Arc::clone)
+    }
+
+    /// Create a ComponentIndexMonitor for the specified build directory
+    /// This is called internally during session creation and should not be used directly
+    async fn create_component_monitor(
+        &self,
+        build_dir: &Path,
+        session: Arc<Mutex<ClangdSession>>,
     ) -> Result<Arc<ComponentIndexMonitor>, ProjectError> {
-        let mut monitors = self.index_monitors.lock().await;
-
-        // Check if we already have a monitor for this build directory
-        if let Some(monitor) = monitors.get(build_dir) {
-            return Ok(Arc::clone(monitor));
-        }
-
         // Get the component for this build directory
         let component = self
             .workspace
@@ -222,16 +201,36 @@ impl WorkspaceSession {
         let index_reader: Arc<dyn IndexReaderTrait> =
             Arc::new(IndexReader::new(storage, self.clangd_version.clone()));
 
-        // Create new ComponentIndexMonitor
-        let monitor = ComponentIndexMonitor::new(
+        // Create IndexTrigger from the provided clangd session
+        let index_trigger = Arc::new(ClangdIndexTrigger::new(session));
+
+        // Create new ComponentIndexMonitor with IndexTrigger
+        let monitor = ComponentIndexMonitor::new_with_trigger(
             build_dir.to_path_buf(),
             &component.compilation_database,
             index_reader,
             &self.clangd_version,
+            Some(index_trigger),
         )
         .await?;
 
+        // Trigger initial indexing using the ComponentIndexMonitor
+        // This replaces the manual ensure_file_ready call that was in get_or_create_session
+        if let Err(e) = monitor
+            .trigger_initial_indexing(&component.compilation_database)
+            .await
+        {
+            warn!(
+                "Failed to trigger initial indexing for {}: {}",
+                build_dir.display(),
+                e
+            );
+        }
+
         let monitor_arc = Arc::new(monitor);
+
+        // Store the monitor for future retrieval
+        let mut monitors = self.index_monitors.lock().await;
         monitors.insert(build_dir.to_path_buf(), Arc::clone(&monitor_arc));
 
         debug!(
@@ -245,20 +244,20 @@ impl WorkspaceSession {
     /// Get indexing coverage for a build directory (0.0 to 1.0)
     #[allow(dead_code)]
     pub async fn get_indexing_coverage(&self, build_dir: &Path) -> Option<f32> {
-        // Get or create ComponentIndexMonitor to ensure coverage is available
-        match self.get_or_create_component_monitor(build_dir).await {
-            Ok(monitor) => Some(monitor.get_coverage().await),
-            Err(_) => None,
+        // Get the ComponentIndexMonitor - if none exists, session wasn't created
+        match self.get_component_monitor(build_dir).await {
+            Some(monitor) => Some(monitor.get_coverage().await),
+            None => None,
         }
     }
 
     /// Get component indexing state for a build directory
     #[allow(dead_code)]
     pub async fn get_component_index_state(&self, build_dir: &Path) -> Option<ComponentIndexState> {
-        // Get or create ComponentIndexMonitor to ensure state is available
-        match self.get_or_create_component_monitor(build_dir).await {
-            Ok(monitor) => Some(monitor.get_component_state().await),
-            Err(_) => None,
+        // Get the ComponentIndexMonitor - if none exists, session wasn't created
+        match self.get_component_monitor(build_dir).await {
+            Some(monitor) => Some(monitor.get_component_state().await),
+            None => None,
         }
     }
 
@@ -292,8 +291,12 @@ impl WorkspaceSession {
             timeout
         );
 
-        // Get or create ComponentIndexMonitor for this build directory
-        let monitor = self.get_or_create_component_monitor(build_dir).await?;
+        // Get the ComponentIndexMonitor - if none exists, session wasn't created
+        let monitor = self.get_component_monitor(build_dir).await.ok_or_else(|| {
+            ProjectError::SessionCreation(
+                "ComponentIndexMonitor not found - session not created".to_string(),
+            )
+        })?;
 
         // Wait for completion using ComponentIndexMonitor
         monitor.wait_for_completion(timeout).await?;
@@ -307,18 +310,23 @@ impl WorkspaceSession {
     /// to reflect staleness and availability of actual index data.
     #[allow(dead_code)]
     pub async fn refresh_index_state(&self, build_dir: &Path) -> Result<(), ProjectError> {
-        // Get or create ComponentIndexMonitor and delegate to it
-        let monitor = self.get_or_create_component_monitor(build_dir).await?;
+        // Get the ComponentIndexMonitor - if none exists, session wasn't created
+        let monitor = self.get_component_monitor(build_dir).await.ok_or_else(|| {
+            ProjectError::SessionCreation(
+                "ComponentIndexMonitor not found - session not created".to_string(),
+            )
+        })?;
+
         monitor.refresh_from_disk().await
     }
 
     /// Get latch for a build directory to wait for indexing completion
     #[allow(dead_code)]
     pub async fn get_index_latch(&self, build_dir: &Path) -> Option<IndexLatch> {
-        // Get or create ComponentIndexMonitor to ensure latch is available
-        match self.get_or_create_component_monitor(build_dir).await {
-            Ok(monitor) => Some(monitor.get_completion_latch().await),
-            Err(_) => None,
+        // Get the ComponentIndexMonitor - if none exists, session wasn't created
+        match self.get_component_monitor(build_dir).await {
+            Some(monitor) => Some(monitor.get_completion_latch().await),
+            None => None,
         }
     }
 }

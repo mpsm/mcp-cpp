@@ -21,10 +21,12 @@ pub mod session;
 pub mod state;
 #[allow(dead_code)]
 pub mod storage;
+pub mod trigger;
 
 // Public exports
 pub use component_monitor::{ComponentIndexMonitor, ComponentIndexState};
 pub use session::IndexSession;
+pub use trigger::ClangdIndexTrigger;
 
 #[cfg(all(test, feature = "clangd-integration-tests"))]
 mod integration_tests;

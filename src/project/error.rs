@@ -41,4 +41,7 @@ pub enum ProjectError {
 
     #[error("Indexing timeout: {0}")]
     IndexingTimeout(String),
+
+    #[error("Indexing trigger failed: {0}")]
+    IndexingTrigger(String),
 }

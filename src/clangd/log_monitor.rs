@@ -147,12 +147,13 @@ impl LogMonitor {
         trace!("LogMonitor: Processing stderr line: {}", line);
 
         if let Some(event) = self.parser.parse_line(line)
-            && let Some(ref sender) = self.event_sender {
-                // Non-blocking send - drop event if channel is full
-                if sender.try_send(event).is_err() {
-                    warn!("LogMonitor: Progress event channel full, dropping event");
-                }
+            && let Some(ref sender) = self.event_sender
+        {
+            // Non-blocking send - drop event if channel is full
+            if sender.try_send(event).is_err() {
+                warn!("LogMonitor: Progress event channel full, dropping event");
             }
+        }
     }
 
     /// Create a stderr line processor that can be used as a callback

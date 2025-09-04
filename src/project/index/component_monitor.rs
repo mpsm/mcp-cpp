@@ -12,6 +12,7 @@ use tracing::{debug, info, trace, warn};
 use crate::clangd::index::{ComponentIndex, IndexLatch, ProgressEvent};
 use crate::clangd::version::ClangdVersion;
 use crate::project::index::reader::IndexReaderTrait;
+use crate::project::index::trigger::IndexTrigger;
 use crate::project::{CompilationDatabase, ProjectError};
 
 /// Component indexing states
@@ -112,10 +113,14 @@ pub struct ComponentIndexMonitor {
 
     /// All index-related state consolidated under single lock
     state: Arc<Mutex<IndexMonitorState>>,
+
+    /// Optional index trigger for initiating indexing operations
+    index_trigger: Option<Arc<dyn IndexTrigger>>,
 }
 
 impl ComponentIndexMonitor {
     /// Create monitor for specific build directory
+    #[allow(dead_code)]
     pub async fn new(
         build_directory: PathBuf,
         compilation_db: &CompilationDatabase,
@@ -145,11 +150,79 @@ impl ComponentIndexMonitor {
         let monitor = Self {
             build_directory,
             state: Arc::new(Mutex::new(monitor_state)),
+            index_trigger: None,
         };
 
         debug!(
             "Created ComponentIndexMonitor for build dir: {}",
             monitor.build_directory.display()
+        );
+
+        // Perform initial disk scan to update state from existing index files
+        debug!(
+            "Performing initial disk scan for build dir: {}",
+            monitor.build_directory.display()
+        );
+
+        if let Err(e) = monitor.rescan_and_validate_untracked_files().await {
+            warn!(
+                "Failed to perform initial disk scan for {}: {}",
+                monitor.build_directory.display(),
+                e
+            );
+        }
+
+        {
+            let state = monitor.state.lock().await;
+            debug!(
+                "Initial state after disk scan: {}/{} files indexed for {}",
+                state.component_index.indexed_count(),
+                state.component_index.total_files_count(),
+                monitor.build_directory.display()
+            );
+        }
+
+        Ok(monitor)
+    }
+
+    /// Create monitor for specific build directory with optional index trigger
+    pub async fn new_with_trigger(
+        build_directory: PathBuf,
+        compilation_db: &CompilationDatabase,
+        index_reader: Arc<dyn IndexReaderTrait>,
+        clangd_version: &ClangdVersion,
+        index_trigger: Option<Arc<dyn IndexTrigger>>,
+    ) -> Result<Self, ProjectError> {
+        // Create component index from compilation database (all files start as Pending)
+        let component_index = ComponentIndex::new(compilation_db, clangd_version).map_err(|e| {
+            ProjectError::SessionCreation(format!(
+                "Failed to create component index for {}: {}",
+                build_directory.display(),
+                e
+            ))
+        })?;
+
+        // Create completion latch
+        let completion_latch = IndexLatch::new();
+
+        let monitor_state = IndexMonitorState {
+            component_index,
+            index_reader,
+            current_indexing_state: ComponentIndexingState::Init,
+            completion_latch,
+            last_updated: std::time::SystemTime::now(),
+        };
+
+        let monitor = Self {
+            build_directory,
+            state: Arc::new(Mutex::new(monitor_state)),
+            index_trigger,
+        };
+
+        debug!(
+            "Created ComponentIndexMonitor for build dir: {} with trigger: {}",
+            monitor.build_directory.display(),
+            monitor.index_trigger.is_some()
         );
 
         // Perform initial disk scan to update state from existing index files
@@ -209,6 +282,7 @@ impl ComponentIndexMonitor {
         Ok(Self {
             build_directory,
             state: Arc::new(Mutex::new(monitor_state)),
+            index_trigger: None,
         })
     }
 
@@ -620,6 +694,65 @@ impl ComponentIndexMonitor {
     pub async fn get_completion_latch(&self) -> IndexLatch {
         let state = self.state.lock().await;
         state.completion_latch.clone()
+    }
+
+    /// Trigger indexing for a specific file using the configured IndexTrigger
+    ///
+    /// This method delegates to the injected IndexTrigger to initiate indexing
+    /// for the specified file. If no trigger is configured, this is a no-op.
+    ///
+    /// # Arguments
+    /// * `file_path` - Path to the source file to trigger indexing for
+    ///
+    /// # Returns
+    /// * `Ok(())` if indexing was successfully triggered or no trigger is configured
+    /// * `Err(ProjectError)` if triggering failed
+    pub async fn trigger_indexing(&self, file_path: &Path) -> Result<(), ProjectError> {
+        if let Some(trigger) = &self.index_trigger {
+            debug!("Triggering indexing for file: {:?}", file_path);
+            trigger.trigger(file_path).await?;
+        } else {
+            debug!(
+                "No index trigger configured, skipping indexing trigger for: {:?}",
+                file_path
+            );
+        }
+        Ok(())
+    }
+
+    /// Trigger initial indexing using the first source file from the compilation database
+    ///
+    /// This method selects the first source file from the compilation database and
+    /// triggers indexing for it. This is typically called after monitor creation
+    /// to initiate the indexing process.
+    ///
+    /// # Arguments
+    /// * `compilation_db` - The compilation database to get source files from
+    ///
+    /// # Returns
+    /// * `Ok(())` if indexing was successfully triggered or no trigger is configured
+    /// * `Err(ProjectError)` if triggering failed or no source files are available
+    pub async fn trigger_initial_indexing(
+        &self,
+        compilation_db: &CompilationDatabase,
+    ) -> Result<(), ProjectError> {
+        if self.index_trigger.is_some() {
+            let source_files = compilation_db.source_files();
+            if let Some(&first_file) = source_files.first() {
+                debug!(
+                    "Triggering initial indexing with first source file: {:?}",
+                    first_file
+                );
+                self.trigger_indexing(first_file).await?;
+            } else {
+                warn!(
+                    "No source files found in compilation database - cannot trigger initial indexing"
+                );
+            }
+        } else {
+            debug!("No index trigger configured, skipping initial indexing trigger");
+        }
+        Ok(())
     }
 }
 
@@ -1219,5 +1352,185 @@ mod tests {
         assert!(!summary.has_active_indexing);
         assert_eq!(summary.indexed_count, 1);
         assert_eq!(summary.pending_count, 0);
+    }
+
+    #[tokio::test]
+    async fn test_trigger_indexing_with_mock() {
+        use crate::project::index::trigger::MockIndexTrigger;
+
+        let mut mock_reader = MockIndexReaderTrait::new();
+
+        // Expect the initial disk scan call during ComponentIndexMonitor creation
+        mock_reader
+            .expect_read_index_for_file()
+            .with(mockall::predicate::function(|path: &Path| {
+                path == Path::new("/test/project/src/main.cpp")
+            }))
+            .returning(|_| {
+                Box::pin(async {
+                    Ok(crate::project::index::reader::IndexEntry {
+                        absolute_path: PathBuf::from("/test/project/src/main.cpp"),
+                        status: crate::project::index::reader::FileIndexStatus::None,
+                        index_format_version: None,
+                        expected_format_version: 19,
+                        index_content_hash: None,
+                        current_file_hash: None,
+                        symbols: vec![],
+                        index_file_size: None,
+                        index_created_at: None,
+                    })
+                })
+            });
+
+        let mock_reader = Arc::new(mock_reader) as Arc<dyn IndexReaderTrait>;
+        let compilation_db = create_test_compilation_db();
+        let build_dir = PathBuf::from("/test/project/build");
+
+        // Create mock trigger
+        let mut mock_trigger = MockIndexTrigger::new();
+        let test_file = PathBuf::from("/test/project/src/main.cpp");
+        let expected_file = test_file.clone();
+
+        mock_trigger
+            .expect_trigger()
+            .with(mockall::predicate::function(move |path: &Path| {
+                path == expected_file
+            }))
+            .times(1)
+            .returning(|_| Ok(()));
+
+        let trigger = Arc::new(mock_trigger) as Arc<dyn IndexTrigger>;
+
+        // Create monitor with trigger
+        let monitor = ComponentIndexMonitor::new_with_trigger(
+            build_dir,
+            &compilation_db,
+            mock_reader,
+            &create_test_clangd_version(),
+            Some(trigger),
+        )
+        .await
+        .expect("Failed to create ComponentIndexMonitor");
+
+        // Test trigger_indexing method
+        let result = monitor.trigger_indexing(&test_file).await;
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_trigger_indexing_without_trigger() {
+        let mock_reader = Arc::new(MockIndexReaderTrait::new()) as Arc<dyn IndexReaderTrait>;
+        let compilation_db = create_test_compilation_db();
+        let build_dir = PathBuf::from("/test/project/build");
+
+        // Create monitor without trigger (using regular new method)
+        let monitor = ComponentIndexMonitor::new_for_test(
+            build_dir,
+            &compilation_db,
+            mock_reader,
+            &create_test_clangd_version(),
+        )
+        .await
+        .expect("Failed to create ComponentIndexMonitor");
+
+        // Test trigger_indexing method - should succeed but do nothing
+        let test_file = PathBuf::from("/test/project/src/main.cpp");
+        let result = monitor.trigger_indexing(&test_file).await;
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_trigger_initial_indexing() {
+        use crate::project::index::trigger::MockIndexTrigger;
+
+        let mut mock_reader = MockIndexReaderTrait::new();
+
+        // Expect the initial disk scan call during ComponentIndexMonitor creation
+        mock_reader
+            .expect_read_index_for_file()
+            .with(mockall::predicate::function(|path: &Path| {
+                path == Path::new("/test/project/src/main.cpp")
+            }))
+            .returning(|_| {
+                Box::pin(async {
+                    Ok(crate::project::index::reader::IndexEntry {
+                        absolute_path: PathBuf::from("/test/project/src/main.cpp"),
+                        status: crate::project::index::reader::FileIndexStatus::None,
+                        index_format_version: None,
+                        expected_format_version: 19,
+                        index_content_hash: None,
+                        current_file_hash: None,
+                        symbols: vec![],
+                        index_file_size: None,
+                        index_created_at: None,
+                    })
+                })
+            });
+
+        let mock_reader = Arc::new(mock_reader) as Arc<dyn IndexReaderTrait>;
+        let compilation_db = create_test_compilation_db();
+        let build_dir = PathBuf::from("/test/project/build");
+
+        // Create mock trigger that expects the first file from compilation database
+        let mut mock_trigger = MockIndexTrigger::new();
+        let expected_file = PathBuf::from("/test/project/src/main.cpp");
+        let expected_file_clone = expected_file.clone();
+
+        mock_trigger
+            .expect_trigger()
+            .with(mockall::predicate::function(move |path: &Path| {
+                path == expected_file_clone
+            }))
+            .times(1)
+            .returning(|_| Ok(()));
+
+        let trigger = Arc::new(mock_trigger) as Arc<dyn IndexTrigger>;
+
+        // Create monitor with trigger
+        let monitor = ComponentIndexMonitor::new_with_trigger(
+            build_dir,
+            &compilation_db,
+            mock_reader,
+            &create_test_clangd_version(),
+            Some(trigger),
+        )
+        .await
+        .expect("Failed to create ComponentIndexMonitor");
+
+        // Test trigger_initial_indexing method
+        let result = monitor.trigger_initial_indexing(&compilation_db).await;
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_trigger_initial_indexing_empty_db() {
+        use crate::project::index::trigger::MockIndexTrigger;
+
+        let mock_reader = Arc::new(MockIndexReaderTrait::new()) as Arc<dyn IndexReaderTrait>;
+        let build_dir = PathBuf::from("/test/project/build");
+
+        // Create empty compilation database
+        let empty_compilation_db = CompilationDatabase::from_entries(vec![]);
+
+        // Create mock trigger that should not be called
+        let mock_trigger = MockIndexTrigger::new();
+        let trigger = Arc::new(mock_trigger) as Arc<dyn IndexTrigger>;
+
+        // Create monitor with trigger
+        let monitor = ComponentIndexMonitor::new_with_trigger(
+            build_dir,
+            &empty_compilation_db,
+            mock_reader,
+            &create_test_clangd_version(),
+            Some(trigger),
+        )
+        .await
+        .expect("Failed to create ComponentIndexMonitor");
+
+        // Test trigger_initial_indexing method with empty database - should succeed but not call trigger
+        let result = monitor
+            .trigger_initial_indexing(&empty_compilation_db)
+            .await;
+        assert!(result.is_ok());
     }
 }
