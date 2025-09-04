@@ -10,7 +10,8 @@ use std::sync::Arc;
 use tokio::sync::Mutex;
 use tracing::debug;
 
-use crate::clangd::ClangdSession;
+use crate::clangd::session::{ClangdSession, ClangdSessionTrait};
+use crate::lsp::traits::LspClientTrait;
 use crate::project::ProjectError;
 
 /// Trait for triggering indexing operations
@@ -68,6 +69,27 @@ impl IndexTrigger for ClangdIndexTrigger {
                 e
             ))
         })?;
+
+        // Request document symbols to force additional symbol processing
+        let file_uri = crate::symbol::uri_from_pathbuf(file_path);
+        debug!("Requesting document symbols for file: {:?}", file_path);
+        let client = session.client_mut();
+        match client.text_document_document_symbol(file_uri).await {
+            Ok(_) => {
+                debug!(
+                    "Successfully retrieved document symbols for file: {:?}",
+                    file_path
+                );
+            }
+            Err(e) => {
+                debug!(
+                    "Failed to retrieve document symbols for {}: {} (continuing anyway)",
+                    file_path.display(),
+                    e
+                );
+                // Don't fail the trigger operation if document symbols fails
+            }
+        }
 
         debug!("Successfully triggered indexing for file: {:?}", file_path);
         Ok(())

@@ -16,6 +16,8 @@ pub enum ProgressEvent {
         symbols: u32,
         refs: u32,
     },
+    /// File AST indexed and available
+    FileAstIndexed { path: PathBuf },
     /// Standard library indexing started
     StandardLibraryStarted {
         context_file: PathBuf,

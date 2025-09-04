@@ -22,6 +22,7 @@ pub trait LogParser: Send + Sync {
 pub struct ClangdLogParser {
     indexing_start_regex: Regex,
     indexing_complete_regex: Regex,
+    ast_indexed_regex: Regex,
     stdlib_start_regex: Regex,
     stdlib_complete_regex: Regex,
 }
@@ -38,6 +39,11 @@ impl ClangdLogParser {
             // I[14:23:46.456] Indexed /path/to/file.cpp (42 symbols, 10 refs, 3 files)
             indexing_complete_regex: Regex::new(
                 r"I\[\d{2}:\d{2}:\d{2}\.\d{3}\] Indexed (.+?) \((\d+) symbols?, (\d+) refs?, \d+ files?\)",
+            )?,
+
+            // V[22:06:42.564] indexed file AST for /tmp/.tmpCSsikQ/src/Container.cpp version 1:
+            ast_indexed_regex: Regex::new(
+                r"V\[\d{2}:\d{2}:\d{2}\.\d{3}\] indexed file AST for (.+?) version \d+",
             )?,
 
             // I[14:23:47.789] Indexing c++20 standard library in the context of /path/to/file.cpp
@@ -82,6 +88,15 @@ impl LogParser for ClangdLogParser {
                 path: PathBuf::from(path),
                 symbols,
                 refs,
+            });
+        }
+
+        // Try AST indexed pattern
+        if let Some(captures) = self.ast_indexed_regex.captures(line) {
+            let path = captures.get(1)?.as_str();
+
+            return Some(ProgressEvent::FileAstIndexed {
+                path: PathBuf::from(path),
             });
         }
 
@@ -245,6 +260,23 @@ mod tests {
                 assert_eq!(path, PathBuf::from("/path/to/file.cpp"));
                 assert_eq!(symbols, 42);
                 assert_eq!(refs, 10);
+            }
+            _ => panic!("Wrong event type"),
+        }
+    }
+
+    #[test]
+    fn test_parse_ast_indexed_log() {
+        let parser = ClangdLogParser::default();
+        let line =
+            "V[22:06:42.564] indexed file AST for /tmp/.tmpCSsikQ/src/Container.cpp version 1:";
+
+        let event = parser.parse_line(line);
+
+        assert!(event.is_some());
+        match event.unwrap() {
+            ProgressEvent::FileAstIndexed { path } => {
+                assert_eq!(path, PathBuf::from("/tmp/.tmpCSsikQ/src/Container.cpp"));
             }
             _ => panic!("Wrong event type"),
         }

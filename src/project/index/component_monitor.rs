@@ -322,6 +322,56 @@ impl ComponentIndexMonitor {
                     state.component_index.total_files_count()
                 );
             }
+            ProgressEvent::FileAstIndexed { path } => {
+                debug!("File AST indexed: {:?}", path);
+
+                // Mark this file as indexed since AST is now available
+                state.component_index.mark_file_indexed(&path);
+
+                debug!(
+                    "AST indexed - marking file as indexed: {:?} ({}/{})",
+                    path,
+                    state.component_index.indexed_count(),
+                    state.component_index.total_files_count()
+                );
+
+                // Trigger next file ONLY if we're in Init or Partial state
+                // During InProgress, we wait for clangd to finish and determine Partial/Completed
+                if matches!(
+                    state.current_indexing_state,
+                    ComponentIndexingState::Init | ComponentIndexingState::Partial
+                ) {
+                    if let Some(next_file) = state.component_index.get_next_uncovered_file() {
+                        debug!(
+                            "State is {:?}, triggering indexing for next file: {:?}",
+                            state.current_indexing_state, next_file
+                        );
+
+                        // Clone the path since we need to release the lock
+                        let next_file_path = next_file.to_path_buf();
+
+                        // Release the state lock before async operation
+                        drop(state);
+
+                        // Trigger indexing for the next file
+                        if let Err(e) = self.trigger_indexing(&next_file_path).await {
+                            warn!(
+                                "Failed to trigger indexing for next file {:?}: {}",
+                                next_file_path, e
+                            );
+                        }
+
+                        // Don't re-acquire the lock since we're done
+                    } else {
+                        debug!("No more pending files to trigger");
+                    }
+                } else {
+                    debug!(
+                        "Not triggering next file - state is {:?} (waiting for completion)",
+                        state.current_indexing_state
+                    );
+                }
+            }
             ProgressEvent::StandardLibraryStarted {
                 stdlib_version,
                 context_file,
@@ -409,25 +459,34 @@ impl ComponentIndexMonitor {
                 };
 
                 // Determine component final state based on CDB coverage AFTER validation
-                let component_final_state = if state.component_index.is_fully_indexed() {
+                let should_trigger_next = if state.component_index.is_fully_indexed() {
                     debug!(
                         "All CDB files indexed ({}/{}), transitioning to Completed",
                         state.component_index.indexed_count(),
                         state.component_index.total_files_count()
                     );
-                    ComponentIndexingState::Completed
+
+                    // Update state to Completed
+                    state.current_indexing_state = ComponentIndexingState::Completed;
+                    state.last_updated = std::time::SystemTime::now();
+                    None // No next file to trigger
                 } else {
                     debug!(
                         "Partial CDB coverage ({}/{}), transitioning to Partial",
                         state.component_index.indexed_count(),
                         state.component_index.total_files_count()
                     );
-                    ComponentIndexingState::Partial
-                };
 
-                // Update component state to final state
-                state.current_indexing_state = component_final_state;
-                state.last_updated = std::time::SystemTime::now();
+                    // Update state to Partial
+                    state.current_indexing_state = ComponentIndexingState::Partial;
+                    state.last_updated = std::time::SystemTime::now();
+
+                    // Check if we should trigger next file after transitioning to Partial
+                    state
+                        .component_index
+                        .get_next_uncovered_file()
+                        .map(|p| p.to_path_buf())
+                };
                 info!(
                     "Component state transitioned to {:?} for {} (coverage: {:.1}%)",
                     state.current_indexing_state,
@@ -446,6 +505,46 @@ impl ComponentIndexMonitor {
                     summary.in_progress_count,
                     summary.failed_count
                 );
+
+                // If we determined we should trigger next file (in Partial state), do it now
+                if let Some(next_file_path) = should_trigger_next {
+                    debug!(
+                        "Triggering next unindexed file after Partial transition: {:?}",
+                        next_file_path
+                    );
+
+                    // Release state lock before async operation
+                    drop(state);
+
+                    // Trigger the next file
+                    if let Err(e) = self.trigger_indexing(&next_file_path).await {
+                        warn!(
+                            "Failed to trigger next file after Partial transition: {}",
+                            e
+                        );
+                    }
+
+                    // Re-acquire state lock for latch triggering
+                    let state = match self.state.try_lock() {
+                        Ok(state) => state,
+                        Err(_) => {
+                            warn!("Could not re-acquire state lock for latch triggering");
+                            return;
+                        }
+                    };
+
+                    // Continue with latch triggering using the re-acquired state
+                    let latch = state.completion_latch.clone();
+                    drop(state); // Release before spawning
+                    tokio::spawn(async move {
+                        latch.trigger_success().await;
+                    });
+                    debug!(
+                        "Triggered completion latch for build directory: {} (initial indexing ended)",
+                        self.build_directory.display()
+                    );
+                    return;
+                }
 
                 // Trigger latch now that initial indexing has ended (either Partial or Completed)
                 let latch = state.completion_latch.clone();
