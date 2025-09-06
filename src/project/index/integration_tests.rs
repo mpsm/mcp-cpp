@@ -25,17 +25,16 @@ async fn test_indexing_progress_tracking_with_real_clangd() {
     let clangd_path = crate::test_utils::get_test_clangd_path();
     let workspace_session = WorkspaceSession::new(workspace, clangd_path).unwrap();
 
-    // Start clangd session first to create the monitor
-    let session = workspace_session
-        .get_or_create_session(test_project.build_dir.clone())
+    // Get component session first to create the monitor
+    let component_session = workspace_session
+        .get_component_session(test_project.build_dir.clone())
         .await
         .unwrap();
+    let session = component_session.clangd_session();
 
     // Get initial coverage (should be 0)
-    let initial_coverage = workspace_session
-        .get_indexing_coverage(&test_project.build_dir)
-        .await;
-    assert_eq!(initial_coverage, Some(0.0));
+    let state = component_session.get_index_state().await;
+    assert_eq!(state.coverage(), 0.0);
 
     let main_cpp_path = test_project.project_root.join("src/main.cpp");
     session
@@ -56,19 +55,13 @@ async fn test_indexing_progress_tracking_with_real_clangd() {
     .expect("Indexing failed");
 
     // Check final coverage
-    let final_coverage = workspace_session
-        .get_indexing_coverage(&test_project.build_dir)
-        .await;
-
-    if let Some(coverage) = final_coverage {
-        assert!(
-            (coverage - 1.0).abs() < 0.001,
-            "All compilation database files should be indexed, expected coverage = 1.0, got: {}",
-            coverage
-        );
-    } else {
-        panic!("Final indexing coverage should not be None");
-    }
+    let final_state = component_session.get_index_state().await;
+    let coverage = final_state.coverage();
+    assert!(
+        (coverage - 1.0).abs() < 0.001,
+        "All compilation database files should be indexed, expected coverage = 1.0, got: {}",
+        coverage
+    );
 }
 
 #[tokio::test]
@@ -85,8 +78,8 @@ async fn test_wait_for_indexing_completion_ensures_full_coverage() {
     let workspace_session = WorkspaceSession::new(workspace, clangd_path).unwrap();
 
     // Create session first - required for wait_for_indexing_completion
-    let _session = workspace_session
-        .get_or_create_session(test_project.build_dir.clone())
+    let _component_session = workspace_session
+        .get_component_session(test_project.build_dir.clone())
         .await
         .unwrap();
 
@@ -128,8 +121,8 @@ async fn test_index_persistence_across_session_restarts() {
     // Phase 1: Initial indexing - create session and wait for completion
     debug!("Phase 1: Starting initial indexing");
     {
-        let _session = workspace_session
-            .get_or_create_session(test_project.build_dir.clone())
+        let _component_session = workspace_session
+            .get_component_session(test_project.build_dir.clone())
             .await
             .unwrap();
 
@@ -180,8 +173,8 @@ async fn test_index_persistence_across_session_restarts() {
     // Phase 3: Restart session and verify index state persistence
     debug!("Phase 3: Restarting session and verifying index persistence");
     {
-        let _session = workspace_session
-            .get_or_create_session(test_project.build_dir.clone())
+        let _component_session = workspace_session
+            .get_component_session(test_project.build_dir.clone())
             .await
             .unwrap();
 

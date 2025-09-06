@@ -795,12 +795,6 @@ impl ComponentIndexMonitor {
         )
     }
 
-    /// Get indexing coverage (0.0 to 1.0)
-    pub async fn get_coverage(&self) -> f32 {
-        let state = self.state.lock().await;
-        state.component_index.coverage()
-    }
-
     /// Get comprehensive indexing summary with detailed state information
     #[allow(dead_code)] // Public API for future use
     pub async fn get_indexing_summary(&self) -> crate::clangd::index::IndexingSummary {
@@ -1430,8 +1424,8 @@ mod tests {
             .expect("Failed to refresh from disk");
 
         // Verify the state remains unchanged since no valid index files exist
-        let coverage = monitor.get_coverage().await;
-        assert_eq!(coverage, 0.0); // No files should be marked as indexed
+        let state = monitor.get_component_state().await;
+        assert_eq!(state.coverage(), 0.0); // No files should be marked as indexed
     }
 
     #[tokio::test]

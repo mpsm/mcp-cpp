@@ -11,7 +11,7 @@ use super::tools::analyze_symbols::AnalyzeSymbolContextTool;
 use super::tools::project_tools::GetProjectDetailsTool;
 use super::tools::search_symbols::SearchSymbolsTool;
 use crate::io::file_manager::RealFileBufferManager;
-use crate::project::{ProjectError, ProjectWorkspace, WorkspaceSession, index::IndexSession};
+use crate::project::{ProjectError, ProjectWorkspace, WorkspaceSession};
 use crate::register_tools;
 use crate::{log_mcp_message, log_timing};
 use std::path::PathBuf;
@@ -66,21 +66,18 @@ impl McpToolHandler<SearchSymbolsTool> for CppServerHandler {
     ) -> Result<CallToolResult, CallToolError> {
         let build_dir = self.resolve_build_directory(tool.build_directory.as_deref())?;
 
-        let clangd_session = self
+        let component_session = self
             .workspace_session
-            .get_or_create_session(build_dir.clone())
+            .get_component_session(build_dir)
             .await
             .map_err(|e| {
                 CallToolError::new(std::io::Error::other(format!(
-                    "Session creation failed: {}",
+                    "ComponentSession creation failed: {}",
                     e
                 )))
             })?;
 
-        let index_session = IndexSession::new(&self.workspace_session, build_dir)
-            .with_timeout(std::time::Duration::from_secs(30));
-
-        tool.call_tool(index_session, clangd_session, &self.project_workspace)
+        tool.call_tool(component_session, &self.project_workspace)
             .await
     }
 }
@@ -94,23 +91,19 @@ impl McpToolHandler<AnalyzeSymbolContextTool> for CppServerHandler {
     ) -> Result<CallToolResult, CallToolError> {
         let build_dir = self.resolve_build_directory(tool.build_directory.as_deref())?;
 
-        let clangd_session = self
+        let component_session = self
             .workspace_session
-            .get_or_create_session(build_dir.clone())
+            .get_component_session(build_dir)
             .await
             .map_err(|e| {
                 CallToolError::new(std::io::Error::other(format!(
-                    "Session creation failed: {}",
+                    "ComponentSession creation failed: {}",
                     e
                 )))
             })?;
 
-        let index_session = IndexSession::new(&self.workspace_session, build_dir)
-            .with_timeout(std::time::Duration::from_secs(30));
-
         tool.call_tool(
-            index_session,
-            clangd_session,
+            component_session,
             &self.project_workspace,
             self.file_buffer_manager.clone(),
         )

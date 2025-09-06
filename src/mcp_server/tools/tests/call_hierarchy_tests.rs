@@ -6,7 +6,7 @@
 
 use crate::io::file_manager::RealFileBufferManager;
 use crate::mcp_server::tools::analyze_symbols::{AnalyzeSymbolContextTool, AnalyzerResult};
-use crate::project::{ProjectScanner, WorkspaceSession, index::IndexSession};
+use crate::project::{ProjectScanner, WorkspaceSession};
 use crate::test_utils::integration::TestProject;
 use std::sync::Arc;
 use tokio::sync::Mutex;
@@ -29,10 +29,6 @@ async fn test_analyzer_call_hierarchy_function() {
     let clangd_path = crate::test_utils::get_test_clangd_path();
     let workspace_session = WorkspaceSession::new(workspace.clone(), clangd_path)
         .expect("Failed to create workspace session");
-    let session = workspace_session
-        .get_or_create_session(test_project.build_dir.clone())
-        .await
-        .expect("Failed to create session");
 
     let file_buffer_manager = Arc::new(Mutex::new(RealFileBufferManager::new_real()));
 
@@ -44,9 +40,12 @@ async fn test_analyzer_call_hierarchy_function() {
         location_hint: None,
     };
 
-    let index_session = IndexSession::new(&workspace_session, test_project.build_dir.clone());
+    let component_session = workspace_session
+        .get_component_session(test_project.build_dir.clone())
+        .await
+        .unwrap();
     let result = tool
-        .call_tool(index_session, session, &workspace, file_buffer_manager)
+        .call_tool(component_session, &workspace, file_buffer_manager)
         .await;
 
     assert!(result.is_ok());
@@ -100,10 +99,6 @@ async fn test_analyzer_call_hierarchy_method() {
     let clangd_path = crate::test_utils::get_test_clangd_path();
     let workspace_session = WorkspaceSession::new(workspace.clone(), clangd_path)
         .expect("Failed to create workspace session");
-    let session = workspace_session
-        .get_or_create_session(test_project.build_dir.clone())
-        .await
-        .expect("Failed to create session");
 
     let file_buffer_manager = Arc::new(Mutex::new(RealFileBufferManager::new_real()));
 
@@ -115,9 +110,12 @@ async fn test_analyzer_call_hierarchy_method() {
         location_hint: None,
     };
 
-    let index_session = IndexSession::new(&workspace_session, test_project.build_dir.clone());
+    let component_session = workspace_session
+        .get_component_session(test_project.build_dir.clone())
+        .await
+        .unwrap();
     let result = tool
-        .call_tool(index_session, session, &workspace, file_buffer_manager)
+        .call_tool(component_session, &workspace, file_buffer_manager)
         .await;
 
     assert!(result.is_ok());
@@ -170,10 +168,6 @@ async fn test_analyzer_call_hierarchy_non_function() {
     let clangd_path = crate::test_utils::get_test_clangd_path();
     let workspace_session = WorkspaceSession::new(workspace.clone(), clangd_path)
         .expect("Failed to create workspace session");
-    let session = workspace_session
-        .get_or_create_session(test_project.build_dir.clone())
-        .await
-        .expect("Failed to create session");
 
     let file_buffer_manager = Arc::new(Mutex::new(RealFileBufferManager::new_real()));
 
@@ -185,9 +179,12 @@ async fn test_analyzer_call_hierarchy_non_function() {
         location_hint: None,
     };
 
-    let index_session = IndexSession::new(&workspace_session, test_project.build_dir.clone());
+    let component_session = workspace_session
+        .get_component_session(test_project.build_dir.clone())
+        .await
+        .unwrap();
     let result = tool
-        .call_tool(index_session, session, &workspace, file_buffer_manager)
+        .call_tool(component_session, &workspace, file_buffer_manager)
         .await;
 
     assert!(result.is_ok());
@@ -236,10 +233,6 @@ async fn test_analyzer_call_hierarchy_coherence() {
     let clangd_path = crate::test_utils::get_test_clangd_path();
     let workspace_session = WorkspaceSession::new(workspace.clone(), clangd_path)
         .expect("Failed to create workspace session");
-    let session_arc = workspace_session
-        .get_or_create_session(test_project.build_dir.clone())
-        .await
-        .expect("Failed to create session");
 
     let file_buffer_manager = Arc::new(Mutex::new(RealFileBufferManager::new_real()));
 
@@ -263,14 +256,12 @@ async fn test_analyzer_call_hierarchy_coherence() {
         location_hint: Some(variance_location),
     };
 
-    let index_session = IndexSession::new(&workspace_session, test_project.build_dir.clone());
+    let component_session = workspace_session
+        .get_component_session(test_project.build_dir.clone())
+        .await
+        .unwrap();
     let variance_result = variance_tool
-        .call_tool(
-            index_session,
-            session_arc.clone(),
-            &workspace,
-            file_buffer_manager.clone(),
-        )
+        .call_tool(component_session, &workspace, file_buffer_manager.clone())
         .await
         .expect("Failed to analyze variance");
 
@@ -300,14 +291,12 @@ async fn test_analyzer_call_hierarchy_coherence() {
         location_hint: None,
     };
 
-    let index_session = IndexSession::new(&workspace_session, test_project.build_dir.clone());
+    let component_session = workspace_session
+        .get_component_session(test_project.build_dir.clone())
+        .await
+        .unwrap();
     let mean_result = mean_tool
-        .call_tool(
-            index_session,
-            session_arc.clone(),
-            &workspace,
-            file_buffer_manager.clone(),
-        )
+        .call_tool(component_session, &workspace, file_buffer_manager.clone())
         .await
         .expect("Failed to analyze mean");
 
@@ -337,14 +326,12 @@ async fn test_analyzer_call_hierarchy_coherence() {
         location_hint: None,
     };
 
-    let index_session = IndexSession::new(&workspace_session, test_project.build_dir.clone());
+    let component_session = workspace_session
+        .get_component_session(test_project.build_dir.clone())
+        .await
+        .unwrap();
     let std_dev_result = std_dev_tool
-        .call_tool(
-            index_session,
-            session_arc.clone(),
-            &workspace,
-            file_buffer_manager.clone(),
-        )
+        .call_tool(component_session, &workspace, file_buffer_manager.clone())
         .await
         .expect("Failed to analyze standardDeviation");
 

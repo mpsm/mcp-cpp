@@ -25,7 +25,7 @@ use crate::mcp_server::tools::lsp_helpers::{
     symbol_resolution::get_matching_symbol,
     type_hierarchy::{TypeHierarchy, get_type_hierarchy},
 };
-use crate::project::{ProjectWorkspace, index::IndexSession};
+use crate::project::{ComponentSession, ProjectWorkspace};
 use crate::symbol::{FileLocation, Symbol};
 
 // ============================================================================
@@ -446,25 +446,28 @@ impl AnalyzeSymbolContextTool {
     /// V2 entry point - uses shared ClangdSession from server
     #[instrument(
         name = "analyze_symbol_context",
-        skip(self, index_session, session, _workspace, _file_buffer_manager)
+        skip(self, component_session, _workspace, _file_buffer_manager)
     )]
     pub async fn call_tool(
         &self,
-        index_session: IndexSession<'_>,
-        session: Arc<Mutex<ClangdSession>>,
+        component_session: Arc<ComponentSession>,
         _workspace: &ProjectWorkspace,
         _file_buffer_manager: Arc<Mutex<crate::io::file_manager::RealFileBufferManager>>,
     ) -> Result<CallToolResult, CallToolError> {
         info!("Starting symbol analysis for '{}'", self.symbol);
 
-        // Ensure indexing completion using new IndexSession facade
-        index_session.ensure_indexed().await.map_err(|e| {
-            error!("Indexing failed for symbol analysis: {}", e);
-            CallToolError::new(std::io::Error::other(format!("Indexing failed: {}", e)))
-        })?;
+        // Ensure indexing completion using ComponentSession
+        component_session
+            .ensure_indexed(std::time::Duration::from_secs(30))
+            .await
+            .map_err(|e| {
+                error!("Indexing failed for symbol analysis: {}", e);
+                CallToolError::new(std::io::Error::other(format!("Indexing failed: {}", e)))
+            })?;
 
         // Lock session for LSP operations
-        let mut locked_session = session.lock().await;
+        let session_arc = component_session.clangd_session();
+        let mut locked_session = session_arc.lock().await;
 
         let (symbol, symbol_context) = match &self.location_hint {
             None => {
@@ -557,7 +560,7 @@ mod tests {
         test_project.cmake_configure().await.unwrap();
 
         // Scan the test project to create a proper workspace with components
-        use crate::project::{ProjectScanner, WorkspaceSession, index::IndexSession};
+        use crate::project::{ProjectScanner, WorkspaceSession};
         let scanner = ProjectScanner::with_default_providers();
         let workspace = scanner
             .scan_project(&test_project.project_root, 3, None)
@@ -567,10 +570,7 @@ mod tests {
         let clangd_path = crate::test_utils::get_test_clangd_path();
         let workspace_session = WorkspaceSession::new(workspace.clone(), clangd_path)
             .expect("Failed to create workspace session");
-        let session = workspace_session
-            .get_or_create_session(test_project.build_dir.clone())
-            .await
-            .expect("Failed to create session");
+        // ComponentSession handles session management internally
 
         let file_buffer_manager = Arc::new(Mutex::new(RealFileBufferManager::new_real()));
 
@@ -581,9 +581,12 @@ mod tests {
             location_hint: None,
         };
 
-        let index_session = IndexSession::new(&workspace_session, test_project.build_dir.clone());
+        let component_session = workspace_session
+            .get_component_session(test_project.build_dir.clone())
+            .await
+            .unwrap();
         let result = tool
-            .call_tool(index_session, session, &workspace, file_buffer_manager)
+            .call_tool(component_session, &workspace, file_buffer_manager)
             .await;
 
         // Check and log error if present
@@ -670,7 +673,7 @@ mod tests {
         test_project.cmake_configure().await.unwrap();
 
         // Scan the test project to create a proper workspace with components
-        use crate::project::{ProjectScanner, WorkspaceSession, index::IndexSession};
+        use crate::project::{ProjectScanner, WorkspaceSession};
         let scanner = ProjectScanner::with_default_providers();
         let workspace = scanner
             .scan_project(&test_project.project_root, 3, None)
@@ -680,10 +683,7 @@ mod tests {
         let clangd_path = crate::test_utils::get_test_clangd_path();
         let workspace_session = WorkspaceSession::new(workspace.clone(), clangd_path)
             .expect("Failed to create workspace session");
-        let session = workspace_session
-            .get_or_create_session(test_project.build_dir.clone())
-            .await
-            .expect("Failed to create session");
+        // ComponentSession handles session management internally
 
         let file_buffer_manager = Arc::new(Mutex::new(RealFileBufferManager::new_real()));
 
@@ -695,9 +695,12 @@ mod tests {
             location_hint: None,
         };
 
-        let index_session = IndexSession::new(&workspace_session, test_project.build_dir.clone());
+        let component_session = workspace_session
+            .get_component_session(test_project.build_dir.clone())
+            .await
+            .unwrap();
         let result = tool
-            .call_tool(index_session, session, &workspace, file_buffer_manager)
+            .call_tool(component_session, &workspace, file_buffer_manager)
             .await;
 
         assert!(result.is_ok());

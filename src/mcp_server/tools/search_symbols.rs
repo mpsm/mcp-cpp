@@ -26,13 +26,12 @@ use rust_mcp_sdk::macros::{JsonSchema, mcp_tool};
 use rust_mcp_sdk::schema::{CallToolResult, TextContent, schema_utils::CallToolError};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
-use tokio::sync::Mutex;
 use tracing::{info, instrument};
 
-use crate::clangd::session::{ClangdSession, ClangdSessionTrait};
+use crate::clangd::session::ClangdSession;
 use crate::mcp_server::tools::lsp_helpers::document_symbols::SymbolSearchBuilder;
 use crate::mcp_server::tools::lsp_helpers::workspace_symbols::WorkspaceSymbolSearchBuilder;
-use crate::project::{ProjectComponent, ProjectWorkspace, index::IndexSession};
+use crate::project::{ComponentSession, ProjectComponent, ProjectWorkspace};
 use crate::symbol::Symbol;
 
 /// Search result structure for search_symbols tool
@@ -93,11 +92,10 @@ pub struct SearchSymbolsTool {
 }
 
 impl SearchSymbolsTool {
-    #[instrument(name = "search_symbols", skip(self, index_session, session, workspace))]
+    #[instrument(name = "search_symbols", skip(self, component_session, workspace))]
     pub async fn call_tool(
         &self,
-        index_session: IndexSession<'_>,
-        session: Arc<Mutex<ClangdSession>>,
+        component_session: Arc<ComponentSession>,
         workspace: &ProjectWorkspace,
     ) -> Result<CallToolResult, CallToolError> {
         // Convert string kinds to SymbolKind enums once at the start
@@ -126,15 +124,19 @@ impl SearchSymbolsTool {
         );
 
         // Ensure indexing completion before acquiring session lock
-        index_session.ensure_indexed().await.map_err(|e| {
-            CallToolError::new(std::io::Error::other(format!("Indexing failed: {}", e)))
-        })?;
+        component_session
+            .ensure_indexed(std::time::Duration::from_secs(30))
+            .await
+            .map_err(|e| {
+                CallToolError::new(std::io::Error::other(format!("Indexing failed: {}", e)))
+            })?;
 
         // Lock session for LSP operations after indexing is complete
-        let mut session_guard = session.lock().await;
+        let session_arc = component_session.clangd_session();
+        let mut session_guard = session_arc.lock().await;
 
         // Get the component for this session's build directory
-        let build_dir = session_guard.build_directory();
+        let build_dir = component_session.build_dir();
         let component = workspace
             .get_component_by_build_dir(build_dir)
             .ok_or_else(|| {

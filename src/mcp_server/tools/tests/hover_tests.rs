@@ -7,7 +7,7 @@
 use crate::mcp_server::tools::lsp_helpers::{
     hover::get_hover_info, symbol_resolution::get_matching_symbol,
 };
-use crate::project::{ProjectScanner, WorkspaceSession, index::IndexSession};
+use crate::project::{ProjectScanner, WorkspaceSession};
 use crate::test_utils::integration::TestProject;
 use tracing::info;
 
@@ -28,17 +28,20 @@ async fn test_hover_info_class_symbol() {
     let clangd_path = crate::test_utils::get_test_clangd_path();
     let workspace_session = WorkspaceSession::new(workspace.clone(), clangd_path)
         .expect("Failed to create workspace session");
-    let session = workspace_session
-        .get_or_create_session(test_project.build_dir.clone())
-        .await
-        .expect("Failed to create session");
 
-    // Complete indexing using IndexSession prior to session operations
-    let index_session = IndexSession::new(&workspace_session, test_project.build_dir.clone());
-    index_session.ensure_indexed().await.unwrap();
+    // Complete indexing using ComponentSession prior to session operations
+    let component_session = workspace_session
+        .get_component_session(test_project.build_dir.clone())
+        .await
+        .unwrap();
+    component_session
+        .ensure_indexed(std::time::Duration::from_secs(30))
+        .await
+        .unwrap();
 
     // Acquire session lock for LSP operations
-    let mut locked_session = session.lock().await;
+    let session_arc = component_session.clangd_session();
+    let mut locked_session = session_arc.lock().await;
 
     // Get Math class symbol
     let symbol = get_matching_symbol("Math", &mut locked_session)
@@ -75,17 +78,20 @@ async fn test_hover_info_function_symbol() {
     let clangd_path = crate::test_utils::get_test_clangd_path();
     let workspace_session = WorkspaceSession::new(workspace.clone(), clangd_path)
         .expect("Failed to create workspace session");
-    let session = workspace_session
-        .get_or_create_session(test_project.build_dir.clone())
-        .await
-        .expect("Failed to create session");
 
-    // Complete indexing using IndexSession prior to session operations
-    let index_session = IndexSession::new(&workspace_session, test_project.build_dir.clone());
-    index_session.ensure_indexed().await.unwrap();
+    // Complete indexing using ComponentSession prior to session operations
+    let component_session = workspace_session
+        .get_component_session(test_project.build_dir.clone())
+        .await
+        .unwrap();
+    component_session
+        .ensure_indexed(std::time::Duration::from_secs(30))
+        .await
+        .unwrap();
 
     // Acquire session lock for LSP operations
-    let mut locked_session = session.lock().await;
+    let session_arc = component_session.clangd_session();
+    let mut locked_session = session_arc.lock().await;
 
     // Get factorial function symbol
     let symbol = get_matching_symbol("factorial", &mut locked_session)
@@ -126,17 +132,20 @@ async fn test_hover_info_method_symbol() {
     let clangd_path = crate::test_utils::get_test_clangd_path();
     let workspace_session = WorkspaceSession::new(workspace.clone(), clangd_path)
         .expect("Failed to create workspace session");
-    let session = workspace_session
-        .get_or_create_session(test_project.build_dir.clone())
-        .await
-        .expect("Failed to create session");
 
-    // Complete indexing using IndexSession prior to session operations
-    let index_session = IndexSession::new(&workspace_session, test_project.build_dir.clone());
-    index_session.ensure_indexed().await.unwrap();
+    // Complete indexing using ComponentSession prior to session operations
+    let component_session = workspace_session
+        .get_component_session(test_project.build_dir.clone())
+        .await
+        .unwrap();
+    component_session
+        .ensure_indexed(std::time::Duration::from_secs(30))
+        .await
+        .unwrap();
 
     // Acquire session lock for LSP operations
-    let mut locked_session = session.lock().await;
+    let session_arc = component_session.clangd_session();
+    let mut locked_session = session_arc.lock().await;
 
     // Get a method symbol
     let symbol = get_matching_symbol("Math::Complex::add", &mut locked_session)
@@ -173,17 +182,20 @@ async fn test_hover_info_interface_symbol() {
     let clangd_path = crate::test_utils::get_test_clangd_path();
     let workspace_session = WorkspaceSession::new(workspace.clone(), clangd_path)
         .expect("Failed to create workspace session");
-    let session = workspace_session
-        .get_or_create_session(test_project.build_dir.clone())
-        .await
-        .expect("Failed to create session");
 
-    // Complete indexing using IndexSession prior to session operations
-    let index_session = IndexSession::new(&workspace_session, test_project.build_dir.clone());
-    index_session.ensure_indexed().await.unwrap();
+    // Complete indexing using ComponentSession prior to session operations
+    let component_session = workspace_session
+        .get_component_session(test_project.build_dir.clone())
+        .await
+        .unwrap();
+    component_session
+        .ensure_indexed(std::time::Duration::from_secs(30))
+        .await
+        .unwrap();
 
     // Acquire session lock for LSP operations
-    let mut locked_session = session.lock().await;
+    let session_arc = component_session.clangd_session();
+    let mut locked_session = session_arc.lock().await;
 
     // Get interface symbol
     let symbol = get_matching_symbol("IStorageBackend", &mut locked_session)

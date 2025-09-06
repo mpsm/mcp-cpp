@@ -6,7 +6,7 @@
 
 use crate::io::file_manager::RealFileBufferManager;
 use crate::mcp_server::tools::analyze_symbols::{AnalyzeSymbolContextTool, AnalyzerResult};
-use crate::project::{ProjectScanner, WorkspaceSession, index::IndexSession};
+use crate::project::{ProjectScanner, WorkspaceSession};
 use crate::test_utils::integration::TestProject;
 use std::sync::Arc;
 use tokio::sync::Mutex;
@@ -29,10 +29,6 @@ async fn test_analyzer_type_hierarchy_interface() {
     let clangd_path = crate::test_utils::get_test_clangd_path();
     let workspace_session = WorkspaceSession::new(workspace.clone(), clangd_path)
         .expect("Failed to create workspace session");
-    let session = workspace_session
-        .get_or_create_session(test_project.build_dir.clone())
-        .await
-        .expect("Failed to create session");
 
     let file_buffer_manager = Arc::new(Mutex::new(RealFileBufferManager::new_real()));
 
@@ -44,9 +40,12 @@ async fn test_analyzer_type_hierarchy_interface() {
         location_hint: None,
     };
 
-    let index_session = IndexSession::new(&workspace_session, test_project.build_dir.clone());
+    let component_session = workspace_session
+        .get_component_session(test_project.build_dir.clone())
+        .await
+        .unwrap();
     let result = tool
-        .call_tool(index_session, session, &workspace, file_buffer_manager)
+        .call_tool(component_session, &workspace, file_buffer_manager)
         .await;
 
     assert!(result.is_ok());
@@ -98,10 +97,6 @@ async fn test_analyzer_type_hierarchy_derived_class() {
     let clangd_path = crate::test_utils::get_test_clangd_path();
     let workspace_session = WorkspaceSession::new(workspace.clone(), clangd_path)
         .expect("Failed to create workspace session");
-    let session = workspace_session
-        .get_or_create_session(test_project.build_dir.clone())
-        .await
-        .expect("Failed to create session");
 
     let file_buffer_manager = Arc::new(Mutex::new(RealFileBufferManager::new_real()));
 
@@ -113,9 +108,12 @@ async fn test_analyzer_type_hierarchy_derived_class() {
         location_hint: None,
     };
 
-    let index_session = IndexSession::new(&workspace_session, test_project.build_dir.clone());
+    let component_session = workspace_session
+        .get_component_session(test_project.build_dir.clone())
+        .await
+        .unwrap();
     let result = tool
-        .call_tool(index_session, session, &workspace, file_buffer_manager)
+        .call_tool(component_session, &workspace, file_buffer_manager)
         .await;
 
     assert!(result.is_ok());
@@ -165,10 +163,6 @@ async fn test_analyzer_type_hierarchy_non_class() {
     let clangd_path = crate::test_utils::get_test_clangd_path();
     let workspace_session = WorkspaceSession::new(workspace.clone(), clangd_path)
         .expect("Failed to create workspace session");
-    let session = workspace_session
-        .get_or_create_session(test_project.build_dir.clone())
-        .await
-        .expect("Failed to create session");
 
     let file_buffer_manager = Arc::new(Mutex::new(RealFileBufferManager::new_real()));
 
@@ -180,9 +174,12 @@ async fn test_analyzer_type_hierarchy_non_class() {
         location_hint: None,
     };
 
-    let index_session = IndexSession::new(&workspace_session, test_project.build_dir.clone());
+    let component_session = workspace_session
+        .get_component_session(test_project.build_dir.clone())
+        .await
+        .unwrap();
     let result = tool
-        .call_tool(index_session, session, &workspace, file_buffer_manager)
+        .call_tool(component_session, &workspace, file_buffer_manager)
         .await;
 
     assert!(result.is_ok());
