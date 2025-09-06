@@ -33,6 +33,7 @@ async fn test_analyzer_call_hierarchy_function() {
         build_directory: None,
         max_examples: Some(2),
         location_hint: None,
+        wait_timeout: None,
     };
 
     let component_session = workspace_session
@@ -99,6 +100,7 @@ async fn test_analyzer_call_hierarchy_method() {
         build_directory: None,
         max_examples: Some(2),
         location_hint: None,
+        wait_timeout: None,
     };
 
     let component_session = workspace_session
@@ -164,6 +166,7 @@ async fn test_analyzer_call_hierarchy_non_function() {
         build_directory: None,
         max_examples: Some(2),
         location_hint: None,
+        wait_timeout: None,
     };
 
     let component_session = workspace_session
@@ -219,6 +222,20 @@ async fn test_analyzer_call_hierarchy_coherence() {
     let workspace_session = WorkspaceSession::new(workspace.clone(), clangd_path)
         .expect("Failed to create workspace session");
 
+    // Ensure indexing is completed before testing call hierarchy coherence
+    let component_session = workspace_session
+        .get_component_session(test_project.build_dir.clone())
+        .await
+        .unwrap();
+
+    // Wait for indexing to complete (30 seconds should be plenty for the test project)
+    component_session
+        .ensure_indexed(std::time::Duration::from_secs(30))
+        .await
+        .expect("Indexing should complete successfully for call hierarchy test");
+
+    info!("Indexing completed, proceeding with call hierarchy coherence test");
+
     // Test the call chain: standardDeviation -> variance -> mean
     // This validates coherence: if A calls B, then B's callers must include A
 
@@ -237,6 +254,7 @@ async fn test_analyzer_call_hierarchy_coherence() {
         build_directory: None,
         max_examples: Some(2),
         location_hint: Some(variance_location),
+        wait_timeout: None,
     };
 
     let component_session = workspace_session
@@ -262,6 +280,15 @@ async fn test_analyzer_call_hierarchy_coherence() {
     assert_eq!(variance_analysis.symbol.kind, lsp_types::SymbolKind::METHOD);
     assert!(variance_analysis.call_hierarchy.is_some());
 
+    // Assert that indexing completed successfully (either None or Completed state)
+    if let Some(ref status) = variance_analysis.index_status {
+        assert!(
+            status.state.contains("Completed") && status.indexed_files == status.total_files,
+            "Indexing should have completed successfully for variance analysis. Index status: {:?}",
+            variance_analysis.index_status
+        );
+    }
+
     let variance_hierarchy = variance_analysis.call_hierarchy.unwrap();
     info!("variance callers: {:?}", variance_hierarchy.callers);
     info!("variance callees: {:?}", variance_hierarchy.callees);
@@ -272,6 +299,7 @@ async fn test_analyzer_call_hierarchy_coherence() {
         build_directory: None,
         max_examples: Some(2),
         location_hint: None,
+        wait_timeout: None,
     };
 
     let component_session = workspace_session
@@ -297,6 +325,15 @@ async fn test_analyzer_call_hierarchy_coherence() {
     assert_eq!(mean_analysis.symbol.kind, lsp_types::SymbolKind::METHOD);
     assert!(mean_analysis.call_hierarchy.is_some());
 
+    // Assert that indexing completed successfully for mean analysis
+    if let Some(ref status) = mean_analysis.index_status {
+        assert!(
+            status.state.contains("Completed") && status.indexed_files == status.total_files,
+            "Indexing should have completed successfully for mean analysis. Index status: {:?}",
+            mean_analysis.index_status
+        );
+    }
+
     let mean_hierarchy = mean_analysis.call_hierarchy.unwrap();
     info!("mean callers: {:?}", mean_hierarchy.callers);
     info!("mean callees: {:?}", mean_hierarchy.callees);
@@ -307,6 +344,7 @@ async fn test_analyzer_call_hierarchy_coherence() {
         build_directory: None,
         max_examples: Some(2),
         location_hint: None,
+        wait_timeout: None,
     };
 
     let component_session = workspace_session
@@ -331,6 +369,15 @@ async fn test_analyzer_call_hierarchy_coherence() {
     assert_eq!(std_dev_analysis.symbol.name, "standardDeviation");
     assert_eq!(std_dev_analysis.symbol.kind, lsp_types::SymbolKind::METHOD);
     assert!(std_dev_analysis.call_hierarchy.is_some());
+
+    // Assert that indexing completed successfully for standardDeviation analysis
+    if let Some(ref status) = std_dev_analysis.index_status {
+        assert!(
+            status.state.contains("Completed") && status.indexed_files == status.total_files,
+            "Indexing should have completed successfully for standardDeviation analysis. Index status: {:?}",
+            std_dev_analysis.index_status
+        );
+    }
 
     let std_dev_hierarchy = std_dev_analysis.call_hierarchy.unwrap();
     info!("standardDeviation callers: {:?}", std_dev_hierarchy.callers);

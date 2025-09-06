@@ -33,6 +33,7 @@ async fn test_analyzer_members_math() {
         build_directory: None,
         max_examples: Some(2),
         location_hint: None,
+        wait_timeout: None,
     };
 
     let component_session = workspace_session
@@ -146,6 +147,7 @@ async fn test_analyzer_members_interface() {
         build_directory: None,
         max_examples: Some(2),
         location_hint: None,
+        wait_timeout: None,
     };
 
     let component_session = workspace_session
@@ -261,6 +263,7 @@ async fn test_analyzer_members_non_class() {
         build_directory: None,
         max_examples: Some(2),
         location_hint: None,
+        wait_timeout: None,
     };
 
     let component_session = workspace_session

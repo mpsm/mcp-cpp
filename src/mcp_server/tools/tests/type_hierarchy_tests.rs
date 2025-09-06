@@ -33,6 +33,7 @@ async fn test_analyzer_type_hierarchy_interface() {
         build_directory: None,
         max_examples: Some(2),
         location_hint: None,
+        wait_timeout: None,
     };
 
     let component_session = workspace_session
@@ -97,6 +98,7 @@ async fn test_analyzer_type_hierarchy_derived_class() {
         build_directory: None,
         max_examples: Some(2),
         location_hint: None,
+        wait_timeout: None,
     };
 
     let component_session = workspace_session
@@ -159,6 +161,7 @@ async fn test_analyzer_type_hierarchy_non_class() {
         build_directory: None,
         max_examples: Some(2),
         location_hint: None,
+        wait_timeout: None,
     };
 
     let component_session = workspace_session

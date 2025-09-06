@@ -196,6 +196,11 @@ Examples:
         type=str,
         help="Specify build directory path"
     )
+    search_parser.add_argument(
+        "--wait-timeout",
+        type=int,
+        help="Timeout for waiting on indexing completion in seconds (default: 20, 0 = no wait)"
+    )
     
     # analyze-symbol subcommand
     analyze_parser = subparsers.add_parser(
@@ -230,6 +235,11 @@ Examples:
         "--location-hint",
         type=str,
         help="Location hint for disambiguating overloaded symbols (format: /path/file.cpp:line:column, 1-based)"
+    )
+    analyze_parser.add_argument(
+        "--wait-timeout",
+        type=int,
+        help="Timeout for waiting on indexing completion in seconds (default: 20, 0 = no wait)"
     )
     
     # get-project-details subcommand
@@ -291,6 +301,8 @@ def main():
                 arguments["include_external"] = args.include_external
             if args.build_directory:
                 arguments["build_directory"] = args.build_directory
+            if args.wait_timeout is not None:
+                arguments["wait_timeout"] = args.wait_timeout
                 
             response = client.call_tool("search_symbols", arguments)
             
@@ -304,6 +316,8 @@ def main():
                 arguments["build_directory"] = args.build_directory
             if args.location_hint:
                 arguments["location_hint"] = args.location_hint
+            if args.wait_timeout is not None:
+                arguments["wait_timeout"] = args.wait_timeout
                 
             response = client.call_tool("analyze_symbol_context", arguments)
             
@@ -474,6 +488,89 @@ def _format_tools_list(console, data: Dict) -> None:
     console.print(table)
 
 
+def _format_index_status(console, index_status: Dict) -> None:
+    """Format and display indexing status information with ETA"""
+    if not index_status:
+        return
+    
+    in_progress = index_status.get("in_progress", False)
+    progress_percentage = index_status.get("progress_percentage")
+    indexed_files = index_status.get("indexed_files", 0)
+    total_files = index_status.get("total_files", 0)
+    estimated_time_remaining = index_status.get("estimated_time_remaining")
+    state = index_status.get("state", "Unknown")
+    
+    # Helper function to format duration
+    def format_duration(duration_dict):
+        if not duration_dict or not isinstance(duration_dict, dict):
+            return "unknown"
+        
+        secs = duration_dict.get("secs", 0)
+        if secs < 60:
+            return f"{secs} seconds"
+        elif secs < 3600:
+            minutes = secs // 60
+            remaining_secs = secs % 60
+            if remaining_secs == 0:
+                return f"{minutes} minute{'s' if minutes != 1 else ''}"
+            else:
+                return f"{minutes} minute{'s' if minutes != 1 else ''} {remaining_secs} second{'s' if remaining_secs != 1 else ''}"
+        else:
+            hours = secs // 3600
+            minutes = (secs % 3600) // 60
+            if minutes == 0:
+                return f"{hours} hour{'s' if hours != 1 else ''}"
+            else:
+                return f"{hours} hour{'s' if hours != 1 else ''} {minutes} minute{'s' if minutes != 1 else ''}"
+    
+    # Determine color based on state
+    if in_progress:
+        status_color = "yellow"
+        status_icon = "⚡"
+        title_text = "Indexing in progress"
+    elif "Completed" in state:
+        status_color = "green"
+        status_icon = "✓"
+        title_text = "Indexing completed"
+    elif "Partial" in state:
+        status_color = "orange"
+        status_icon = "⚠"
+        title_text = "Indexing partial/timeout"
+    else:
+        status_color = "blue"
+        status_icon = "ℹ"
+        title_text = "Indexing status"
+    
+    # Build the status display
+    status_lines = [f"[{status_color}]{status_icon} {title_text}[/{status_color}]"]
+    
+    # Progress bar and percentage
+    if progress_percentage is not None and total_files > 0:
+        progress = progress_percentage / 100.0
+        bar_width = 20
+        filled = int(bar_width * progress)
+        bar = "█" * filled + "░" * (bar_width - filled)
+        status_lines.append(f"Progress: [{status_color}][{bar}] {progress_percentage:.1f}%[/{status_color}]")
+    
+    # Files count
+    if total_files > 0:
+        status_lines.append(f"Files: [bold]{indexed_files}/{total_files}[/bold]")
+    
+    # ETA
+    if estimated_time_remaining and in_progress:
+        eta_text = format_duration(estimated_time_remaining)
+        status_lines.append(f"ETA: [cyan]{eta_text}[/cyan]")
+    
+    # State
+    status_lines.append(f"State: [dim]{state}[/dim]")
+    
+    # Create and display the panel
+    panel_content = "\n".join(status_lines)
+    panel = Panel(panel_content, title="Indexing Status", border_style=status_color, padding=(0, 1))
+    console.print(panel)
+    console.print()
+
+
 def _format_symbols_search(console, data: Dict) -> None:
     """Format symbol search results"""
     if not data.get("success", False):
@@ -497,6 +594,11 @@ def _format_symbols_search(console, data: Dict) -> None:
     console.print(f"[bold]Search Type:[/bold] {search_type}")
     console.print(f"[bold]Results:[/bold] Found {total_matches} symbols (showing {len(symbols)})")
     console.print()
+    
+    # Display index status if available
+    index_status = data.get("index_status")
+    if index_status:
+        _format_index_status(console, index_status)
     
     if not symbols:
         console.print("[yellow]No symbols found[/yellow]")
@@ -669,6 +771,11 @@ def _format_symbol_analysis(console, data: Dict, show_code: bool = True, show_al
         console.print(f"[bold]Detail:[/bold] {detail}")
     
     console.print()
+    
+    # Display index status if available
+    index_status = data.get("index_status")
+    if index_status:
+        _format_index_status(console, index_status)
     
     # Helper to format location with code snippet
     def format_location_with_code(location_str, show_code_snippet=True):

@@ -20,7 +20,10 @@ use crate::io::file_system::RealFileSystem;
 use crate::project::index::reader::{IndexReader, IndexReaderTrait};
 use crate::project::index::storage::IndexStorage;
 use crate::project::index::storage::filesystem::FilesystemIndexStorage;
-use crate::project::index::{ClangdIndexTrigger, ComponentIndexMonitor, ComponentIndexState};
+use crate::project::index::{
+    ClangdIndexTrigger, ComponentIndexMonitor, ComponentIndexState, ComponentIndexingState,
+    IndexStatusView,
+};
 use crate::project::{CompilationDatabase, ProjectComponent, ProjectError};
 
 /// Channel buffer size for progress event processing
@@ -293,5 +296,42 @@ impl ComponentSession {
     #[allow(dead_code)]
     pub async fn get_index_latch(&self) -> IndexLatch {
         self.index_monitor.get_completion_latch().await
+    }
+
+    /// Get current index status with progress information
+    ///
+    /// This is the main facade method for getting index status information.
+    /// Creates IndexStatusView on retrieval with comprehensive progress data
+    /// including ETA calculation if applicable.
+    pub async fn get_index_status(&self) -> IndexStatusView {
+        let (component_state, start_time) = self.index_monitor.get_progress_data().await;
+
+        // Determine if indexing is in progress
+        let in_progress = matches!(component_state.state, ComponentIndexingState::InProgress(_));
+
+        // Extract progress percentage if available
+        let progress_percentage =
+            if let ComponentIndexingState::InProgress(percentage) = component_state.state {
+                Some(percentage)
+            } else {
+                None
+            };
+
+        // Format state as human-readable string
+        let state_str = match component_state.state {
+            ComponentIndexingState::Init => "Init".to_string(),
+            ComponentIndexingState::InProgress(percent) => format!("InProgress({:.1}%)", percent),
+            ComponentIndexingState::Partial => "Partial".to_string(),
+            ComponentIndexingState::Completed => "Completed".to_string(),
+        };
+
+        IndexStatusView::new(
+            in_progress,
+            progress_percentage,
+            component_state.indexed_cdb_files,
+            component_state.total_cdb_files,
+            start_time,
+            state_str,
+        )
     }
 }

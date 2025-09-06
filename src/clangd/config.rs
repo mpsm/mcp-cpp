@@ -44,6 +44,13 @@ pub const MEMORY_TO_RESULTS_FACTOR: u64 = 1000;
 /// reasonable performance. This is applied via the --limit-results clangd argument.
 pub const DEFAULT_WORKSPACE_SYMBOL_LIMIT: u32 = 1000;
 
+/// Default timeout for waiting for indexing completion (20 seconds)
+///
+/// This is the default time to wait for clangd to complete indexing before
+/// proceeding with LSP operations. Tools can override this with wait_timeout parameter.
+/// Setting this to 0 means no waiting for indexing (immediate response with status).
+pub const DEFAULT_INDEX_WAIT_TIMEOUT_SECS: u64 = 20;
+
 // ============================================================================
 // Core Configuration Types
 // ============================================================================

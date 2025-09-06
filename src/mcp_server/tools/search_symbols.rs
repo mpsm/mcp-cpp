@@ -30,6 +30,8 @@ use tracing::{info, instrument};
 
 use crate::mcp_server::tools::lsp_helpers::document_symbols::SymbolSearchBuilder;
 use crate::mcp_server::tools::lsp_helpers::workspace_symbols::WorkspaceSymbolSearchBuilder;
+use crate::mcp_server::tools::utils;
+use crate::project::index::IndexStatusView;
 use crate::project::{ComponentSession, ProjectComponent, ProjectWorkspace};
 use crate::symbol::Symbol;
 
@@ -41,6 +43,9 @@ pub struct SearchResult {
     pub total_matches: usize,
     pub symbols: Vec<Symbol>,
     pub metadata: SearchMetadata,
+    /// Index status information when timeout occurred or no indexing wait
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub index_status: Option<IndexStatusView>,
 }
 
 /// Metadata about the search operation
@@ -88,6 +93,10 @@ pub struct SearchSymbolsTool {
     /// Build directory path containing compile_commands.json
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub build_directory: Option<String>,
+
+    /// Timeout in seconds to wait for indexing completion (default: 20s, 0 = no wait)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub wait_timeout: Option<u64>,
 }
 
 impl SearchSymbolsTool {
@@ -118,17 +127,22 @@ impl SearchSymbolsTool {
             };
 
         info!(
-            "Searching symbols (v2): query='{}', kinds={:?}, max_results={:?}",
-            self.query, symbol_kinds, self.max_results
+            "Searching symbols (v2): query='{}', kinds={:?}, max_results={:?}, wait_timeout={:?}",
+            self.query, symbol_kinds, self.max_results, self.wait_timeout
         );
 
-        // Ensure indexing completion before acquiring session lock
-        component_session
-            .ensure_indexed(std::time::Duration::from_secs(30))
-            .await
-            .map_err(|e| {
-                CallToolError::new(std::io::Error::other(format!("Indexing failed: {}", e)))
-            })?;
+        // Selective indexing wait logic based on search type
+        let index_status = utils::handle_selective_indexing_wait(
+            &component_session,
+            self.files.is_some(), // Skip indexing for document search (files specified)
+            self.wait_timeout,
+            if self.files.is_some() {
+                "Document search"
+            } else {
+                "Workspace search"
+            },
+        )
+        .await;
 
         // Get the component for this session's build directory
         let build_dir = component_session.build_dir();
@@ -143,7 +157,7 @@ impl SearchSymbolsTool {
         // Determine search scope and delegate to appropriate LSP method.
         // File-specific searches use textDocument/documentSymbol for precise results,
         // while workspace searches use workspace/symbol for broad discovery.
-        let result = if let Some(ref files) = self.files {
+        let mut result = if let Some(ref files) = self.files {
             // File-specific search using document symbols for targeted analysis
             self.search_in_files(&component_session, files, component, symbol_kinds.as_ref())
                 .await?
@@ -152,6 +166,9 @@ impl SearchSymbolsTool {
             self.search_workspace_symbols(&component_session, component, symbol_kinds.as_ref())
                 .await?
         };
+
+        // Include index status if available
+        result.index_status = index_status;
 
         let output = serde_json::to_string_pretty(&result).map_err(|e| {
             CallToolError::new(std::io::Error::other(format!(
@@ -210,6 +227,7 @@ impl SearchSymbolsTool {
                 build_directory: component.build_dir_path.display().to_string(),
                 files_processed: None,
             },
+            index_status: None, // Will be set by caller
         })
     }
 
@@ -312,6 +330,7 @@ impl SearchSymbolsTool {
                 build_directory: component.build_dir_path.display().to_string(),
                 files_processed: Some(processed_files),
             },
+            index_status: None, // Will be set by caller
         })
     }
 }
@@ -335,6 +354,7 @@ mod tests {
             Some(vec!["Class".to_string(), "Function".to_string()])
         );
         assert_eq!(tool.max_results, Some(50));
+        assert_eq!(tool.wait_timeout, None);
     }
 
     #[test]
@@ -346,5 +366,6 @@ mod tests {
         assert_eq!(tool.query, "main");
         assert_eq!(tool.kinds, None);
         assert_eq!(tool.max_results, None);
+        assert_eq!(tool.wait_timeout, None);
     }
 }

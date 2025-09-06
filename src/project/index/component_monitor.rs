@@ -110,6 +110,9 @@ struct IndexMonitorState {
     /// Synchronization latch for completion waiting
     completion_latch: IndexLatch,
 
+    /// When indexing started, None if not started or completed
+    indexing_start_time: Option<std::time::SystemTime>,
+
     /// Last updated timestamp
     last_updated: std::time::SystemTime,
 }
@@ -240,6 +243,7 @@ impl ComponentIndexMonitor {
             index_reader,
             current_indexing_state: ComponentIndexingState::Init,
             completion_latch,
+            indexing_start_time: None,
             last_updated: std::time::SystemTime::now(),
         };
 
@@ -279,6 +283,7 @@ impl ComponentIndexMonitor {
             index_reader,
             current_indexing_state: ComponentIndexingState::Init,
             completion_latch,
+            indexing_start_time: None,
             last_updated: std::time::SystemTime::now(),
         })
     }
@@ -565,8 +570,9 @@ impl ComponentIndexMonitor {
             self.build_directory.display()
         );
 
-        // Transition component state from Init to InProgress
+        // Transition component state from Init to InProgress and set start time
         state.current_indexing_state = ComponentIndexingState::InProgress(0.0);
+        state.indexing_start_time = Some(std::time::SystemTime::now());
         state.last_updated = std::time::SystemTime::now();
         debug!(
             "Component state transitioned to InProgress for {}",
@@ -669,8 +675,9 @@ impl ComponentIndexMonitor {
                 state.component_index.total_files_count()
             );
 
-            // Update state to Completed
+            // Update state to Completed and clear start time
             state.current_indexing_state = ComponentIndexingState::Completed;
+            state.indexing_start_time = None;
             state.last_updated = std::time::SystemTime::now();
             None // No next file to trigger
         } else {
@@ -680,8 +687,9 @@ impl ComponentIndexMonitor {
                 state.component_index.total_files_count()
             );
 
-            // Update state to Partial
+            // Update state to Partial and clear start time
             state.current_indexing_state = ComponentIndexingState::Partial;
+            state.indexing_start_time = None;
             state.last_updated = std::time::SystemTime::now();
 
             // Check if we should trigger next file after transitioning to Partial
@@ -800,6 +808,16 @@ impl ComponentIndexMonitor {
     pub async fn get_indexing_summary(&self) -> crate::clangd::index::IndexingSummary {
         let state = self.state.lock().await;
         state.component_index.get_indexing_summary()
+    }
+
+    /// Get progress tracking data including start time for ETA calculation
+    pub async fn get_progress_data(&self) -> (ComponentIndexState, Option<std::time::SystemTime>) {
+        let state = self.state.lock().await;
+        let component_state = ComponentIndexState::from_component_index(
+            &state.component_index,
+            state.current_indexing_state.clone(),
+        );
+        (component_state, state.indexing_start_time)
     }
 
     /// Wait for indexing completion with timeout
@@ -1847,7 +1865,9 @@ mod tests {
         .expect("Failed to create ComponentIndexMonitor");
 
         // Test trigger_initial_indexing method
-        let result = monitor.trigger_initial_indexing(Arc::new(compilation_db)).await;
+        let result = monitor
+            .trigger_initial_indexing(Arc::new(compilation_db))
+            .await;
         assert!(result.is_ok());
     }
 

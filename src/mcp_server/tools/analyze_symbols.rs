@@ -23,6 +23,8 @@ use crate::mcp_server::tools::lsp_helpers::{
     symbol_resolution::get_matching_symbol,
     type_hierarchy::{TypeHierarchy, get_type_hierarchy},
 };
+use crate::mcp_server::tools::utils;
+use crate::project::index::IndexStatusView;
 use crate::project::{ComponentSession, ProjectError, ProjectWorkspace};
 use crate::symbol::{FileLocation, Symbol};
 
@@ -185,6 +187,10 @@ pub struct AnalyzeSymbolContextTool {
     /// NOTE: Column number is required. Use editor or LSP tools to get exact position.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub location_hint: Option<String>,
+
+    /// Timeout in seconds to wait for indexing completion (default: 20s, 0 = no wait)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub wait_timeout: Option<u64>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -217,6 +223,10 @@ pub struct AnalyzerResult {
     /// Callable members for classes and structs
     #[serde(skip_serializing_if = "Option::is_none")]
     pub members: Option<Members>,
+
+    /// Index status information when timeout occurred or no indexing wait
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub index_status: Option<IndexStatusView>,
 }
 
 impl AnalyzeSymbolContextTool {
@@ -453,16 +463,23 @@ impl AnalyzeSymbolContextTool {
         component_session: Arc<ComponentSession>,
         _workspace: &ProjectWorkspace,
     ) -> Result<CallToolResult, CallToolError> {
-        info!("Starting symbol analysis for '{}'", self.symbol);
+        info!(
+            "Starting symbol analysis for '{}', location_hint={:?}, wait_timeout={:?}",
+            self.symbol, self.location_hint, self.wait_timeout
+        );
 
-        // Ensure indexing completion using ComponentSession
-        component_session
-            .ensure_indexed(std::time::Duration::from_secs(30))
-            .await
-            .map_err(|e| {
-                error!("Indexing failed for symbol analysis: {}", e);
-                CallToolError::new(std::io::Error::other(format!("Indexing failed: {}", e)))
-            })?;
+        // Selective indexing wait logic based on location_hint
+        let index_status = utils::handle_selective_indexing_wait(
+            &component_session,
+            self.location_hint.is_some(), // Skip indexing for document-specific analysis (location hint provided)
+            self.wait_timeout,
+            if self.location_hint.is_some() {
+                "Document-specific analysis"
+            } else {
+                "Workspace symbol resolution"
+            },
+        )
+        .await;
 
         // Note: LSP session access is now handled by individual helper functions
 
@@ -532,6 +549,7 @@ impl AnalyzeSymbolContextTool {
             type_hierarchy,
             call_hierarchy,
             members,
+            index_status,
         };
 
         let output = serde_json::to_string_pretty(&result).map_err(AnalyzerError::from)?;
@@ -571,6 +589,7 @@ mod tests {
             build_directory: None,
             max_examples: None,
             location_hint: None,
+            wait_timeout: None,
         };
 
         let component_session = workspace_session
@@ -678,6 +697,7 @@ mod tests {
             build_directory: None,
             max_examples: Some(2),
             location_hint: None,
+            wait_timeout: None,
         };
 
         let component_session = workspace_session

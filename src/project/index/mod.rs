@@ -17,12 +17,14 @@ pub mod component_monitor;
 pub mod reader;
 #[allow(dead_code)]
 pub mod state;
+pub mod status;
 #[allow(dead_code)]
 pub mod storage;
 pub mod trigger;
 
 // Public exports
-pub use component_monitor::{ComponentIndexMonitor, ComponentIndexState};
+pub use component_monitor::{ComponentIndexMonitor, ComponentIndexState, ComponentIndexingState};
+pub use status::IndexStatusView;
 pub use trigger::ClangdIndexTrigger;
 
 #[cfg(all(test, feature = "clangd-integration-tests"))]
