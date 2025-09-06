@@ -153,14 +153,14 @@ impl ComponentIndexMonitor {
     /// Create monitor for specific build directory with optional index trigger
     pub async fn new_with_trigger(
         build_directory: PathBuf,
-        compilation_db: &CompilationDatabase,
+        compilation_db: Arc<CompilationDatabase>,
         index_reader: Arc<dyn IndexReaderTrait>,
         clangd_version: &ClangdVersion,
         index_trigger: Option<Arc<dyn IndexTrigger>>,
     ) -> Result<Self, ProjectError> {
         Self::create_monitor(
             build_directory,
-            compilation_db,
+            &compilation_db,
             index_reader,
             clangd_version,
             index_trigger,
@@ -173,13 +173,13 @@ impl ComponentIndexMonitor {
     #[cfg(test)]
     pub async fn new_for_test(
         build_directory: PathBuf,
-        compilation_db: &CompilationDatabase,
+        compilation_db: Arc<CompilationDatabase>,
         index_reader: Arc<dyn IndexReaderTrait>,
         clangd_version: &ClangdVersion,
     ) -> Result<Self, ProjectError> {
         Self::create_monitor_for_test(
             build_directory,
-            compilation_db,
+            &compilation_db,
             index_reader,
             clangd_version,
         )
@@ -1053,7 +1053,7 @@ impl ComponentIndexMonitor {
     /// * `Err(ProjectError)` if triggering failed or no source files are available
     pub async fn trigger_initial_indexing(
         &self,
-        compilation_db: &CompilationDatabase,
+        compilation_db: Arc<CompilationDatabase>,
     ) -> Result<(), ProjectError> {
         if self.index_trigger.is_some() {
             let source_files = compilation_db.source_files();
@@ -1119,7 +1119,7 @@ mod tests {
 
         let monitor = ComponentIndexMonitor::new_for_test(
             build_dir.clone(),
-            &compilation_db,
+            Arc::new(compilation_db.clone()),
             mock_reader,
             &clangd_version,
         )
@@ -1143,7 +1143,7 @@ mod tests {
 
         let monitor = ComponentIndexMonitor::new_for_test(
             build_dir,
-            &compilation_db,
+            Arc::new(compilation_db.clone()),
             mock_reader,
             &create_test_clangd_version(),
         )
@@ -1167,7 +1167,7 @@ mod tests {
 
         let monitor = ComponentIndexMonitor::new_for_test(
             build_dir,
-            &compilation_db,
+            Arc::new(compilation_db.clone()),
             mock_reader,
             &create_test_clangd_version(),
         )
@@ -1202,7 +1202,7 @@ mod tests {
 
         let monitor = ComponentIndexMonitor::new_for_test(
             build_dir,
-            &compilation_db,
+            Arc::new(compilation_db.clone()),
             mock_reader,
             &create_test_clangd_version(),
         )
@@ -1236,7 +1236,7 @@ mod tests {
 
         let monitor = ComponentIndexMonitor::new_for_test(
             build_dir,
-            &compilation_db,
+            Arc::new(compilation_db.clone()),
             mock_reader,
             &create_test_clangd_version(),
         )
@@ -1320,7 +1320,7 @@ mod tests {
 
         let monitor = ComponentIndexMonitor::new_for_test(
             build_dir,
-            &compilation_db,
+            Arc::new(compilation_db.clone()),
             mock_reader,
             &create_test_clangd_version(),
         )
@@ -1360,7 +1360,7 @@ mod tests {
 
         let monitor = ComponentIndexMonitor::new_for_test(
             build_dir,
-            &compilation_db,
+            Arc::new(compilation_db.clone()),
             mock_reader,
             &create_test_clangd_version(),
         )
@@ -1409,7 +1409,7 @@ mod tests {
 
         let monitor = ComponentIndexMonitor::new_for_test(
             build_dir,
-            &compilation_db,
+            Arc::new(compilation_db.clone()),
             mock_reader,
             &create_test_clangd_version(),
         )
@@ -1436,7 +1436,7 @@ mod tests {
 
         let monitor = ComponentIndexMonitor::new_for_test(
             build_dir,
-            &compilation_db,
+            Arc::new(compilation_db.clone()),
             mock_reader,
             &create_test_clangd_version(),
         )
@@ -1477,7 +1477,7 @@ mod tests {
 
         let monitor = ComponentIndexMonitor::new_for_test(
             build_dir,
-            &compilation_db,
+            Arc::new(compilation_db.clone()),
             mock_reader,
             &create_test_clangd_version(),
         )
@@ -1506,7 +1506,7 @@ mod tests {
 
         let monitor = ComponentIndexMonitor::new_for_test(
             PathBuf::from("/test/build"),
-            &compilation_db,
+            Arc::new(compilation_db.clone()),
             mock_reader,
             &create_test_clangd_version(),
         )
@@ -1580,7 +1580,7 @@ mod tests {
 
         let monitor = ComponentIndexMonitor::new_for_test(
             PathBuf::from("/test/project/build"),
-            &compilation_db,
+            Arc::new(compilation_db.clone()),
             mock_reader,
             &create_test_clangd_version(),
         )
@@ -1626,7 +1626,7 @@ mod tests {
 
         let monitor = ComponentIndexMonitor::new_for_test(
             build_dir,
-            &compilation_db,
+            Arc::new(compilation_db.clone()),
             mock_reader,
             &create_test_clangd_version(),
         )
@@ -1666,7 +1666,7 @@ mod tests {
 
         let monitor = ComponentIndexMonitor::new_for_test(
             build_dir,
-            &compilation_db,
+            Arc::new(compilation_db.clone()),
             mock_reader,
             &create_test_clangd_version(),
         )
@@ -1753,7 +1753,7 @@ mod tests {
         // Create monitor with trigger
         let monitor = ComponentIndexMonitor::new_with_trigger(
             build_dir,
-            &compilation_db,
+            Arc::new(compilation_db.clone()),
             mock_reader,
             &create_test_clangd_version(),
             Some(trigger),
@@ -1775,7 +1775,7 @@ mod tests {
         // Create monitor without trigger (using regular new method)
         let monitor = ComponentIndexMonitor::new_for_test(
             build_dir,
-            &compilation_db,
+            Arc::new(compilation_db.clone()),
             mock_reader,
             &create_test_clangd_version(),
         )
@@ -1838,7 +1838,7 @@ mod tests {
         // Create monitor with trigger
         let monitor = ComponentIndexMonitor::new_with_trigger(
             build_dir,
-            &compilation_db,
+            Arc::new(compilation_db.clone()),
             mock_reader,
             &create_test_clangd_version(),
             Some(trigger),
@@ -1847,7 +1847,7 @@ mod tests {
         .expect("Failed to create ComponentIndexMonitor");
 
         // Test trigger_initial_indexing method
-        let result = monitor.trigger_initial_indexing(&compilation_db).await;
+        let result = monitor.trigger_initial_indexing(Arc::new(compilation_db)).await;
         assert!(result.is_ok());
     }
 
@@ -1868,7 +1868,7 @@ mod tests {
         // Create monitor with trigger
         let monitor = ComponentIndexMonitor::new_with_trigger(
             build_dir,
-            &empty_compilation_db,
+            Arc::new(empty_compilation_db.clone()),
             mock_reader,
             &create_test_clangd_version(),
             Some(trigger),
@@ -1878,7 +1878,7 @@ mod tests {
 
         // Test trigger_initial_indexing method with empty database - should succeed but not call trigger
         let result = monitor
-            .trigger_initial_indexing(&empty_compilation_db)
+            .trigger_initial_indexing(Arc::new(empty_compilation_db))
             .await;
         assert!(result.is_ok());
     }

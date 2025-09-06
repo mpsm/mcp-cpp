@@ -189,20 +189,12 @@ impl MockProjectWorkspace {
         build_type: &str,
     ) -> Result<(), ProjectError> {
         // Create a mock compile_commands.json path
-        let compile_commands = build_dir.join("compile_commands.json");
-
-        // Create mock compilation database
-        let compilation_database = crate::project::CompilationDatabase::new(compile_commands)
-            .map_err(|e| {
-                ProjectError::Io(std::io::Error::other(format!(
-                    "Failed to create compilation database: {e}"
-                )))
-            })?;
+        let compilation_database_path = build_dir.join("compile_commands.json");
 
         let component = ProjectComponent {
             build_dir_path: build_dir,
             source_root_path: self.project_root.clone(),
-            compilation_database,
+            compilation_database_path,
             provider_type: provider_type.to_string(),
             generator: generator.to_string(),
             build_type: build_type.to_string(),

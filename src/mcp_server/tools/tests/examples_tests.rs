@@ -10,8 +10,6 @@ use crate::mcp_server::tools::lsp_helpers::{
 };
 use crate::project::{ProjectScanner, WorkspaceSession};
 use crate::test_utils::integration::TestProject;
-use std::sync::Arc;
-use tokio::sync::Mutex;
 use tracing::info;
 
 #[cfg(feature = "clangd-integration-tests")]
@@ -43,7 +41,7 @@ async fn test_examples_class_usage() {
         .unwrap();
 
     // Get direct access to LSP session
-    let file_buffer_manager = Arc::new(Mutex::new(RealFileBufferManager::new_real()));
+    let mut file_buffer_manager = RealFileBufferManager::new_real();
 
     // Get Math class symbol
     let symbol = get_matching_symbol("Math", &component_session)
@@ -61,8 +59,7 @@ async fn test_examples_class_usage() {
 
     for (i, example) in examples.iter().enumerate() {
         // Get the line content using the file buffer
-        let mut locked_file_buffer = file_buffer_manager.lock().await;
-        let buffer = locked_file_buffer
+        let buffer = file_buffer_manager
             .get_buffer(&example.file_path)
             .expect("Failed to get file buffer");
         let line_content = buffer
@@ -110,7 +107,7 @@ async fn test_examples_function_usage() {
         .unwrap();
 
     // Get direct access to LSP session
-    let file_buffer_manager = Arc::new(Mutex::new(RealFileBufferManager::new_real()));
+    let mut file_buffer_manager = RealFileBufferManager::new_real();
 
     // Get factorial function symbol
     let symbol = get_matching_symbol("factorial", &component_session)
@@ -131,8 +128,7 @@ async fn test_examples_function_usage() {
 
     for (i, example) in examples.iter().enumerate() {
         // Get the line content using the file buffer
-        let mut locked_file_buffer = file_buffer_manager.lock().await;
-        let buffer = locked_file_buffer
+        let buffer = file_buffer_manager
             .get_buffer(&example.file_path)
             .expect("Failed to get file buffer");
         let line_content = buffer
@@ -180,7 +176,7 @@ async fn test_examples_with_max_limit() {
         .unwrap();
 
     // Get direct access to LSP session
-    let file_buffer_manager = Arc::new(Mutex::new(RealFileBufferManager::new_real()));
+    let mut file_buffer_manager = RealFileBufferManager::new_real();
 
     // Get Math class symbol (should have multiple usage examples)
     let symbol = get_matching_symbol("Math", &component_session)
@@ -210,8 +206,7 @@ async fn test_examples_with_max_limit() {
 
     for (i, example) in examples.iter().enumerate() {
         // Get the line content using the file buffer
-        let mut locked_file_buffer = file_buffer_manager.lock().await;
-        let buffer = locked_file_buffer
+        let buffer = file_buffer_manager
             .get_buffer(&example.file_path)
             .expect("Failed to get file buffer");
         let line_content = buffer
@@ -258,7 +253,7 @@ async fn test_examples_method_usage() {
         .unwrap();
 
     // Get direct access to LSP session
-    let file_buffer_manager = Arc::new(Mutex::new(RealFileBufferManager::new_real()));
+    let mut file_buffer_manager = RealFileBufferManager::new_real();
 
     // Get a method symbol
     let symbol = get_matching_symbol("Math::Complex::add", &component_session)
@@ -276,8 +271,7 @@ async fn test_examples_method_usage() {
 
     for (i, example) in examples.iter().enumerate() {
         // Get the line content using the file buffer
-        let mut locked_file_buffer = file_buffer_manager.lock().await;
-        let buffer = locked_file_buffer
+        let buffer = file_buffer_manager
             .get_buffer(&example.file_path)
             .expect("Failed to get file buffer");
         let line_content = buffer

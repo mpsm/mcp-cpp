@@ -2,8 +2,6 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::PathBuf;
 
-use crate::project::{CompilationDatabase, CompilationDatabaseError};
-
 /// Project component representing a build system configuration
 ///
 /// This struct contains all essential information about a project's build configuration,
@@ -18,9 +16,8 @@ pub struct ProjectComponent {
     /// Path to the source root directory
     pub source_root_path: PathBuf,
 
-    /// Compilation database (compile_commands.json) with parsed entries
-    #[serde(rename = "compilation_database_path")]
-    pub compilation_database: CompilationDatabase,
+    /// Path to the compilation database (compile_commands.json)
+    pub compilation_database_path: PathBuf,
 
     /// Build system provider type (e.g., "cmake", "meson")
     pub provider_type: String,
@@ -38,7 +35,7 @@ pub struct ProjectComponent {
 impl ProjectComponent {
     /// Create a new project component with validation
     ///
-    /// Returns an error if any of the required paths are not accessible or if the compilation database cannot be loaded
+    /// Returns an error if any of the required paths are not accessible
     pub fn new(
         build_dir_path: PathBuf,
         source_root_path: PathBuf,
@@ -64,25 +61,17 @@ impl ProjectComponent {
             });
         }
 
-        // Create and validate compilation database
-        let compilation_database =
-            CompilationDatabase::new(compilation_database_path).map_err(|e| match e {
-                CompilationDatabaseError::FileNotFound { path } => {
-                    ProjectError::CompilationDatabaseNotFound { path }
-                }
-                CompilationDatabaseError::ReadError { error } => {
-                    ProjectError::CompilationDatabaseNotReadable { error }
-                }
-                CompilationDatabaseError::ParseError { error } => {
-                    ProjectError::CompilationDatabaseInvalid { error }
-                }
-                CompilationDatabaseError::EmptyDatabase => ProjectError::CompilationDatabaseEmpty,
-            })?;
+        // Validate compilation database path exists
+        if !compilation_database_path.exists() {
+            return Err(ProjectError::CompilationDatabaseNotFound {
+                path: compilation_database_path.to_string_lossy().to_string(),
+            });
+        }
 
         Ok(Self {
             build_dir_path,
             source_root_path,
-            compilation_database,
+            compilation_database_path,
             provider_type,
             generator,
             build_type,

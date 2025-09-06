@@ -4,12 +4,9 @@
 //! with real clangd integration, testing inheritance relationships including
 //! interfaces, derived classes, and edge cases.
 
-use crate::io::file_manager::RealFileBufferManager;
 use crate::mcp_server::tools::analyze_symbols::{AnalyzeSymbolContextTool, AnalyzerResult};
 use crate::project::{ProjectScanner, WorkspaceSession};
 use crate::test_utils::integration::TestProject;
-use std::sync::Arc;
-use tokio::sync::Mutex;
 use tracing::info;
 
 #[cfg(feature = "clangd-integration-tests")]
@@ -30,8 +27,6 @@ async fn test_analyzer_type_hierarchy_interface() {
     let workspace_session = WorkspaceSession::new(workspace.clone(), clangd_path)
         .expect("Failed to create workspace session");
 
-    let file_buffer_manager = Arc::new(Mutex::new(RealFileBufferManager::new_real()));
-
     // Test IStorageBackend interface - should have derived classes
     let tool = AnalyzeSymbolContextTool {
         symbol: "IStorageBackend".to_string(),
@@ -44,9 +39,7 @@ async fn test_analyzer_type_hierarchy_interface() {
         .get_component_session(test_project.build_dir.clone())
         .await
         .unwrap();
-    let result = tool
-        .call_tool(component_session, &workspace, file_buffer_manager)
-        .await;
+    let result = tool.call_tool(component_session, &workspace).await;
 
     assert!(result.is_ok());
 
@@ -98,8 +91,6 @@ async fn test_analyzer_type_hierarchy_derived_class() {
     let workspace_session = WorkspaceSession::new(workspace.clone(), clangd_path)
         .expect("Failed to create workspace session");
 
-    let file_buffer_manager = Arc::new(Mutex::new(RealFileBufferManager::new_real()));
-
     // Test MemoryStorage - should have IStorageBackend as supertype
     let tool = AnalyzeSymbolContextTool {
         symbol: "MemoryStorage".to_string(),
@@ -112,9 +103,7 @@ async fn test_analyzer_type_hierarchy_derived_class() {
         .get_component_session(test_project.build_dir.clone())
         .await
         .unwrap();
-    let result = tool
-        .call_tool(component_session, &workspace, file_buffer_manager)
-        .await;
+    let result = tool.call_tool(component_session, &workspace).await;
 
     assert!(result.is_ok());
 
@@ -164,8 +153,6 @@ async fn test_analyzer_type_hierarchy_non_class() {
     let workspace_session = WorkspaceSession::new(workspace.clone(), clangd_path)
         .expect("Failed to create workspace session");
 
-    let file_buffer_manager = Arc::new(Mutex::new(RealFileBufferManager::new_real()));
-
     // Test a function - should have no type hierarchy
     let tool = AnalyzeSymbolContextTool {
         symbol: "factorial".to_string(),
@@ -178,9 +165,7 @@ async fn test_analyzer_type_hierarchy_non_class() {
         .get_component_session(test_project.build_dir.clone())
         .await
         .unwrap();
-    let result = tool
-        .call_tool(component_session, &workspace, file_buffer_manager)
-        .await;
+    let result = tool.call_tool(component_session, &workspace).await;
 
     assert!(result.is_ok());
 

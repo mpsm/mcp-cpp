@@ -10,19 +10,14 @@ use super::server_helpers::{self, McpToolHandler};
 use super::tools::analyze_symbols::AnalyzeSymbolContextTool;
 use super::tools::project_tools::GetProjectDetailsTool;
 use super::tools::search_symbols::SearchSymbolsTool;
-use crate::io::file_manager::RealFileBufferManager;
 use crate::project::{ProjectError, ProjectWorkspace, WorkspaceSession};
 use crate::register_tools;
 use crate::{log_mcp_message, log_timing};
 use std::path::PathBuf;
-use std::sync::Arc;
 use std::time::Instant;
-use tokio::sync::Mutex;
 
 pub struct CppServerHandler {
-    project_workspace: ProjectWorkspace,
     workspace_session: WorkspaceSession,
-    file_buffer_manager: Arc<Mutex<RealFileBufferManager>>,
 }
 
 impl CppServerHandler {
@@ -30,13 +25,8 @@ impl CppServerHandler {
         project_workspace: ProjectWorkspace,
         clangd_path: String,
     ) -> Result<Self, ProjectError> {
-        let workspace_session = WorkspaceSession::new(project_workspace.clone(), clangd_path)?;
-        let file_buffer_manager = Arc::new(Mutex::new(RealFileBufferManager::new_real()));
-        Ok(Self {
-            project_workspace,
-            workspace_session,
-            file_buffer_manager,
-        })
+        let workspace_session = WorkspaceSession::new(project_workspace, clangd_path)?;
+        Ok(Self { workspace_session })
     }
 
     /// Resolves build directory from optional parameter using the helper function.
@@ -44,7 +34,10 @@ impl CppServerHandler {
         &self,
         requested_build_dir: Option<&str>,
     ) -> Result<PathBuf, CallToolError> {
-        server_helpers::resolve_build_directory(&self.project_workspace, requested_build_dir)
+        server_helpers::resolve_build_directory(
+            self.workspace_session.get_workspace(),
+            requested_build_dir,
+        )
     }
 }
 
@@ -53,7 +46,7 @@ impl McpToolHandler<GetProjectDetailsTool> for CppServerHandler {
     const TOOL_NAME: &'static str = "get_project_details";
 
     fn call_tool_sync(&self, tool: GetProjectDetailsTool) -> Result<CallToolResult, CallToolError> {
-        tool.call_tool(&self.project_workspace)
+        tool.call_tool(self.workspace_session.get_workspace())
     }
 }
 
@@ -77,7 +70,7 @@ impl McpToolHandler<SearchSymbolsTool> for CppServerHandler {
                 )))
             })?;
 
-        tool.call_tool(component_session, &self.project_workspace)
+        tool.call_tool(component_session, self.workspace_session.get_workspace())
             .await
     }
 }
@@ -102,12 +95,8 @@ impl McpToolHandler<AnalyzeSymbolContextTool> for CppServerHandler {
                 )))
             })?;
 
-        tool.call_tool(
-            component_session,
-            &self.project_workspace,
-            self.file_buffer_manager.clone(),
-        )
-        .await
+        tool.call_tool(component_session, self.workspace_session.get_workspace())
+            .await
     }
 }
 

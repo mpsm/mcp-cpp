@@ -4,12 +4,9 @@
 //! with real clangd integration, testing function and method call relationships including
 //! incoming calls (callers) and outgoing calls (callees).
 
-use crate::io::file_manager::RealFileBufferManager;
 use crate::mcp_server::tools::analyze_symbols::{AnalyzeSymbolContextTool, AnalyzerResult};
 use crate::project::{ProjectScanner, WorkspaceSession};
 use crate::test_utils::integration::TestProject;
-use std::sync::Arc;
-use tokio::sync::Mutex;
 use tracing::info;
 
 #[cfg(feature = "clangd-integration-tests")]
@@ -30,8 +27,6 @@ async fn test_analyzer_call_hierarchy_function() {
     let workspace_session = WorkspaceSession::new(workspace.clone(), clangd_path)
         .expect("Failed to create workspace session");
 
-    let file_buffer_manager = Arc::new(Mutex::new(RealFileBufferManager::new_real()));
-
     // Test factorial function - should have callers from main.cpp
     let tool = AnalyzeSymbolContextTool {
         symbol: "factorial".to_string(),
@@ -44,9 +39,7 @@ async fn test_analyzer_call_hierarchy_function() {
         .get_component_session(test_project.build_dir.clone())
         .await
         .unwrap();
-    let result = tool
-        .call_tool(component_session, &workspace, file_buffer_manager)
-        .await;
+    let result = tool.call_tool(component_session, &workspace).await;
 
     assert!(result.is_ok());
 
@@ -100,8 +93,6 @@ async fn test_analyzer_call_hierarchy_method() {
     let workspace_session = WorkspaceSession::new(workspace.clone(), clangd_path)
         .expect("Failed to create workspace session");
 
-    let file_buffer_manager = Arc::new(Mutex::new(RealFileBufferManager::new_real()));
-
     // Test Math::Complex::add method - should have callers from main.cpp
     let tool = AnalyzeSymbolContextTool {
         symbol: "Math::Complex::add".to_string(), // Fully qualified name
@@ -114,9 +105,7 @@ async fn test_analyzer_call_hierarchy_method() {
         .get_component_session(test_project.build_dir.clone())
         .await
         .unwrap();
-    let result = tool
-        .call_tool(component_session, &workspace, file_buffer_manager)
-        .await;
+    let result = tool.call_tool(component_session, &workspace).await;
 
     assert!(result.is_ok());
 
@@ -169,8 +158,6 @@ async fn test_analyzer_call_hierarchy_non_function() {
     let workspace_session = WorkspaceSession::new(workspace.clone(), clangd_path)
         .expect("Failed to create workspace session");
 
-    let file_buffer_manager = Arc::new(Mutex::new(RealFileBufferManager::new_real()));
-
     // Test a class - should have no call hierarchy
     let tool = AnalyzeSymbolContextTool {
         symbol: "Math".to_string(),
@@ -183,9 +170,7 @@ async fn test_analyzer_call_hierarchy_non_function() {
         .get_component_session(test_project.build_dir.clone())
         .await
         .unwrap();
-    let result = tool
-        .call_tool(component_session, &workspace, file_buffer_manager)
-        .await;
+    let result = tool.call_tool(component_session, &workspace).await;
 
     assert!(result.is_ok());
 
@@ -234,8 +219,6 @@ async fn test_analyzer_call_hierarchy_coherence() {
     let workspace_session = WorkspaceSession::new(workspace.clone(), clangd_path)
         .expect("Failed to create workspace session");
 
-    let file_buffer_manager = Arc::new(Mutex::new(RealFileBufferManager::new_real()));
-
     // Test the call chain: standardDeviation -> variance -> mean
     // This validates coherence: if A calls B, then B's callers must include A
 
@@ -261,7 +244,7 @@ async fn test_analyzer_call_hierarchy_coherence() {
         .await
         .unwrap();
     let variance_result = variance_tool
-        .call_tool(component_session, &workspace, file_buffer_manager.clone())
+        .call_tool(component_session, &workspace)
         .await
         .expect("Failed to analyze variance");
 
@@ -296,7 +279,7 @@ async fn test_analyzer_call_hierarchy_coherence() {
         .await
         .unwrap();
     let mean_result = mean_tool
-        .call_tool(component_session, &workspace, file_buffer_manager.clone())
+        .call_tool(component_session, &workspace)
         .await
         .expect("Failed to analyze mean");
 
@@ -331,7 +314,7 @@ async fn test_analyzer_call_hierarchy_coherence() {
         .await
         .unwrap();
     let std_dev_result = std_dev_tool
-        .call_tool(component_session, &workspace, file_buffer_manager.clone())
+        .call_tool(component_session, &workspace)
         .await
         .expect("Failed to analyze standardDeviation");
 

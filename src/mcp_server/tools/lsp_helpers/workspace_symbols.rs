@@ -468,15 +468,10 @@ mod tests {
     }
 
     fn create_test_component() -> ProjectComponent {
-        use crate::project::CompilationDatabase;
-
         ProjectComponent {
             build_dir_path: PathBuf::from("/test/project/build"),
             source_root_path: PathBuf::from("/test/project"),
-            compilation_database: CompilationDatabase {
-                path: PathBuf::from("/test/project/build/compile_commands.json"),
-                entries: vec![],
-            },
+            compilation_database_path: PathBuf::from("/test/project/build/compile_commands.json"),
             provider_type: "cmake".to_string(),
             generator: "Ninja".to_string(),
             build_type: "Debug".to_string(),

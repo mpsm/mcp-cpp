@@ -21,7 +21,7 @@ use crate::project::index::reader::{IndexReader, IndexReaderTrait};
 use crate::project::index::storage::IndexStorage;
 use crate::project::index::storage::filesystem::FilesystemIndexStorage;
 use crate::project::index::{ClangdIndexTrigger, ComponentIndexMonitor, ComponentIndexState};
-use crate::project::{ProjectComponent, ProjectError};
+use crate::project::{CompilationDatabase, ProjectComponent, ProjectError};
 
 /// Channel buffer size for progress event processing
 const PROGRESS_CHANNEL_BUFFER_SIZE: usize = 10_000;
@@ -69,6 +69,18 @@ impl ComponentSession {
             component.build_dir_path.display()
         );
 
+        // Load the compilation database from the component path
+        let compilation_database = CompilationDatabase::new(
+            component.compilation_database_path.clone(),
+        )
+        .map_err(|_e| ProjectError::CompilationDatabaseNotFound {
+            path: component
+                .compilation_database_path
+                .to_string_lossy()
+                .to_string(),
+        })?;
+        let compilation_database = Arc::new(compilation_database);
+
         // Build configuration using builder pattern
         let config = ClangdConfigBuilder::new()
             .working_directory(project_root)
@@ -105,6 +117,7 @@ impl ComponentSession {
         // Create ComponentIndexMonitor for this component
         let index_monitor = Self::create_index_monitor(
             &component,
+            compilation_database.clone(),
             clangd_version,
             Arc::clone(&clangd_session),
             Arc::clone(&file_manager),
@@ -136,6 +149,7 @@ impl ComponentSession {
     /// Create a ComponentIndexMonitor for the component
     async fn create_index_monitor(
         component: &ProjectComponent,
+        compilation_database: Arc<CompilationDatabase>,
         clangd_version: &ClangdVersion,
         session: Arc<tokio::sync::Mutex<ClangdSession>>,
         file_manager: Arc<tokio::sync::Mutex<ClangdFileManager>>,
@@ -163,7 +177,7 @@ impl ComponentSession {
         // Create new ComponentIndexMonitor with IndexTrigger
         let monitor = ComponentIndexMonitor::new_with_trigger(
             build_dir.to_path_buf(),
-            &component.compilation_database,
+            compilation_database.clone(),
             index_reader,
             clangd_version,
             Some(index_trigger),
@@ -172,7 +186,7 @@ impl ComponentSession {
 
         // Trigger initial indexing using the ComponentIndexMonitor
         if let Err(e) = monitor
-            .trigger_initial_indexing(&component.compilation_database)
+            .trigger_initial_indexing(compilation_database.clone())
             .await
         {
             warn!(

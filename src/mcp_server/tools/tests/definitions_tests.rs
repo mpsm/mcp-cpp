@@ -11,7 +11,6 @@ use crate::mcp_server::tools::lsp_helpers::{
 };
 use crate::project::{ProjectScanner, WorkspaceSession};
 use crate::test_utils::integration::TestProject;
-use std::sync::{Arc, Mutex};
 use tracing::info;
 
 #[cfg(feature = "clangd-integration-tests")]
@@ -161,7 +160,7 @@ async fn test_definitions_function_symbol() {
         .unwrap();
 
     // Get direct access to LSP session
-    let file_buffer_manager = Arc::new(Mutex::new(RealFileBufferManager::new_real()));
+    let mut file_buffer_manager = RealFileBufferManager::new_real();
 
     // Get factorial function symbol
     let symbol = get_matching_symbol("factorial", &component_session)
@@ -181,8 +180,7 @@ async fn test_definitions_function_symbol() {
 
     for (i, definition) in definitions.iter().enumerate() {
         // Get the line content using the file buffer
-        let mut locked_file_buffer = file_buffer_manager.lock().unwrap();
-        let buffer = locked_file_buffer
+        let buffer = file_buffer_manager
             .get_buffer(&definition.file_path)
             .expect("Failed to get file buffer");
         let line_content = buffer
@@ -230,7 +228,7 @@ async fn test_definitions_method_symbol() {
         .unwrap();
 
     // Get direct access to LSP session
-    let file_buffer_manager = Arc::new(Mutex::new(RealFileBufferManager::new_real()));
+    let mut file_buffer_manager = RealFileBufferManager::new_real();
 
     // Get a method symbol (using qualified name search)
     let symbol = get_matching_symbol("Math::Complex::add", &component_session)
@@ -247,8 +245,7 @@ async fn test_definitions_method_symbol() {
 
     for (i, definition) in definitions.iter().enumerate() {
         // Get the line content using the file buffer
-        let mut locked_file_buffer = file_buffer_manager.lock().unwrap();
-        let buffer = locked_file_buffer
+        let buffer = file_buffer_manager
             .get_buffer(&definition.file_path)
             .expect("Failed to get file buffer");
         let line_content = buffer

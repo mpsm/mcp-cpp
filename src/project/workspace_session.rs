@@ -175,6 +175,11 @@ impl WorkspaceSession {
             .await
     }
 
+    /// Get a non-mutable reference to the project workspace
+    pub fn get_workspace(&self) -> &ProjectWorkspace {
+        &self.workspace
+    }
+
     /// Refresh index state by synchronizing with actual index files on disk
     ///
     /// This method reads the current state of index files and updates the IndexState

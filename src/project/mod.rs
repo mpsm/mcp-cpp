@@ -18,7 +18,7 @@ pub mod workspace_session;
 
 pub use cmake_provider::CmakeProvider;
 
-pub use compilation_database::{CompilationDatabase, CompilationDatabaseError};
+pub use compilation_database::CompilationDatabase;
 
 pub use component::ProjectComponent;
 

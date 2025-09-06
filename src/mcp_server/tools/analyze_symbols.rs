@@ -10,7 +10,6 @@ use rust_mcp_sdk::macros::{JsonSchema, mcp_tool};
 use rust_mcp_sdk::schema::{CallToolResult, TextContent, schema_utils::CallToolError};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
-use tokio::sync::Mutex;
 use tracing::{error, info, instrument, warn};
 
 use crate::io::file_buffer::FileBufferError;
@@ -447,13 +446,12 @@ impl AnalyzeSymbolContextTool {
     /// V2 entry point - uses shared ClangdSession from server
     #[instrument(
         name = "analyze_symbol_context",
-        skip(self, component_session, _workspace, _file_buffer_manager)
+        skip(self, component_session, _workspace)
     )]
     pub async fn call_tool(
         &self,
         component_session: Arc<ComponentSession>,
         _workspace: &ProjectWorkspace,
-        _file_buffer_manager: Arc<Mutex<crate::io::file_manager::RealFileBufferManager>>,
     ) -> Result<CallToolResult, CallToolError> {
         info!("Starting symbol analysis for '{}'", self.symbol);
 
@@ -549,9 +547,6 @@ mod tests {
     #[tokio::test]
     async fn test_analyzer_with_real_clangd() {
         use super::*;
-        use crate::io::file_manager::RealFileBufferManager;
-        use std::sync::Arc;
-        use tokio::sync::Mutex;
 
         // Create a test project first
         use crate::test_utils::integration::TestProject;
@@ -571,8 +566,6 @@ mod tests {
             .expect("Failed to create workspace session");
         // ComponentSession handles session management internally
 
-        let file_buffer_manager = Arc::new(Mutex::new(RealFileBufferManager::new_real()));
-
         let tool = AnalyzeSymbolContextTool {
             symbol: "Math".to_string(),
             build_directory: None,
@@ -584,9 +577,7 @@ mod tests {
             .get_component_session(test_project.build_dir.clone())
             .await
             .unwrap();
-        let result = tool
-            .call_tool(component_session, &workspace, file_buffer_manager)
-            .await;
+        let result = tool.call_tool(component_session, &workspace).await;
 
         // Check and log error if present
         if let Err(ref err) = result {
@@ -662,9 +653,6 @@ mod tests {
     #[tokio::test]
     async fn test_analyzer_with_max_examples() {
         use super::*;
-        use crate::io::file_manager::RealFileBufferManager;
-        use std::sync::Arc;
-        use tokio::sync::Mutex;
 
         // Create a test project first
         use crate::test_utils::integration::TestProject;
@@ -684,8 +672,6 @@ mod tests {
             .expect("Failed to create workspace session");
         // ComponentSession handles session management internally
 
-        let file_buffer_manager = Arc::new(Mutex::new(RealFileBufferManager::new_real()));
-
         // Test with max_examples = 2
         let tool = AnalyzeSymbolContextTool {
             symbol: "Math".to_string(),
@@ -698,9 +684,7 @@ mod tests {
             .get_component_session(test_project.build_dir.clone())
             .await
             .unwrap();
-        let result = tool
-            .call_tool(component_session, &workspace, file_buffer_manager)
-            .await;
+        let result = tool.call_tool(component_session, &workspace).await;
 
         assert!(result.is_ok());
 

@@ -4,12 +4,9 @@
 //! with real clangd integration, testing various C++ constructs including
 //! classes, interfaces, and edge cases.
 
-use crate::io::file_manager::RealFileBufferManager;
 use crate::mcp_server::tools::analyze_symbols::{AnalyzeSymbolContextTool, AnalyzerResult};
 use crate::project::{ProjectScanner, WorkspaceSession};
 use crate::test_utils::integration::TestProject;
-use std::sync::Arc;
-use tokio::sync::Mutex;
 use tracing::info;
 
 #[cfg(feature = "clangd-integration-tests")]
@@ -30,8 +27,6 @@ async fn test_analyzer_members_math() {
     let workspace_session = WorkspaceSession::new(workspace.clone(), clangd_path)
         .expect("Failed to create workspace session");
 
-    let file_buffer_manager = Arc::new(Mutex::new(RealFileBufferManager::new_real()));
-
     // Test Math class - should have callable members
     let tool = AnalyzeSymbolContextTool {
         symbol: "Math".to_string(),
@@ -44,9 +39,7 @@ async fn test_analyzer_members_math() {
         .get_component_session(test_project.build_dir.clone())
         .await
         .unwrap();
-    let result = tool
-        .call_tool(component_session, &workspace, file_buffer_manager)
-        .await;
+    let result = tool.call_tool(component_session, &workspace).await;
 
     assert!(result.is_ok());
 
@@ -147,8 +140,6 @@ async fn test_analyzer_members_interface() {
     let workspace_session = WorkspaceSession::new(workspace.clone(), clangd_path)
         .expect("Failed to create workspace session");
 
-    let file_buffer_manager = Arc::new(Mutex::new(RealFileBufferManager::new_real()));
-
     // Test IStorageBackend interface - should have virtual methods
     let tool = AnalyzeSymbolContextTool {
         symbol: "IStorageBackend".to_string(),
@@ -161,9 +152,7 @@ async fn test_analyzer_members_interface() {
         .get_component_session(test_project.build_dir.clone())
         .await
         .unwrap();
-    let result = tool
-        .call_tool(component_session, &workspace, file_buffer_manager)
-        .await;
+    let result = tool.call_tool(component_session, &workspace).await;
 
     assert!(result.is_ok());
 
@@ -266,8 +255,6 @@ async fn test_analyzer_members_non_class() {
     let workspace_session = WorkspaceSession::new(workspace.clone(), clangd_path)
         .expect("Failed to create workspace session");
 
-    let file_buffer_manager = Arc::new(Mutex::new(RealFileBufferManager::new_real()));
-
     // Test a function - should have no members
     let tool = AnalyzeSymbolContextTool {
         symbol: "factorial".to_string(),
@@ -280,9 +267,7 @@ async fn test_analyzer_members_non_class() {
         .get_component_session(test_project.build_dir.clone())
         .await
         .unwrap();
-    let result = tool
-        .call_tool(component_session, &workspace, file_buffer_manager)
-        .await;
+    let result = tool.call_tool(component_session, &workspace).await;
 
     assert!(result.is_ok());
 
