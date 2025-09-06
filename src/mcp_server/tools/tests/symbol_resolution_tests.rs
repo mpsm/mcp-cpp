@@ -37,11 +37,8 @@ async fn test_symbol_resolution_single_match() {
         .await
         .unwrap();
 
-    let session_arc = component_session.clangd_session();
-    let mut locked_session = session_arc.lock().await;
-
     // Test finding a unique symbol
-    let result = get_matching_symbol("Math", &mut locked_session).await;
+    let result = get_matching_symbol("Math", &component_session).await;
 
     assert!(result.is_ok());
     let symbol = result.unwrap();
@@ -79,11 +76,8 @@ async fn test_symbol_resolution_function() {
         .await
         .unwrap();
 
-    let session_arc = component_session.clangd_session();
-    let mut locked_session = session_arc.lock().await;
-
     // Test finding a function symbol
-    let result = get_matching_symbol("factorial", &mut locked_session).await;
+    let result = get_matching_symbol("factorial", &component_session).await;
 
     assert!(result.is_ok());
     let symbol = result.unwrap();
@@ -121,11 +115,8 @@ async fn test_symbol_resolution_no_match() {
         .await
         .unwrap();
 
-    let session_arc = component_session.clangd_session();
-    let mut locked_session = session_arc.lock().await;
-
     // Test searching for a non-existent symbol
-    let result = get_matching_symbol("NonExistentSymbol", &mut locked_session).await;
+    let result = get_matching_symbol("NonExistentSymbol", &component_session).await;
 
     assert!(result.is_err());
     match result {
@@ -165,11 +156,8 @@ async fn test_symbol_resolution_qualified_name() {
         .await
         .unwrap();
 
-    let session_arc = component_session.clangd_session();
-    let mut locked_session = session_arc.lock().await;
-
     // Test finding a qualified symbol name
-    let result = get_matching_symbol("Math::Complex::add", &mut locked_session).await;
+    let result = get_matching_symbol("Math::Complex::add", &component_session).await;
 
     assert!(result.is_ok());
     let symbol = result.unwrap();

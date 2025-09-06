@@ -10,6 +10,7 @@ use std::sync::Arc;
 use tokio::sync::Mutex;
 use tracing::debug;
 
+use crate::clangd::file_manager::ClangdFileManager;
 use crate::clangd::session::{ClangdSession, ClangdSessionTrait};
 use crate::lsp::traits::LspClientTrait;
 use crate::project::ProjectError;
@@ -36,23 +37,33 @@ pub trait IndexTrigger: Send + Sync {
     async fn trigger(&self, file_path: &Path) -> Result<(), ProjectError>;
 }
 
-/// Implementation of IndexTrigger that uses ClangdSession
+/// Implementation of IndexTrigger that uses ClangdSession and FileManager
 ///
-/// This implementation encapsulates the ClangdSession dependency and provides
-/// the bridge between ComponentIndexMonitor and clangd for triggering indexing.
+/// This implementation encapsulates the ClangdSession and FileManager dependencies
+/// and provides the bridge between ComponentIndexMonitor and clangd for triggering indexing.
+/// Uses proper file management through the injected FileManager.
 pub struct ClangdIndexTrigger {
     /// The clangd session to use for triggering indexing
     session: Arc<Mutex<ClangdSession>>,
+    /// File manager for proper file state management
+    file_manager: Arc<Mutex<ClangdFileManager>>,
 }
 
 impl ClangdIndexTrigger {
-    /// Create a new ClangdIndexTrigger with the given session
+    /// Create a new ClangdIndexTrigger with the given session and file manager
     ///
     /// # Arguments
     /// * `session` - The ClangdSession to use for triggering indexing
-    pub fn new(session: Arc<Mutex<ClangdSession>>) -> Self {
+    /// * `file_manager` - The FileManager for proper file state management
+    pub fn new(
+        session: Arc<Mutex<ClangdSession>>,
+        file_manager: Arc<Mutex<ClangdFileManager>>,
+    ) -> Self {
         debug!("Created ClangdIndexTrigger");
-        Self { session }
+        Self {
+            session,
+            file_manager,
+        }
     }
 }
 
@@ -61,18 +72,25 @@ impl IndexTrigger for ClangdIndexTrigger {
     async fn trigger(&self, file_path: &Path) -> Result<(), ProjectError> {
         debug!("Triggering indexing for file: {:?}", file_path);
 
+        // Ensure file is ready using proper file management
         let mut session = self.session.lock().await;
-        session.ensure_file_ready(file_path).await.map_err(|e| {
-            ProjectError::IndexingTrigger(format!(
-                "Failed to trigger indexing for {}: {}",
-                file_path.display(),
-                e
-            ))
-        })?;
+        let mut file_manager = self.file_manager.lock().await;
+
+        file_manager
+            .ensure_file_ready(file_path, session.client_mut())
+            .await
+            .map_err(|e| {
+                ProjectError::IndexingTrigger(format!(
+                    "Failed to ensure file ready for indexing {}: {}",
+                    file_path.display(),
+                    e
+                ))
+            })?;
 
         // Request document symbols to force additional symbol processing
         let file_uri = crate::symbol::uri_from_pathbuf(file_path);
         debug!("Requesting document symbols for file: {:?}", file_path);
+
         let client = session.client_mut();
         match client.text_document_document_symbol(file_uri).await {
             Ok(_) => {

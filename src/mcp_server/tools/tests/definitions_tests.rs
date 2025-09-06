@@ -42,17 +42,15 @@ async fn test_definitions_class_symbol() {
         .await
         .unwrap();
 
-    // Acquire session lock for LSP operations
-    let session_arc = component_session.clangd_session();
-    let mut locked_session = session_arc.lock().await;
+    // Get direct access to LSP session
 
     // Get Math class symbol
-    let symbol = get_matching_symbol("Math", &mut locked_session)
+    let symbol = get_matching_symbol("Math", &component_session)
         .await
         .expect("Failed to find Math symbol");
 
     // Test getting definitions
-    let definitions = get_definitions(&symbol.location, &mut locked_session)
+    let definitions = get_definitions(&symbol.location, &component_session)
         .await
         .expect("Failed to get definitions");
 
@@ -103,17 +101,15 @@ async fn test_declarations_class_symbol() {
         .await
         .unwrap();
 
-    // Acquire session lock for LSP operations
-    let session_arc = component_session.clangd_session();
-    let mut locked_session = session_arc.lock().await;
+    // Get direct access to LSP session
 
     // Get Math class symbol
-    let symbol = get_matching_symbol("Math", &mut locked_session)
+    let symbol = get_matching_symbol("Math", &component_session)
         .await
         .expect("Failed to find Math symbol");
 
     // Test getting declarations
-    let declarations = get_declarations(&symbol.location, &mut locked_session)
+    let declarations = get_declarations(&symbol.location, &component_session)
         .await
         .expect("Failed to get declarations");
 
@@ -164,18 +160,16 @@ async fn test_definitions_function_symbol() {
         .await
         .unwrap();
 
-    // Acquire session lock for LSP operations
-    let session_arc = component_session.clangd_session();
-    let mut locked_session = session_arc.lock().await;
+    // Get direct access to LSP session
     let file_buffer_manager = Arc::new(Mutex::new(RealFileBufferManager::new_real()));
 
     // Get factorial function symbol
-    let symbol = get_matching_symbol("factorial", &mut locked_session)
+    let symbol = get_matching_symbol("factorial", &component_session)
         .await
         .expect("Failed to find factorial symbol");
 
     // Test getting definitions
-    let definitions = get_definitions(&symbol.location, &mut locked_session)
+    let definitions = get_definitions(&symbol.location, &component_session)
         .await
         .expect("Failed to get definitions");
 
@@ -235,18 +229,16 @@ async fn test_definitions_method_symbol() {
         .await
         .unwrap();
 
-    // Acquire session lock for LSP operations
-    let session_arc = component_session.clangd_session();
-    let mut locked_session = session_arc.lock().await;
+    // Get direct access to LSP session
     let file_buffer_manager = Arc::new(Mutex::new(RealFileBufferManager::new_real()));
 
     // Get a method symbol (using qualified name search)
-    let symbol = get_matching_symbol("Math::Complex::add", &mut locked_session)
+    let symbol = get_matching_symbol("Math::Complex::add", &component_session)
         .await
         .expect("Failed to find add method symbol");
 
     // Test getting definitions
-    let definitions = get_definitions(&symbol.location, &mut locked_session)
+    let definitions = get_definitions(&symbol.location, &component_session)
         .await
         .expect("Failed to get definitions");
 

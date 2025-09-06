@@ -4,9 +4,10 @@
 //! that work with clangd to find real usage patterns of symbols throughout the
 //! codebase, with configurable limits.
 
-use crate::clangd::session::{ClangdSession, ClangdSessionTrait};
+use crate::clangd::session::ClangdSessionTrait;
 use crate::lsp::traits::LspClientTrait;
 use crate::mcp_server::tools::analyze_symbols::AnalyzerError;
+use crate::project::component_session::ComponentSession;
 use crate::symbol::FileLocation;
 
 // ============================================================================
@@ -15,18 +16,20 @@ use crate::symbol::FileLocation;
 
 /// Get usage examples for a symbol (returns locations only)
 pub async fn get_examples(
-    session: &mut ClangdSession,
+    component_session: &ComponentSession,
     symbol_location: &FileLocation,
     max_examples: Option<u32>,
 ) -> Result<Vec<FileLocation>, AnalyzerError> {
     let uri = symbol_location.get_uri();
     let lsp_position: lsp_types::Position = symbol_location.range.start.into();
 
-    session
+    // Ensure file is ready first
+    component_session
         .ensure_file_ready(&symbol_location.file_path)
         .await?;
 
-    // Get references to the symbol (exclude declaration)
+    // Get LSP session and make the request
+    let mut session = component_session.lsp_session().await;
     let references = session
         .client_mut()
         .text_document_references(uri, lsp_position, false)

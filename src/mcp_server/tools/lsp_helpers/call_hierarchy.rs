@@ -4,11 +4,12 @@
 //! clangd to analyze function call relationships including incoming calls (callers)
 //! and outgoing calls (callees).
 
+use crate::clangd::session::ClangdSessionTrait;
 use serde::{Deserialize, Serialize};
 
-use crate::clangd::session::{ClangdSession, ClangdSessionTrait};
 use crate::lsp::traits::LspClientTrait;
 use crate::mcp_server::tools::analyze_symbols::AnalyzerError;
+use crate::project::component_session::ComponentSession;
 use crate::symbol::FileLocation;
 
 // ============================================================================
@@ -30,15 +31,18 @@ pub struct CallHierarchy {
 /// Get call hierarchy information for a symbol (functions and methods)
 pub async fn get_call_hierarchy(
     symbol_location: &FileLocation,
-    session: &mut ClangdSession,
+    component_session: &ComponentSession,
 ) -> Result<CallHierarchy, AnalyzerError> {
     let uri = symbol_location.get_uri();
     let lsp_position: lsp_types::Position = symbol_location.range.start.into();
 
-    session
+    // Ensure file is ready first
+    component_session
         .ensure_file_ready(&symbol_location.file_path)
         .await?;
 
+    // Get LSP session and make the request
+    let mut session = component_session.lsp_session().await;
     let client = session.client_mut();
 
     // Prepare call hierarchy at the symbol location

@@ -7,7 +7,6 @@ use tracing::{debug, info};
 
 use crate::clangd::config::ClangdConfig;
 use crate::clangd::error::ClangdSessionError;
-use crate::clangd::file_manager::ClangdFileManager;
 use crate::clangd::index::{IndexProgressMonitor, ProgressEvent};
 use crate::clangd::log_monitor::LogMonitor;
 use crate::clangd::session::ClangdSession;
@@ -173,8 +172,6 @@ where
         let config = self.config.unwrap(); // Safe: HasConfig guarantees this
         let process_manager = self.process_manager.unwrap(); // Safe: P != NoProcessManager guarantees this
         let lsp_client = self.lsp_client.unwrap(); // Safe: C != NoLspClient guarantees this
-
-        let file_manager = ClangdFileManager::new();
         let index_progress_monitor = if let Some(ref progress_sender) = self.progress_sender {
             IndexProgressMonitor::with_sender(progress_sender.clone())
         } else {
@@ -190,7 +187,6 @@ where
             config,
             process_manager,
             lsp_client,
-            file_manager,
             index_progress_monitor,
             log_monitor,
         );
@@ -325,14 +321,12 @@ impl ClangdSessionBuilder<HasConfig, NoProcessManager, NoLspClient> {
     ) -> Result<ClangdSession<ChildProcessManager, LspClient<StdioTransport>>, ClangdSessionError>
     {
         info!("Clangd session started successfully");
-        let file_manager = ClangdFileManager::new();
 
         // Create session with all components
         let session = ClangdSession::with_dependencies(
             config,
             process_manager,
             lsp_client,
-            file_manager,
             index_progress_monitor,
             log_monitor,
         );

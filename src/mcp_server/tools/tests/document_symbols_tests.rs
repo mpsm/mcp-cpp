@@ -3,7 +3,39 @@
 //! These tests work with real clangd sessions to validate hierarchical symbol
 //! extraction and comprehensive symbol analysis with source content extraction.
 
-use crate::clangd::testing::test_helpers::create_integration_test_session;
+use crate::project::{ComponentSession, ProjectScanner, WorkspaceSession};
+use crate::test_utils::integration::TestProject;
+use std::sync::Arc;
+
+/// Helper to create a test project with ComponentSession for document symbols tests  
+async fn create_test_component_session() -> (TestProject, Arc<ComponentSession>) {
+    // Create a test project first
+    let test_project = TestProject::new().await.unwrap();
+    test_project.cmake_configure().await.unwrap();
+
+    // Scan the test project to create a proper workspace with components
+    let scanner = ProjectScanner::with_default_providers();
+    let workspace = scanner
+        .scan_project(&test_project.project_root, 3, None)
+        .expect("Failed to scan test project");
+
+    // Create a WorkspaceSession with test clangd path
+    let clangd_path = crate::test_utils::get_test_clangd_path();
+    let workspace_session = WorkspaceSession::new(workspace.clone(), clangd_path)
+        .expect("Failed to create workspace session");
+
+    // Ensure indexing completion using ComponentSession
+    let component_session = workspace_session
+        .get_component_session(test_project.build_dir.clone())
+        .await
+        .unwrap();
+    component_session
+        .ensure_indexed(std::time::Duration::from_secs(30))
+        .await
+        .unwrap();
+
+    (test_project, component_session)
+}
 use crate::io::file_buffer::FilePosition;
 use crate::io::file_manager::FileBufferManager;
 use crate::io::file_system::RealFileSystem;
@@ -24,7 +56,7 @@ fn init_test_logging() {
 /// Test finding a specific symbol by position in the Math.hpp file
 #[tokio::test]
 async fn test_find_specific_symbol_in_document() {
-    let (test_project, mut session) = create_integration_test_session().await.unwrap();
+    let (test_project, component_session) = create_test_component_session().await;
 
     // Use the Math.hpp file which has rich nested structure
     let math_header = test_project.project_root.join("include/Math.hpp");
@@ -37,7 +69,7 @@ async fn test_find_specific_symbol_in_document() {
     let file_uri: lsp_types::Uri = file_uri_str.parse().unwrap();
 
     // Get document symbols for Math.hpp
-    let symbols = get_document_symbols(&mut session, file_uri.clone())
+    let symbols = get_document_symbols(&component_session, file_uri.clone())
         .await
         .unwrap();
 
@@ -76,20 +108,20 @@ async fn test_find_specific_symbol_in_document() {
         statistics_class.is_some(),
         "Should find Statistics nested class"
     );
-
-    session.close().await.unwrap();
 }
 
 /// Test listing all methods for the Math class
 #[tokio::test]
 async fn test_list_all_methods_for_class() {
-    let (test_project, mut session) = create_integration_test_session().await.unwrap();
+    let (test_project, component_session) = create_test_component_session().await;
 
     let math_header = test_project.project_root.join("include/Math.hpp");
     let file_uri_str = format!("file://{}", math_header.display());
     let file_uri: lsp_types::Uri = file_uri_str.parse().unwrap();
 
-    let symbols = get_document_symbols(&mut session, file_uri).await.unwrap();
+    let symbols = get_document_symbols(&component_session, file_uri)
+        .await
+        .unwrap();
 
     // Find all methods (should include static methods like factorial, gcd, mean, etc.)
     let methods = find_symbols_by_kind(&symbols, SymbolKind::METHOD);
@@ -125,20 +157,20 @@ async fn test_list_all_methods_for_class() {
         !math_methods.is_empty(),
         "Should find methods in Math namespace/class"
     );
-
-    session.close().await.unwrap();
 }
 
 /// Test nested class symbol traversal (Math::Statistics::Distribution)
 #[tokio::test]
 async fn test_nested_class_symbol_traversal() {
-    let (test_project, mut session) = create_integration_test_session().await.unwrap();
+    let (test_project, component_session) = create_test_component_session().await;
 
     let math_header = test_project.project_root.join("include/Math.hpp");
     let file_uri_str = format!("file://{}", math_header.display());
     let file_uri: lsp_types::Uri = file_uri_str.parse().unwrap();
 
-    let symbols = get_document_symbols(&mut session, file_uri).await.unwrap();
+    let symbols = get_document_symbols(&component_session, file_uri)
+        .await
+        .unwrap();
 
     // Get all symbol paths to understand the structure
     let paths = get_symbol_paths(&symbols);
@@ -181,20 +213,20 @@ async fn test_nested_class_symbol_traversal() {
         "Should find many symbols in Math.hpp (nested classes, methods, etc.), found: {}",
         total_count
     );
-
-    session.close().await.unwrap();
 }
 
 /// Test template class symbol detection (Math::Matrix) with comprehensive inspection
 #[tokio::test]
 async fn test_template_class_symbol_detection() {
-    let (test_project, mut session) = create_integration_test_session().await.unwrap();
+    let (test_project, component_session) = create_test_component_session().await;
 
     let math_header = test_project.project_root.join("include/Math.hpp");
     let file_uri_str = format!("file://{}", math_header.display());
     let file_uri: lsp_types::Uri = file_uri_str.parse().unwrap();
 
-    let symbols = get_document_symbols(&mut session, file_uri).await.unwrap();
+    let symbols = get_document_symbols(&component_session, file_uri)
+        .await
+        .unwrap();
 
     // Create FileBufferManager for proper source content extraction
     let mut file_manager = FileBufferManager::new(RealFileSystem);
@@ -299,21 +331,19 @@ async fn test_template_class_symbol_detection() {
         "Matrix class should span many lines (it's a complex template), found: {} lines",
         matrix_lines
     );
-
-    session.close().await.unwrap();
 }
 
 /// Test hierarchical response handling and error cases
 #[tokio::test]
 async fn test_hierarchical_vs_flat_response_handling() {
-    let (test_project, mut session) = create_integration_test_session().await.unwrap();
+    let (test_project, component_session) = create_test_component_session().await;
 
     let math_header = test_project.project_root.join("include/Math.hpp");
     let file_uri_str = format!("file://{}", math_header.display());
     let file_uri: lsp_types::Uri = file_uri_str.parse().unwrap();
 
     // This should always succeed due to our hierarchicalDocumentSymbolSupport: true
-    let symbols = get_document_symbols(&mut session, file_uri).await;
+    let symbols = get_document_symbols(&component_session, file_uri).await;
 
     assert!(
         symbols.is_ok(),
@@ -340,15 +370,13 @@ async fn test_hierarchical_vs_flat_response_handling() {
         test_project.project_root.join("nonexistent.hpp").display()
     );
     let bad_file_uri: lsp_types::Uri = bad_file_uri_str.parse().unwrap();
-    let bad_result = get_document_symbols(&mut session, bad_file_uri).await;
+    let bad_result = get_document_symbols(&component_session, bad_file_uri).await;
 
     // Should get an error for non-existent file
     assert!(
         bad_result.is_err(),
         "Should get error for non-existent file"
     );
-
-    session.close().await.unwrap();
 }
 
 // ============================================================================
@@ -459,13 +487,15 @@ fn inspect_symbol_with_content(
 #[cfg(feature = "clangd-integration-tests")]
 #[tokio::test]
 async fn test_fuzzy_matching_integration_basic() {
-    let (test_project, mut session) = create_integration_test_session().await.unwrap();
+    let (test_project, component_session) = create_test_component_session().await;
 
     let math_header = test_project.project_root.join("include/Math.hpp");
     let file_uri_str = format!("file://{}", math_header.display());
     let file_uri: lsp_types::Uri = file_uri_str.parse().unwrap();
 
-    let symbols = get_document_symbols(&mut session, file_uri).await.unwrap();
+    let symbols = get_document_symbols(&component_session, file_uri)
+        .await
+        .unwrap();
 
     // First, let's see what symbols we actually have
     let all_symbols: Vec<_> = symbols.iter().map(|s| &s.name).collect();
@@ -538,21 +568,21 @@ async fn test_fuzzy_matching_integration_basic() {
         found.iter().any(|s| s.name.contains("Matrix")),
         "Fuzzy search 'Mat' should also match 'Matrix' symbols"
     );
-
-    session.close().await.unwrap();
 }
 
 /// Test fuzzy matching with scoring and ordering
 #[cfg(feature = "clangd-integration-tests")]
 #[tokio::test]
 async fn test_fuzzy_matching_integration_scoring() {
-    let (test_project, mut session) = create_integration_test_session().await.unwrap();
+    let (test_project, component_session) = create_test_component_session().await;
 
     let math_header = test_project.project_root.join("include/Math.hpp");
     let file_uri_str = format!("file://{}", math_header.display());
     let file_uri: lsp_types::Uri = file_uri_str.parse().unwrap();
 
-    let symbols = get_document_symbols(&mut session, file_uri).await.unwrap();
+    let symbols = get_document_symbols(&component_session, file_uri)
+        .await
+        .unwrap();
 
     // Search for "stat" which should match "Statistics" class
     let found = SymbolSearchBuilder::new()
@@ -574,21 +604,21 @@ async fn test_fuzzy_matching_integration_scoring() {
             first_match.name
         );
     }
-
-    session.close().await.unwrap();
 }
 
 /// Test fuzzy matching with kind filtering
 #[cfg(feature = "clangd-integration-tests")]
 #[tokio::test]
 async fn test_fuzzy_matching_integration_with_kind_filter() {
-    let (test_project, mut session) = create_integration_test_session().await.unwrap();
+    let (test_project, component_session) = create_test_component_session().await;
 
     let math_header = test_project.project_root.join("include/Math.hpp");
     let file_uri_str = format!("file://{}", math_header.display());
     let file_uri: lsp_types::Uri = file_uri_str.parse().unwrap();
 
-    let symbols = get_document_symbols(&mut session, file_uri).await.unwrap();
+    let symbols = get_document_symbols(&component_session, file_uri)
+        .await
+        .unwrap();
 
     // Search for methods with fuzzy matching
     let found = SymbolSearchBuilder::new()
@@ -614,21 +644,21 @@ async fn test_fuzzy_matching_integration_with_kind_filter() {
         found.iter().any(|s| s.name.contains("mean")),
         "Should find a method containing 'mean'"
     );
-
-    session.close().await.unwrap();
 }
 
 /// Test fuzzy matching performance with large symbol sets
 #[cfg(feature = "clangd-integration-tests")]
 #[tokio::test]
 async fn test_fuzzy_matching_integration_performance() {
-    let (test_project, mut session) = create_integration_test_session().await.unwrap();
+    let (test_project, component_session) = create_test_component_session().await;
 
     let math_header = test_project.project_root.join("include/Math.hpp");
     let file_uri_str = format!("file://{}", math_header.display());
     let file_uri: lsp_types::Uri = file_uri_str.parse().unwrap();
 
-    let symbols = get_document_symbols(&mut session, file_uri).await.unwrap();
+    let symbols = get_document_symbols(&component_session, file_uri)
+        .await
+        .unwrap();
 
     // Ensure we have a reasonable number of symbols to test performance
     let total_symbols = count_total_symbols(&symbols);
@@ -676,6 +706,4 @@ async fn test_fuzzy_matching_integration_performance() {
             );
         }
     }
-
-    session.close().await.unwrap();
 }

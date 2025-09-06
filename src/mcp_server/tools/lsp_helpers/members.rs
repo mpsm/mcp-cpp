@@ -8,11 +8,11 @@
 use serde::{Deserialize, Serialize};
 use tracing::{debug, info};
 
-use crate::clangd::session::ClangdSession;
 use crate::mcp_server::tools::analyze_symbols::AnalyzerError;
 use crate::mcp_server::tools::lsp_helpers::document_symbols::{
     extract_class_members, get_document_symbols,
 };
+use crate::project::component_session::ComponentSession;
 use crate::symbol::FileLocation;
 
 // ============================================================================
@@ -68,13 +68,13 @@ pub struct Members {
 #[allow(dead_code)]
 pub async fn get_members(
     symbol_location: &FileLocation,
-    session: &mut ClangdSession,
+    component_session: &ComponentSession,
     target_name: &str,
 ) -> Result<Members, AnalyzerError> {
     let uri = symbol_location.get_uri();
 
     // Get hierarchical document symbols using the advanced document symbols infrastructure
-    let document_symbols = get_document_symbols(session, uri).await?;
+    let document_symbols = get_document_symbols(component_session, uri).await?;
 
     info!(
         "Analyzing {} document symbols for class '{}' members",

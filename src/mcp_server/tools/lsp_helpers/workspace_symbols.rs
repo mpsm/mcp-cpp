@@ -41,10 +41,11 @@
 use lsp_types::{SymbolKind, WorkspaceSymbol};
 use tracing::{debug, trace};
 
-use crate::clangd::session::{ClangdSession, ClangdSessionTrait};
+use crate::clangd::session::ClangdSessionTrait;
 use crate::lsp::traits::LspClientTrait;
 use crate::mcp_server::tools::analyze_symbols::AnalyzerError;
 use crate::project::ProjectComponent;
+use crate::project::component_session::ComponentSession;
 
 // ============================================================================
 // Traits for Workspace Symbol Filtering
@@ -248,7 +249,7 @@ impl WorkspaceSymbolSearchBuilder {
     /// Execute the search and return filtered results
     pub async fn search(
         &self,
-        session: &mut ClangdSession,
+        component_session: &ComponentSession,
         component: &ProjectComponent,
     ) -> Result<Vec<WorkspaceSymbol>, AnalyzerError> {
         trace!(
@@ -257,6 +258,7 @@ impl WorkspaceSymbolSearchBuilder {
         );
 
         // Get symbols from clangd with a large limit (2000) to preserve ranking
+        let mut session = component_session.lsp_session().await;
         let symbols = session
             .client_mut()
             .workspace_symbols(self.query.clone())
@@ -302,12 +304,12 @@ impl WorkspaceSymbolSearchBuilder {
     #[allow(dead_code)]
     pub async fn find_first(
         &self,
-        session: &mut ClangdSession,
+        component_session: &ComponentSession,
         component: &ProjectComponent,
     ) -> Result<Option<WorkspaceSymbol>, AnalyzerError> {
         let mut builder = self.clone();
         builder.max_results = Some(1);
-        let results = builder.search(session, component).await?;
+        let results = builder.search(component_session, component).await?;
         Ok(results.into_iter().next())
     }
 }
@@ -332,11 +334,11 @@ impl WorkspaceSymbolSearchBuilder {
 #[allow(dead_code)]
 pub async fn search_workspace_symbols(
     query: &str,
-    session: &mut ClangdSession,
+    component_session: &ComponentSession,
     component: &ProjectComponent,
 ) -> Result<Vec<WorkspaceSymbol>, AnalyzerError> {
     WorkspaceSymbolSearchBuilder::new(query.to_string())
-        .search(session, component)
+        .search(component_session, component)
         .await
 }
 
@@ -355,12 +357,12 @@ pub async fn search_workspace_symbols(
 pub async fn search_workspace_symbols_with_kinds(
     query: &str,
     kinds: Vec<lsp_types::SymbolKind>,
-    session: &mut ClangdSession,
+    component_session: &ComponentSession,
     component: &ProjectComponent,
 ) -> Result<Vec<WorkspaceSymbol>, AnalyzerError> {
     WorkspaceSymbolSearchBuilder::new(query.to_string())
         .with_kinds(kinds)
-        .search(session, component)
+        .search(component_session, component)
         .await
 }
 
@@ -378,11 +380,11 @@ pub async fn search_workspace_symbols_with_kinds(
 #[allow(dead_code)]
 pub async fn find_first_workspace_symbol(
     query: &str,
-    session: &mut ClangdSession,
+    component_session: &ComponentSession,
     component: &ProjectComponent,
 ) -> Result<Option<WorkspaceSymbol>, AnalyzerError> {
     WorkspaceSymbolSearchBuilder::new(query.to_string())
-        .find_first(session, component)
+        .find_first(component_session, component)
         .await
 }
 
@@ -401,12 +403,12 @@ pub async fn find_first_workspace_symbol(
 #[allow(dead_code)]
 pub async fn search_project_symbols(
     query: &str,
-    session: &mut ClangdSession,
+    component_session: &ComponentSession,
     component: &ProjectComponent,
 ) -> Result<Vec<WorkspaceSymbol>, AnalyzerError> {
     WorkspaceSymbolSearchBuilder::new(query.to_string())
         .include_external(false)
-        .search(session, component)
+        .search(component_session, component)
         .await
 }
 
@@ -423,10 +425,10 @@ pub async fn search_project_symbols(
 #[allow(dead_code)]
 pub async fn count_workspace_symbols(
     query: &str,
-    session: &mut ClangdSession,
+    component_session: &ComponentSession,
     component: &ProjectComponent,
 ) -> Result<usize, AnalyzerError> {
-    let symbols = search_workspace_symbols(query, session, component).await?;
+    let symbols = search_workspace_symbols(query, component_session, component).await?;
     Ok(symbols.len())
 }
 

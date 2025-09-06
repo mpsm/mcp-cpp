@@ -7,12 +7,13 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
-use tokio::sync::Mutex;
 use tokio::sync::mpsc;
 use tracing::{debug, info, instrument, warn};
 
 use crate::clangd::config::DEFAULT_WORKSPACE_SYMBOL_LIMIT;
+use crate::clangd::file_manager::ClangdFileManager;
 use crate::clangd::index::IndexLatch;
+use crate::clangd::session::ClangdSessionTrait;
 use crate::clangd::version::ClangdVersion;
 use crate::clangd::{ClangdConfigBuilder, ClangdSession, ClangdSessionBuilder};
 use crate::io::file_system::RealFileSystem;
@@ -33,8 +34,10 @@ const PROGRESS_CHANNEL_BUFFER_SIZE: usize = 10_000;
 pub struct ComponentSession {
     /// Build directory for this component
     build_dir: PathBuf,
-    /// ClangdSession for LSP communication
-    clangd_session: Arc<Mutex<ClangdSession>>,
+    /// ClangdSession for LSP communication (wrapped for background task access)
+    clangd_session: Arc<tokio::sync::Mutex<ClangdSession>>,
+    /// File manager for tracking open files and coordinating with LSP client
+    file_manager: Arc<tokio::sync::Mutex<ClangdFileManager>>,
     /// ComponentIndexMonitor for index state tracking
     index_monitor: Arc<ComponentIndexMonitor>,
     /// Component metadata
@@ -93,13 +96,20 @@ impl ComponentSession {
                 ProjectError::SessionCreation(format!("Failed to create session: {}", e))
             })?;
 
-        // Wrap in Arc<Mutex> for sharing
-        let clangd_session = Arc::new(Mutex::new(session));
+        // Wrap in Arc<Mutex> for sharing with background tasks
+        let clangd_session = Arc::new(tokio::sync::Mutex::new(session));
+
+        // Create file manager for this component
+        let file_manager = Arc::new(tokio::sync::Mutex::new(ClangdFileManager::new()));
 
         // Create ComponentIndexMonitor for this component
-        let index_monitor =
-            Self::create_index_monitor(&component, clangd_version, Arc::clone(&clangd_session))
-                .await?;
+        let index_monitor = Self::create_index_monitor(
+            &component,
+            clangd_version,
+            Arc::clone(&clangd_session),
+            Arc::clone(&file_manager),
+        )
+        .await?;
 
         // Launch background processor for progress events
         let monitor_clone = Arc::clone(&index_monitor);
@@ -117,6 +127,7 @@ impl ComponentSession {
         Ok(Self {
             build_dir: component.build_dir_path.clone(),
             clangd_session,
+            file_manager,
             index_monitor,
             component,
         })
@@ -126,7 +137,8 @@ impl ComponentSession {
     async fn create_index_monitor(
         component: &ProjectComponent,
         clangd_version: &ClangdVersion,
-        session: Arc<Mutex<ClangdSession>>,
+        session: Arc<tokio::sync::Mutex<ClangdSession>>,
+        file_manager: Arc<tokio::sync::Mutex<ClangdFileManager>>,
     ) -> Result<Arc<ComponentIndexMonitor>, ProjectError> {
         let build_dir = &component.build_dir_path;
 
@@ -145,8 +157,8 @@ impl ComponentSession {
         let index_reader: Arc<dyn IndexReaderTrait> =
             Arc::new(IndexReader::new(storage, clangd_version.clone()));
 
-        // Create IndexTrigger from the provided clangd session
-        let index_trigger = Arc::new(ClangdIndexTrigger::new(session));
+        // Create IndexTrigger from the provided clangd session and file manager
+        let index_trigger = Arc::new(ClangdIndexTrigger::new(session, file_manager));
 
         // Create new ComponentIndexMonitor with IndexTrigger
         let monitor = ComponentIndexMonitor::new_with_trigger(
@@ -180,9 +192,26 @@ impl ComponentSession {
         Ok(monitor_arc)
     }
 
-    /// Get the ClangdSession for this component
-    pub fn clangd_session(&self) -> Arc<Mutex<ClangdSession>> {
-        Arc::clone(&self.clangd_session)
+    /// Ensure a file is ready for LSP operations
+    ///
+    /// This will open the file if not already open, or send a change notification
+    /// if the file has been modified on disk since it was opened.
+    pub async fn ensure_file_ready(&self, path: &std::path::Path) -> Result<(), ProjectError> {
+        let mut session = self.clangd_session.lock().await;
+        let mut file_manager = self.file_manager.lock().await;
+
+        file_manager
+            .ensure_file_ready(path, session.client_mut())
+            .await
+            .map_err(|e| ProjectError::SessionCreation(format!("File management failed: {}", e)))
+    }
+
+    /// Get mutable access to the LSP session
+    ///
+    /// This is the primary interface for LSP operations. Use `ensure_file_ready()`
+    /// first if you need to open files, then call `.client_mut()` on the returned guard.
+    pub async fn lsp_session(&self) -> tokio::sync::MutexGuard<'_, ClangdSession> {
+        self.clangd_session.lock().await
     }
 
     /// Get the ComponentIndexMonitor for this component

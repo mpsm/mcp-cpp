@@ -4,15 +4,16 @@
 //! clangd to get hierarchical symbol information from C++ files. Expects only
 //! nested (hierarchical) responses due to client capabilities configuration.
 
+use crate::clangd::session::ClangdSessionTrait;
 use lsp_types::{DocumentSymbol, DocumentSymbolResponse, Position, Range};
 use std::collections::VecDeque;
 use std::path::Path;
 use sublime_fuzzy::best_match;
 use tracing::{trace, warn};
 
-use crate::clangd::session::{ClangdSession, ClangdSessionTrait};
 use crate::lsp::traits::LspClientTrait;
 use crate::mcp_server::tools::analyze_symbols::AnalyzerError;
+use crate::project::component_session::ComponentSession;
 use crate::symbol::uri_from_pathbuf;
 
 // Fuzzy matching threshold - accept all positive scores
@@ -328,14 +329,14 @@ impl SymbolSearchBuilder {
     /// Search across multiple files for symbols matching criteria
     pub async fn search_multiple_files(
         self,
-        session: &mut ClangdSession,
+        component_session: &ComponentSession,
         files: &[String],
         max_results: Option<u32>,
     ) -> Result<Vec<(String, Vec<DocumentSymbol>)>, AnalyzerError> {
         let mut file_results = Vec::new();
 
         for file_path in files {
-            match self.search_single_file(session, file_path).await {
+            match self.search_single_file(component_session, file_path).await {
                 Ok(symbols) => {
                     file_results.push((file_path.clone(), symbols));
                 }
@@ -390,7 +391,7 @@ impl SymbolSearchBuilder {
     /// Search a single file for symbols matching criteria  
     async fn search_single_file(
         &self,
-        session: &mut ClangdSession,
+        component_session: &ComponentSession,
         file_path: &str,
     ) -> Result<Vec<DocumentSymbol>, AnalyzerError> {
         trace!(
@@ -407,7 +408,7 @@ impl SymbolSearchBuilder {
         };
 
         trace!("Getting document symbols for URI: {:?}", file_uri);
-        let document_symbols = get_document_symbols(session, file_uri).await?;
+        let document_symbols = get_document_symbols(component_session, file_uri).await?;
         trace!("Found {} document symbols", document_symbols.len());
 
         let filtered_symbols: Vec<DocumentSymbol> = self
@@ -561,25 +562,27 @@ impl Default for SymbolSearchBuilder {
 /// is received, it logs a warning and returns an error.
 ///
 /// # Arguments
-/// * `session` - Active clangd session
+/// * `component_session` - Active component session
 /// * `file_uri` - URI of the file to analyze
 ///
 /// # Returns
 /// * `Ok(Vec<DocumentSymbol>)` - Hierarchical document symbols
 /// * `Err(AnalyzerError)` - LSP error or unexpected flat response
-#[allow(dead_code)]
 pub async fn get_document_symbols(
-    session: &mut ClangdSession,
+    component_session: &ComponentSession,
     file_uri: lsp_types::Uri,
 ) -> Result<Vec<DocumentSymbol>, AnalyzerError> {
     trace!("Requesting document symbols for URI: {:?}", file_uri);
 
-    // Ensure file is ready in clangd session
+    // Ensure file is ready
     let uri_str = file_uri.to_string();
     let file_path_str = uri_str.strip_prefix("file://").unwrap_or(&uri_str);
 
-    session.ensure_file_ready(Path::new(file_path_str)).await?;
+    component_session
+        .ensure_file_ready(Path::new(file_path_str))
+        .await?;
 
+    let mut session = component_session.lsp_session().await;
     let client = session.client_mut();
 
     // Get document symbols from LSP

@@ -28,7 +28,6 @@ use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use tracing::{info, instrument};
 
-use crate::clangd::session::ClangdSession;
 use crate::mcp_server::tools::lsp_helpers::document_symbols::SymbolSearchBuilder;
 use crate::mcp_server::tools::lsp_helpers::workspace_symbols::WorkspaceSymbolSearchBuilder;
 use crate::project::{ComponentSession, ProjectComponent, ProjectWorkspace};
@@ -131,10 +130,6 @@ impl SearchSymbolsTool {
                 CallToolError::new(std::io::Error::other(format!("Indexing failed: {}", e)))
             })?;
 
-        // Lock session for LSP operations after indexing is complete
-        let session_arc = component_session.clangd_session();
-        let mut session_guard = session_arc.lock().await;
-
         // Get the component for this session's build directory
         let build_dir = component_session.build_dir();
         let component = workspace
@@ -150,11 +145,11 @@ impl SearchSymbolsTool {
         // while workspace searches use workspace/symbol for broad discovery.
         let result = if let Some(ref files) = self.files {
             // File-specific search using document symbols for targeted analysis
-            self.search_in_files(&mut session_guard, files, component, symbol_kinds.as_ref())
+            self.search_in_files(&component_session, files, component, symbol_kinds.as_ref())
                 .await?
         } else {
             // Workspace-wide search using workspace symbols for comprehensive discovery
-            self.search_workspace_symbols(&mut session_guard, component, symbol_kinds.as_ref())
+            self.search_workspace_symbols(&component_session, component, symbol_kinds.as_ref())
                 .await?
         };
 
@@ -173,7 +168,7 @@ impl SearchSymbolsTool {
     /// Handle workspace-wide symbol search using LSP helpers
     async fn search_workspace_symbols(
         &self,
-        session: &mut ClangdSession,
+        component_session: &ComponentSession,
         component: &ProjectComponent,
         symbol_kinds: Option<&Vec<lsp_types::SymbolKind>>,
     ) -> Result<SearchResult, CallToolError> {
@@ -193,7 +188,7 @@ impl SearchSymbolsTool {
 
         // Execute the search
         let workspace_symbols = search_builder
-            .search(session, component)
+            .search(component_session, component)
             .await
             .map_err(|e| {
                 CallToolError::new(std::io::Error::other(format!(
@@ -221,7 +216,7 @@ impl SearchSymbolsTool {
     /// Handle file-specific document symbol search
     async fn search_in_files(
         &self,
-        session: &mut ClangdSession,
+        component_session: &ComponentSession,
         files: &[String],
         component: &ProjectComponent,
         symbol_kinds: Option<&Vec<lsp_types::SymbolKind>>,
@@ -274,7 +269,7 @@ impl SearchSymbolsTool {
 
         // Execute the search with top-level limiting using absolute file paths
         let file_results = search_builder
-            .search_multiple_files(session, &absolute_files, self.max_results)
+            .search_multiple_files(component_session, &absolute_files, self.max_results)
             .await
             .map_err(|e| {
                 CallToolError::new(std::io::Error::other(format!(

@@ -4,11 +4,12 @@
 //! clangd to find and identify symbols based on user queries, handling ambiguous
 //! matches and providing the best candidate symbol for analysis.
 
+use crate::clangd::session::ClangdSessionTrait;
 use tracing::debug;
 
-use crate::clangd::session::{ClangdSession, ClangdSessionTrait};
 use crate::lsp::traits::LspClientTrait;
 use crate::mcp_server::tools::analyze_symbols::AnalyzerError;
+use crate::project::component_session::ComponentSession;
 use crate::symbol::Symbol;
 
 // ============================================================================
@@ -18,9 +19,10 @@ use crate::symbol::Symbol;
 /// Get the first (best) matching symbol from the session based on the user query
 pub async fn get_matching_symbol(
     symbol_query: &str,
-    session: &mut ClangdSession,
+    component_session: &ComponentSession,
 ) -> Result<Symbol, AnalyzerError> {
     // Use the LSP client to find symbols matching the provided name
+    let mut session = component_session.lsp_session().await;
     let symbols = session
         .client_mut()
         .workspace_symbols(symbol_query.to_string())

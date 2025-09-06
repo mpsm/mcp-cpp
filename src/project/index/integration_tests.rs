@@ -30,16 +30,12 @@ async fn test_indexing_progress_tracking_with_real_clangd() {
         .get_component_session(test_project.build_dir.clone())
         .await
         .unwrap();
-    let session = component_session.clangd_session();
-
     // Get initial coverage (should be 0)
     let state = component_session.get_index_state().await;
     assert_eq!(state.coverage(), 0.0);
 
     let main_cpp_path = test_project.project_root.join("src/main.cpp");
-    session
-        .lock()
-        .await
+    component_session
         .ensure_file_ready(&main_cpp_path)
         .await
         .unwrap();

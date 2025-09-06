@@ -13,7 +13,6 @@ use std::sync::Arc;
 use tokio::sync::Mutex;
 use tracing::{error, info, instrument, warn};
 
-use crate::clangd::session::ClangdSession;
 use crate::io::file_buffer::FileBufferError;
 use crate::mcp_server::tools::lsp_helpers::{
     call_hierarchy::{CallHierarchy, get_call_hierarchy},
@@ -25,7 +24,7 @@ use crate::mcp_server::tools::lsp_helpers::{
     symbol_resolution::get_matching_symbol,
     type_hierarchy::{TypeHierarchy, get_type_hierarchy},
 };
-use crate::project::{ComponentSession, ProjectWorkspace};
+use crate::project::{ComponentSession, ProjectError, ProjectWorkspace};
 use crate::symbol::{FileLocation, Symbol};
 
 // ============================================================================
@@ -46,6 +45,8 @@ pub enum AnalyzerError {
     Session(#[from] crate::clangd::error::ClangdSessionError),
     #[error("JSON error: {0}")]
     Json(#[from] serde_json::Error),
+    #[error("Project error: {0}")]
+    Project(#[from] ProjectError),
 }
 
 impl From<AnalyzerError> for CallToolError {
@@ -267,9 +268,9 @@ impl AnalyzeSymbolContextTool {
 
     async fn resolve_symbol_via_workspace_with_context(
         &self,
-        locked_session: &mut ClangdSession,
+        component_session: &ComponentSession,
     ) -> Result<(Symbol, SymbolContext), CallToolError> {
-        let workspace_symbol = get_matching_symbol(&self.symbol, locked_session)
+        let workspace_symbol = get_matching_symbol(&self.symbol, component_session)
             .await
             .map_err(|err| {
                 error!("Failed to get matching workspace symbol: {}", err);
@@ -280,7 +281,7 @@ impl AnalyzeSymbolContextTool {
 
         let file_uri = crate::symbol::uri_from_pathbuf(&symbol.location.file_path);
 
-        let document_symbols = get_document_symbols(locked_session, file_uri)
+        let document_symbols = get_document_symbols(component_session, file_uri)
             .await
             .map_err(CallToolError::from)?;
 
@@ -305,11 +306,11 @@ impl AnalyzeSymbolContextTool {
     async fn resolve_symbol_context_at_location(
         &self,
         location: &FileLocation,
-        locked_session: &mut ClangdSession,
+        component_session: &ComponentSession,
     ) -> Result<(Symbol, SymbolContext), CallToolError> {
         let file_uri = crate::symbol::uri_from_pathbuf(&location.file_path);
 
-        let document_symbols = get_document_symbols(locked_session, file_uri)
+        let document_symbols = get_document_symbols(component_session, file_uri)
             .await
             .map_err(CallToolError::from)?;
 
@@ -338,16 +339,16 @@ impl AnalyzeSymbolContextTool {
     async fn get_definitions_and_declarations(
         &self,
         symbol_location: &crate::symbol::FileLocation,
-        locked_session: &mut ClangdSession,
+        component_session: &ComponentSession,
     ) -> Result<(Vec<FileLocation>, Vec<FileLocation>), CallToolError> {
-        let definitions = get_definitions(symbol_location, locked_session).await?;
+        let definitions = get_definitions(symbol_location, component_session).await?;
         info!(
             "Found {} definitions for '{}'",
             definitions.len(),
             self.symbol
         );
 
-        let declarations = get_declarations(symbol_location, locked_session).await?;
+        let declarations = get_declarations(symbol_location, component_session).await?;
         info!(
             "Found {} declarations for '{}'",
             declarations.len(),
@@ -361,9 +362,9 @@ impl AnalyzeSymbolContextTool {
     async fn get_hover_documentation(
         &self,
         symbol_location: &crate::symbol::FileLocation,
-        locked_session: &mut ClangdSession,
+        component_session: &ComponentSession,
     ) -> Option<String> {
-        match get_hover_info(symbol_location, locked_session).await {
+        match get_hover_info(symbol_location, component_session).await {
             Ok(info) => Some(info),
             Err(err) => {
                 warn!("Failed to get hover information: {}", err);
@@ -376,9 +377,9 @@ impl AnalyzeSymbolContextTool {
     async fn get_usage_examples(
         &self,
         symbol_location: &crate::symbol::FileLocation,
-        locked_session: &mut ClangdSession,
+        component_session: &ComponentSession,
     ) -> Vec<FileLocation> {
-        match get_examples(locked_session, symbol_location, self.max_examples).await {
+        match get_examples(component_session, symbol_location, self.max_examples).await {
             Ok(examples) => {
                 info!("Found {} examples for '{}'", examples.len(), self.symbol);
                 examples
@@ -395,10 +396,10 @@ impl AnalyzeSymbolContextTool {
         &self,
         symbol: &Symbol,
         symbol_location: &crate::symbol::FileLocation,
-        locked_session: &mut ClangdSession,
+        component_session: &ComponentSession,
     ) -> (Option<TypeHierarchy>, Option<CallHierarchy>) {
         let type_hierarchy = if Self::supports_type_hierarchy(symbol.kind) {
-            match get_type_hierarchy(symbol_location, locked_session).await {
+            match get_type_hierarchy(symbol_location, component_session).await {
                 Ok(hierarchy) => {
                     info!(
                         "Found type hierarchy for '{}': {} supertypes, {} subtypes",
@@ -421,7 +422,7 @@ impl AnalyzeSymbolContextTool {
             lsp_types::SymbolKind::FUNCTION
             | lsp_types::SymbolKind::METHOD
             | lsp_types::SymbolKind::CONSTRUCTOR => {
-                match get_call_hierarchy(symbol_location, locked_session).await {
+                match get_call_hierarchy(symbol_location, component_session).await {
                     Ok(hierarchy) => {
                         info!(
                             "Found call hierarchy for '{}': {} callers, {} callees",
@@ -465,13 +466,11 @@ impl AnalyzeSymbolContextTool {
                 CallToolError::new(std::io::Error::other(format!("Indexing failed: {}", e)))
             })?;
 
-        // Lock session for LSP operations
-        let session_arc = component_session.clangd_session();
-        let mut locked_session = session_arc.lock().await;
+        // Note: LSP session access is now handled by individual helper functions
 
         let (symbol, symbol_context) = match &self.location_hint {
             None => {
-                self.resolve_symbol_via_workspace_with_context(&mut locked_session)
+                self.resolve_symbol_via_workspace_with_context(&component_session)
                     .await?
             }
             Some(location_str) => {
@@ -481,14 +480,14 @@ impl AnalyzeSymbolContextTool {
                         location_str, e
                     )))
                 })?;
-                self.resolve_symbol_context_at_location(&location, &mut locked_session)
+                self.resolve_symbol_context_at_location(&location, &component_session)
                     .await?
             }
         };
 
         // Get definitions and declarations
         let (definitions, mut declarations) = self
-            .get_definitions_and_declarations(&symbol.location, &mut locked_session)
+            .get_definitions_and_declarations(&symbol.location, &component_session)
             .await?;
 
         // Deduplicate: if definitions == declarations, clear declarations
@@ -499,17 +498,17 @@ impl AnalyzeSymbolContextTool {
 
         // Get hover information
         let hover = self
-            .get_hover_documentation(&symbol.location, &mut locked_session)
+            .get_hover_documentation(&symbol.location, &component_session)
             .await;
 
         // Get usage examples
         let examples = self
-            .get_usage_examples(&symbol.location, &mut locked_session)
+            .get_usage_examples(&symbol.location, &component_session)
             .await;
 
         // Get hierarchies based on symbol type
         let (type_hierarchy, call_hierarchy) = self
-            .get_hierarchies(&symbol, &symbol.location, &mut locked_session)
+            .get_hierarchies(&symbol, &symbol.location, &component_session)
             .await;
 
         let detail = symbol_context.document_symbol.detail.clone();

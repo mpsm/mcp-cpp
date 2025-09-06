@@ -39,18 +39,14 @@ async fn test_hover_info_class_symbol() {
         .await
         .unwrap();
 
-    // Acquire session lock for LSP operations
-    let session_arc = component_session.clangd_session();
-    let mut locked_session = session_arc.lock().await;
-
     // Get Math class symbol
-    let symbol = get_matching_symbol("Math", &mut locked_session)
+    let symbol = get_matching_symbol("Math", &component_session)
         .await
         .expect("Failed to find Math symbol");
     let symbol_location = &symbol.location;
 
     // Test getting hover information
-    let hover_info = get_hover_info(symbol_location, &mut locked_session)
+    let hover_info = get_hover_info(symbol_location, &component_session)
         .await
         .expect("Failed to get hover info");
 
@@ -89,18 +85,16 @@ async fn test_hover_info_function_symbol() {
         .await
         .unwrap();
 
-    // Acquire session lock for LSP operations
-    let session_arc = component_session.clangd_session();
-    let mut locked_session = session_arc.lock().await;
+    // Get direct access to LSP session
 
     // Get factorial function symbol
-    let symbol = get_matching_symbol("factorial", &mut locked_session)
+    let symbol = get_matching_symbol("factorial", &component_session)
         .await
         .expect("Failed to find factorial symbol");
     let symbol_location = &symbol.location;
 
     // Test getting hover information
-    let hover_info = get_hover_info(symbol_location, &mut locked_session)
+    let hover_info = get_hover_info(symbol_location, &component_session)
         .await
         .expect("Failed to get hover info");
 
@@ -143,18 +137,16 @@ async fn test_hover_info_method_symbol() {
         .await
         .unwrap();
 
-    // Acquire session lock for LSP operations
-    let session_arc = component_session.clangd_session();
-    let mut locked_session = session_arc.lock().await;
+    // Get direct access to LSP session
 
     // Get a method symbol
-    let symbol = get_matching_symbol("Math::Complex::add", &mut locked_session)
+    let symbol = get_matching_symbol("Math::Complex::add", &component_session)
         .await
         .expect("Failed to find add method symbol");
     let symbol_location = &symbol.location;
 
     // Test getting hover information
-    let hover_info = get_hover_info(symbol_location, &mut locked_session)
+    let hover_info = get_hover_info(symbol_location, &component_session)
         .await
         .expect("Failed to get hover info");
 
@@ -193,18 +185,16 @@ async fn test_hover_info_interface_symbol() {
         .await
         .unwrap();
 
-    // Acquire session lock for LSP operations
-    let session_arc = component_session.clangd_session();
-    let mut locked_session = session_arc.lock().await;
+    // Get direct access to LSP session
 
     // Get interface symbol
-    let symbol = get_matching_symbol("IStorageBackend", &mut locked_session)
+    let symbol = get_matching_symbol("IStorageBackend", &component_session)
         .await
         .expect("Failed to find IStorageBackend symbol");
     let symbol_location = &symbol.location;
 
     // Test getting hover information
-    let hover_info = get_hover_info(symbol_location, &mut locked_session)
+    let hover_info = get_hover_info(symbol_location, &component_session)
         .await
         .expect("Failed to get hover info");
 

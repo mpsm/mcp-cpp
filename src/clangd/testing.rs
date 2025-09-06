@@ -326,7 +326,7 @@ pub mod test_helpers {
         mock_lsp
             .expect_open_text_document()
             .returning(|_, _, _, _| Box::pin(async { Ok(()) }));
-        let file_manager = ClangdFileManager::new();
+        let _file_manager = ClangdFileManager::new();
         let index_progress_monitor = IndexProgressMonitor::new();
         let log_monitor = crate::clangd::log_monitor::LogMonitor::new();
 
@@ -334,7 +334,6 @@ pub mod test_helpers {
             config,
             mock_process,
             mock_lsp,
-            file_manager,
             index_progress_monitor,
             log_monitor,
         )

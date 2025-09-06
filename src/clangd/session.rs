@@ -10,7 +10,6 @@ use tracing::{debug, info, warn};
 
 use crate::clangd::config::ClangdConfig;
 use crate::clangd::error::ClangdSessionError;
-use crate::clangd::file_manager::ClangdFileManager;
 use crate::clangd::index::IndexProgressMonitor;
 use crate::clangd::log_monitor::LogMonitor;
 use crate::clangd::session_builder::ClangdSessionBuilder;
@@ -82,9 +81,6 @@ where
     /// LSP client (injected dependency)
     lsp_client: Box<C>,
 
-    /// File manager for tracking open files
-    file_manager: ClangdFileManager,
-
     /// Indexing progress monitor
     index_progress_monitor: IndexProgressMonitor,
 
@@ -108,7 +104,6 @@ where
         config: ClangdConfig,
         process_manager: P,
         lsp_client: C,
-        file_manager: ClangdFileManager,
         index_progress_monitor: IndexProgressMonitor,
         log_monitor: LogMonitor,
     ) -> Self {
@@ -118,7 +113,6 @@ where
             config,
             process_manager: Box::new(process_manager),
             lsp_client: Box::new(lsp_client),
-            file_manager,
             index_progress_monitor,
             log_monitor,
             started_at,
@@ -210,32 +204,6 @@ where
         });
 
         debug!("LogMonitor stderr processing wired to process manager");
-    }
-
-    /// Ensure a file is ready for use in the language server
-    ///
-    /// This will open the file if not already open, or send a change notification
-    /// if the file has been modified on disk since it was opened.
-    pub async fn ensure_file_ready(
-        &mut self,
-        path: &std::path::Path,
-    ) -> Result<(), ClangdSessionError> {
-        self.file_manager
-            .ensure_file_ready(path, self.lsp_client.as_mut())
-            .await
-            .map_err(|e| {
-                ClangdSessionError::unexpected_failure(format!("File management failed: {}", e))
-            })
-    }
-
-    /// Get the number of currently open files
-    pub fn get_open_files_count(&self) -> usize {
-        self.file_manager.get_open_files_count()
-    }
-
-    /// Check if a file is currently open
-    pub fn is_file_open(&self, path: &std::path::Path) -> bool {
-        self.file_manager.is_file_open(path)
     }
 }
 
@@ -481,8 +449,7 @@ mod tests {
         let client = session.client();
         assert!(client.is_initialized());
 
-        // File operations should work with mocks
-        assert_eq!(session.get_open_files_count(), 0);
+        // Session should be ready for use
 
         session.close().await.unwrap();
     }
@@ -515,7 +482,7 @@ mod tests {
             .expect_open_text_document()
             .returning(|_, _, _, _| Box::pin(async { Ok(()) }));
 
-        let mut session = ClangdSessionBuilder::new()
+        let session = ClangdSessionBuilder::new()
             .with_config(config)
             .with_process_manager(process_manager)
             .with_lsp_client(lsp_client)
@@ -531,10 +498,7 @@ mod tests {
         let fake_file_path = temp_dir.path().join("fake.cpp");
         std::fs::write(&fake_file_path, "// test content").unwrap();
 
-        // File operations work with mock LSP client
-        session.ensure_file_ready(&fake_file_path).await.unwrap();
-        assert_eq!(session.get_open_files_count(), 1);
-        assert!(session.is_file_open(&fake_file_path));
+        // Mock LSP client operations work correctly
 
         // Graceful shutdown works with mock dependencies
         session.close().await.unwrap();
@@ -555,80 +519,6 @@ mod tests {
 
         let client = session.client();
         assert!(client.is_initialized());
-
-        session.close().await.unwrap();
-    }
-
-    #[cfg(all(test, feature = "clangd-integration-tests"))]
-    #[tokio::test]
-    async fn test_clangd_session_file_operations() {
-        use crate::clangd::testing::test_helpers::*;
-
-        let (test_project, mut session) = create_integration_test_session().await.unwrap();
-
-        let file_path = test_project.project_root.join("src/Math.cpp");
-        let file_content = std::fs::read_to_string(&file_path).unwrap();
-        assert!(!file_content.is_empty(), "Test file should have content");
-
-        // Test file operations
-        assert_eq!(session.get_open_files_count(), 0);
-        assert!(!session.is_file_open(&file_path));
-
-        // Open the file
-        session.ensure_file_ready(&file_path).await.unwrap();
-        assert_eq!(session.get_open_files_count(), 1);
-        assert!(session.is_file_open(&file_path));
-
-        // Opening again should be a no-op
-        session.ensure_file_ready(&file_path).await.unwrap();
-        assert_eq!(session.get_open_files_count(), 1);
-
-        session.close().await.unwrap();
-    }
-
-    #[cfg(all(test, feature = "clangd-integration-tests"))]
-    #[tokio::test]
-    #[cfg(feature = "clangd-integration-tests")]
-    async fn test_file_change_detection() {
-        use crate::clangd::testing::test_helpers::create_integration_test_session;
-        use std::fs;
-
-        let (test_project, mut session) = create_integration_test_session().await.unwrap();
-
-        // Create a test file
-        let test_file = test_project.project_root.join("test_change.cpp");
-        let initial_content = "// Initial content\nint main() { return 0; }";
-        fs::write(&test_file, initial_content).unwrap();
-
-        // Open the file initially
-        session.ensure_file_ready(&test_file).await.unwrap();
-        assert!(session.is_file_open(&test_file));
-
-        // Modify the file on disk
-        let new_content = "// Modified content\nint main() { return 42; }";
-        fs::write(&test_file, new_content).unwrap();
-
-        // Ensure file ready should detect the change
-        session.ensure_file_ready(&test_file).await.unwrap();
-        assert!(session.is_file_open(&test_file));
-        assert_eq!(session.get_open_files_count(), 1);
-
-        session.close().await.unwrap();
-    }
-
-    #[cfg(all(test, feature = "clangd-integration-tests"))]
-    #[tokio::test]
-    async fn test_non_existent_file_error() {
-        use crate::clangd::testing::test_helpers::*;
-
-        let (test_project, mut session) = create_integration_test_session().await.unwrap();
-
-        let non_existent = test_project.project_root.join("does_not_exist.cpp");
-
-        // Should fail for non-existent file
-        let result = session.ensure_file_ready(&non_existent).await;
-        assert!(result.is_err());
-        assert_eq!(session.get_open_files_count(), 0);
 
         session.close().await.unwrap();
     }

@@ -42,19 +42,17 @@ async fn test_examples_class_usage() {
         .await
         .unwrap();
 
-    // Acquire session lock for LSP operations
-    let session_arc = component_session.clangd_session();
-    let mut locked_session = session_arc.lock().await;
+    // Get direct access to LSP session
     let file_buffer_manager = Arc::new(Mutex::new(RealFileBufferManager::new_real()));
 
     // Get Math class symbol
-    let symbol = get_matching_symbol("Math", &mut locked_session)
+    let symbol = get_matching_symbol("Math", &component_session)
         .await
         .expect("Failed to find Math symbol");
     let symbol_location = &symbol.location;
 
     // Test getting usage examples (unlimited)
-    let examples = get_examples(&mut locked_session, symbol_location, None)
+    let examples = get_examples(&component_session, symbol_location, None)
         .await
         .expect("Failed to get examples");
 
@@ -111,19 +109,17 @@ async fn test_examples_function_usage() {
         .await
         .unwrap();
 
-    // Acquire session lock for LSP operations
-    let session_arc = component_session.clangd_session();
-    let mut locked_session = session_arc.lock().await;
+    // Get direct access to LSP session
     let file_buffer_manager = Arc::new(Mutex::new(RealFileBufferManager::new_real()));
 
     // Get factorial function symbol
-    let symbol = get_matching_symbol("factorial", &mut locked_session)
+    let symbol = get_matching_symbol("factorial", &component_session)
         .await
         .expect("Failed to find factorial symbol");
     let symbol_location = &symbol.location;
 
     // Test getting usage examples (unlimited)
-    let examples = get_examples(&mut locked_session, symbol_location, None)
+    let examples = get_examples(&component_session, symbol_location, None)
         .await
         .expect("Failed to get examples");
 
@@ -183,20 +179,18 @@ async fn test_examples_with_max_limit() {
         .await
         .unwrap();
 
-    // Acquire session lock for LSP operations
-    let session_arc = component_session.clangd_session();
-    let mut locked_session = session_arc.lock().await;
+    // Get direct access to LSP session
     let file_buffer_manager = Arc::new(Mutex::new(RealFileBufferManager::new_real()));
 
     // Get Math class symbol (should have multiple usage examples)
-    let symbol = get_matching_symbol("Math", &mut locked_session)
+    let symbol = get_matching_symbol("Math", &component_session)
         .await
         .expect("Failed to find Math symbol");
     let symbol_location = &symbol.location;
 
     // Test getting examples with max limit
     const MAX_EXAMPLES: u32 = 2;
-    let examples = get_examples(&mut locked_session, symbol_location, Some(MAX_EXAMPLES))
+    let examples = get_examples(&component_session, symbol_location, Some(MAX_EXAMPLES))
         .await
         .expect("Failed to get examples");
 
@@ -263,19 +257,17 @@ async fn test_examples_method_usage() {
         .await
         .unwrap();
 
-    // Acquire session lock for LSP operations
-    let session_arc = component_session.clangd_session();
-    let mut locked_session = session_arc.lock().await;
+    // Get direct access to LSP session
     let file_buffer_manager = Arc::new(Mutex::new(RealFileBufferManager::new_real()));
 
     // Get a method symbol
-    let symbol = get_matching_symbol("Math::Complex::add", &mut locked_session)
+    let symbol = get_matching_symbol("Math::Complex::add", &component_session)
         .await
         .expect("Failed to find add method symbol");
     let symbol_location = &symbol.location;
 
     // Test getting usage examples
-    let examples = get_examples(&mut locked_session, symbol_location, Some(3))
+    let examples = get_examples(&component_session, symbol_location, Some(3))
         .await
         .expect("Failed to get examples");
 
