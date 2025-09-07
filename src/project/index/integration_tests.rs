@@ -2,8 +2,7 @@
 
 use crate::project::index::component_monitor::ComponentIndexingState;
 use crate::project::{ProjectScanner, WorkspaceSession};
-use crate::test_utils::integration::TestProject;
-use std::time::Duration;
+use crate::test_utils::{DEFAULT_INDEXING_TIMEOUT, integration::TestProject};
 use tracing::debug;
 
 #[cfg(feature = "test-logging")]
@@ -41,9 +40,9 @@ async fn test_indexing_progress_tracking_with_real_clangd() {
         .unwrap();
 
     // Wait for indexing with timeout
-    tokio::time::timeout(Duration::from_secs(30), async {
-        workspace_session
-            .wait_for_indexing_completion(&test_project.build_dir)
+    tokio::time::timeout(DEFAULT_INDEXING_TIMEOUT, async {
+        component_session
+            .wait_for_indexing_completion(DEFAULT_INDEXING_TIMEOUT)
             .await
     })
     .await
@@ -79,9 +78,14 @@ async fn test_wait_for_indexing_completion_ensures_full_coverage() {
         .await
         .unwrap();
 
+    let component_session = workspace_session
+        .get_component_session(test_project.build_dir.clone())
+        .await
+        .unwrap();
+
     let result = tokio::time::timeout(
-        Duration::from_secs(60),
-        workspace_session.wait_for_indexing_completion(&test_project.build_dir),
+        DEFAULT_INDEXING_TIMEOUT,
+        component_session.wait_for_indexing_completion(DEFAULT_INDEXING_TIMEOUT),
     )
     .await;
 
@@ -124,8 +128,8 @@ async fn test_index_persistence_across_session_restarts() {
 
         // Wait for initial indexing completion
         tokio::time::timeout(
-            Duration::from_secs(60),
-            workspace_session.wait_for_indexing_completion(&test_project.build_dir),
+            DEFAULT_INDEXING_TIMEOUT,
+            _component_session.wait_for_indexing_completion(DEFAULT_INDEXING_TIMEOUT),
         )
         .await
         .expect("Initial indexing timed out")
@@ -134,10 +138,7 @@ async fn test_index_persistence_across_session_restarts() {
         debug!("Phase 1: Initial indexing completed");
 
         // Verify indexing is complete with explicit state checks
-        let component_state = workspace_session
-            .get_component_index_state(&test_project.build_dir)
-            .await
-            .expect("Should have component index state");
+        let component_state = _component_session.get_index_state().await;
 
         assert_eq!(
             component_state.total_cdb_files, EXPECTED_CDB_FILES,
@@ -175,17 +176,14 @@ async fn test_index_persistence_across_session_restarts() {
             .unwrap();
 
         tokio::time::timeout(
-            Duration::from_secs(60),
-            workspace_session.wait_for_indexing_completion(&test_project.build_dir),
+            DEFAULT_INDEXING_TIMEOUT,
+            _component_session.wait_for_indexing_completion(DEFAULT_INDEXING_TIMEOUT),
         )
         .await
         .expect("Second indexing timed out")
         .expect("Second indexing failed");
 
-        let component_state = workspace_session
-            .get_component_index_state(&test_project.build_dir)
-            .await
-            .expect("Should have component index state after indexing completion");
+        let component_state = _component_session.get_index_state().await;
 
         debug!("Component state after restart: {:?}", component_state);
 

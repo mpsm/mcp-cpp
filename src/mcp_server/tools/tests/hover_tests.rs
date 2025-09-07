@@ -8,7 +8,7 @@ use crate::mcp_server::tools::lsp_helpers::{
     hover::get_hover_info, symbol_resolution::get_matching_symbol,
 };
 use crate::project::{ProjectScanner, WorkspaceSession};
-use crate::test_utils::integration::TestProject;
+use crate::test_utils::{DEFAULT_INDEXING_TIMEOUT, integration::TestProject};
 use tracing::info;
 
 #[cfg(feature = "clangd-integration-tests")]
@@ -35,7 +35,7 @@ async fn test_hover_info_class_symbol() {
         .await
         .unwrap();
     component_session
-        .ensure_indexed(std::time::Duration::from_secs(30))
+        .ensure_indexed(DEFAULT_INDEXING_TIMEOUT)
         .await
         .unwrap();
 
@@ -81,7 +81,7 @@ async fn test_hover_info_function_symbol() {
         .await
         .unwrap();
     component_session
-        .ensure_indexed(std::time::Duration::from_secs(30))
+        .ensure_indexed(DEFAULT_INDEXING_TIMEOUT)
         .await
         .unwrap();
 
@@ -133,7 +133,7 @@ async fn test_hover_info_method_symbol() {
         .await
         .unwrap();
     component_session
-        .ensure_indexed(std::time::Duration::from_secs(30))
+        .ensure_indexed(DEFAULT_INDEXING_TIMEOUT)
         .await
         .unwrap();
 
@@ -181,7 +181,7 @@ async fn test_hover_info_interface_symbol() {
         .await
         .unwrap();
     component_session
-        .ensure_indexed(std::time::Duration::from_secs(30))
+        .ensure_indexed(DEFAULT_INDEXING_TIMEOUT)
         .await
         .unwrap();
 

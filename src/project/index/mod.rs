@@ -23,7 +23,9 @@ pub mod storage;
 pub mod trigger;
 
 // Public exports
-pub use component_monitor::{ComponentIndexMonitor, ComponentIndexState, ComponentIndexingState};
+#[cfg(test)]
+pub use component_monitor::ComponentIndexState;
+pub use component_monitor::{ComponentIndexMonitor, ComponentIndexingState};
 pub use status::IndexStatusView;
 pub use trigger::ClangdIndexTrigger;
 

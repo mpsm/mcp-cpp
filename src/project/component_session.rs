@@ -12,17 +12,17 @@ use tracing::{debug, info, instrument, warn};
 
 use crate::clangd::config::DEFAULT_WORKSPACE_SYMBOL_LIMIT;
 use crate::clangd::file_manager::ClangdFileManager;
-use crate::clangd::index::IndexLatch;
 use crate::clangd::session::ClangdSessionTrait;
 use crate::clangd::version::ClangdVersion;
 use crate::clangd::{ClangdConfigBuilder, ClangdSession, ClangdSessionBuilder};
 use crate::io::file_system::RealFileSystem;
+#[cfg(test)]
+use crate::project::index::ComponentIndexState;
 use crate::project::index::reader::{IndexReader, IndexReaderTrait};
 use crate::project::index::storage::IndexStorage;
 use crate::project::index::storage::filesystem::FilesystemIndexStorage;
 use crate::project::index::{
-    ClangdIndexTrigger, ComponentIndexMonitor, ComponentIndexState, ComponentIndexingState,
-    IndexStatusView,
+    ClangdIndexTrigger, ComponentIndexMonitor, ComponentIndexingState, IndexStatusView,
 };
 use crate::project::{CompilationDatabase, ProjectComponent, ProjectError};
 
@@ -231,21 +231,9 @@ impl ComponentSession {
         self.clangd_session.lock().await
     }
 
-    /// Get the ComponentIndexMonitor for this component
-    #[allow(dead_code)]
-    pub fn index_monitor(&self) -> Arc<ComponentIndexMonitor> {
-        Arc::clone(&self.index_monitor)
-    }
-
     /// Get the build directory for this component
     pub fn build_dir(&self) -> &PathBuf {
         &self.build_dir
-    }
-
-    /// Get the project component metadata
-    #[allow(dead_code)]
-    pub fn component(&self) -> &ProjectComponent {
-        &self.component
     }
 
     /// Wait for indexing completion before proceeding with LSP operations
@@ -258,6 +246,7 @@ impl ComponentSession {
     }
 
     /// Get component indexing state
+    #[cfg(test)]
     pub async fn get_index_state(&self) -> ComponentIndexState {
         self.index_monitor.get_component_state().await
     }
@@ -281,21 +270,6 @@ impl ComponentSession {
         self.index_monitor.wait_for_completion(timeout).await?;
 
         Ok(())
-    }
-
-    /// Refresh index state by synchronizing with actual index files on disk
-    ///
-    /// This method reads the current state of index files and updates the IndexState
-    /// to reflect staleness and availability of actual index data.
-    #[allow(dead_code)]
-    pub async fn refresh_index_state(&self) -> Result<(), ProjectError> {
-        self.index_monitor.refresh_from_disk().await
-    }
-
-    /// Get latch for this component to wait for indexing completion
-    #[allow(dead_code)]
-    pub async fn get_index_latch(&self) -> IndexLatch {
-        self.index_monitor.get_completion_latch().await
     }
 
     /// Get current index status with progress information

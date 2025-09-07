@@ -795,6 +795,7 @@ impl ComponentIndexMonitor {
     }
 
     /// Get current component indexing state
+    #[cfg(test)]
     pub async fn get_component_state(&self) -> ComponentIndexState {
         let state = self.state.lock().await;
         ComponentIndexState::from_component_index(
@@ -834,38 +835,6 @@ impl ComponentIndexMonitor {
                 e
             ))
         })
-    }
-
-    /// Refresh index state by syncing with disk using IndexReader
-    pub async fn refresh_from_disk(&self) -> Result<(), ProjectError> {
-        debug!(
-            "Refreshing index state from disk for build dir: {}",
-            self.build_directory.display()
-        );
-
-        // Use the existing rescan and validate method which properly uses IndexReader
-        self.rescan_and_validate_untracked_files().await?;
-
-        let state = self.state.lock().await;
-        debug!(
-            "Index state after disk sync: {}/{} files indexed",
-            state.component_index.indexed_count(),
-            state.component_index.total_files_count()
-        );
-
-        // Trigger completion latch if all files are indexed
-        if state.component_index.is_fully_indexed() {
-            let latch = state.completion_latch.clone();
-            tokio::spawn(async move {
-                latch.trigger_success().await;
-            });
-            debug!(
-                "Triggered completion latch: all files already indexed for {}",
-                self.build_directory.display()
-            );
-        }
-
-        Ok(())
     }
 
     /// Validate a single index entry and return appropriate action
@@ -1028,11 +997,6 @@ impl ComponentIndexMonitor {
         &self.build_directory
     }
 
-    /// Get completion latch for external waiting
-    pub async fn get_completion_latch(&self) -> IndexLatch {
-        let state = self.state.lock().await;
-        state.completion_latch.clone()
-    }
     /// Trigger indexing for a specific file using the configured IndexTrigger
     ///
     /// This method delegates to the injected IndexTrigger to initiate indexing
@@ -1398,52 +1362,6 @@ mod tests {
         // Component state should remain InProgress since failure doesn't change it directly
         let state = monitor.get_component_state().await;
         assert_eq!(state.state, ComponentIndexingState::InProgress(0.0));
-    }
-
-    #[tokio::test]
-    async fn test_refresh_from_disk() {
-        let mut mock_reader = MockIndexReaderTrait::new();
-
-        // Configure mock to return FileIndexStatus::None for all files (no indexes found)
-        mock_reader.expect_read_index_for_file().returning(|_| {
-            Box::pin(async {
-                Ok(crate::project::index::reader::IndexEntry {
-                    absolute_path: PathBuf::from("/test/project/src/main.cpp"),
-                    status: crate::project::index::reader::FileIndexStatus::None,
-                    index_format_version: None,
-                    expected_format_version: 19,
-                    index_content_hash: None,
-                    current_file_hash: None,
-                    symbols: vec![],
-                    index_file_size: None,
-                    index_created_at: None,
-                })
-            })
-        });
-
-        let mock_reader = Arc::new(mock_reader) as Arc<dyn IndexReaderTrait>;
-        let compilation_db = create_test_compilation_db();
-        let build_dir = PathBuf::from("/test/project/build");
-
-        let monitor = ComponentIndexMonitor::new_for_test(
-            build_dir,
-            Arc::new(compilation_db.clone()),
-            mock_reader,
-            &create_test_clangd_version(),
-        )
-        .await
-        .expect("Failed to create ComponentIndexMonitor");
-
-        // Test that refresh works by calling the rescan method
-        // which now properly uses IndexReader instead of direct filesystem access
-        monitor
-            .refresh_from_disk()
-            .await
-            .expect("Failed to refresh from disk");
-
-        // Verify the state remains unchanged since no valid index files exist
-        let state = monitor.get_component_state().await;
-        assert_eq!(state.coverage(), 0.0); // No files should be marked as indexed
     }
 
     #[tokio::test]

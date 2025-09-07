@@ -7,14 +7,11 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::time::Duration;
 use tokio::sync::Mutex;
 use tracing::info;
 
-use crate::clangd::index::IndexLatch;
 use crate::clangd::version::ClangdVersion;
 use crate::project::component_session::ComponentSession;
-use crate::project::index::{ComponentIndexMonitor, ComponentIndexState};
 use crate::project::{ProjectError, ProjectScanner, ProjectWorkspace};
 
 /// Manages ComponentSession instances for a project workspace
@@ -151,68 +148,6 @@ impl WorkspaceSession {
         Ok(component_session_arc)
     }
 
-    /// Get an existing ComponentIndexMonitor for the specified build directory
-    #[allow(dead_code)]
-    pub async fn get_component_monitor(
-        &self,
-        build_dir: &Path,
-    ) -> Option<Arc<ComponentIndexMonitor>> {
-        let sessions = self.component_sessions.lock().await;
-        sessions
-            .get(build_dir)
-            .map(|session| session.index_monitor())
-    }
-
-    /// Wait for indexing completion with coverage assurance using custom timeout
-    ///
-    /// This method waits for clangd to complete indexing and ensures that all files
-    /// in the compilation database have been indexed. If coverage is incomplete after
-    /// initial indexing, it will trigger indexing for unindexed files.
-    pub async fn wait_for_indexing_completion_with_timeout(
-        &self,
-        build_dir: &Path,
-        timeout: Duration,
-    ) -> Result<(), ProjectError> {
-        info!(
-            "Waiting for indexing completion for build dir: {} (timeout: {:?})",
-            build_dir.display(),
-            timeout
-        );
-
-        // Get the ComponentSession - if none exists, create one
-        let component_session = self.get_component_session(build_dir.to_path_buf()).await?;
-
-        // Delegate to ComponentSession
-        component_session
-            .wait_for_indexing_completion(timeout)
-            .await
-    }
-
-    /// Get component indexing state for a build directory
-    #[allow(dead_code)]
-    pub async fn get_component_index_state(&self, build_dir: &Path) -> Option<ComponentIndexState> {
-        // Get the ComponentSession - if none exists, return None
-        let sessions = self.component_sessions.lock().await;
-        if let Some(component_session) = sessions.get(build_dir) {
-            Some(component_session.get_index_state().await)
-        } else {
-            None
-        }
-    }
-
-    /// Wait for indexing completion with coverage assurance using default timeout
-    ///
-    /// This method waits for clangd to complete indexing and ensures that all files
-    /// in the compilation database have been indexed. If coverage is incomplete after
-    /// initial indexing, it will trigger indexing for unindexed files.
-    /// Uses a default 5 minute timeout.
-    #[allow(dead_code)]
-    pub async fn wait_for_indexing_completion(&self, build_dir: &Path) -> Result<(), ProjectError> {
-        const DEFAULT_INDEXING_TIMEOUT: Duration = Duration::from_secs(300);
-        self.wait_for_indexing_completion_with_timeout(build_dir, DEFAULT_INDEXING_TIMEOUT)
-            .await
-    }
-
     /// Get a non-mutable reference to the project workspace
     ///
     /// Note: This now returns an Arc<Mutex<ProjectWorkspace>> since the workspace
@@ -220,31 +155,6 @@ impl WorkspaceSession {
     /// the mutex to access workspace data.
     pub fn get_workspace(&self) -> &Arc<Mutex<ProjectWorkspace>> {
         &self.workspace
-    }
-
-    /// Refresh index state by synchronizing with actual index files on disk
-    ///
-    /// This method reads the current state of index files and updates the IndexState
-    /// to reflect staleness and availability of actual index data.
-    #[allow(dead_code)]
-    pub async fn refresh_index_state(&self, build_dir: &Path) -> Result<(), ProjectError> {
-        // Get the ComponentSession - if none exists, create one
-        let component_session = self.get_component_session(build_dir.to_path_buf()).await?;
-
-        // Delegate to ComponentSession
-        component_session.refresh_index_state().await
-    }
-
-    /// Get latch for a build directory to wait for indexing completion
-    #[allow(dead_code)]
-    pub async fn get_index_latch(&self, build_dir: &Path) -> Option<IndexLatch> {
-        // Get the ComponentSession - if none exists, return None
-        let sessions = self.component_sessions.lock().await;
-        if let Some(component_session) = sessions.get(build_dir) {
-            Some(component_session.get_index_latch().await)
-        } else {
-            None
-        }
     }
 }
 

@@ -6,7 +6,7 @@
 
 use crate::mcp_server::tools::analyze_symbols::{AnalyzeSymbolContextTool, AnalyzerResult};
 use crate::project::{ProjectScanner, WorkspaceSession};
-use crate::test_utils::integration::TestProject;
+use crate::test_utils::{DEFAULT_INDEXING_TIMEOUT, integration::TestProject};
 use tracing::info;
 
 #[cfg(feature = "clangd-integration-tests")]
@@ -230,7 +230,7 @@ async fn test_analyzer_call_hierarchy_coherence() {
 
     // Wait for indexing to complete (30 seconds should be plenty for the test project)
     component_session
-        .ensure_indexed(std::time::Duration::from_secs(30))
+        .ensure_indexed(DEFAULT_INDEXING_TIMEOUT)
         .await
         .expect("Indexing should complete successfully for call hierarchy test");
 

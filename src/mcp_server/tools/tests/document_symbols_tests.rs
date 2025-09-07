@@ -4,7 +4,7 @@
 //! extraction and comprehensive symbol analysis with source content extraction.
 
 use crate::project::{ComponentSession, ProjectScanner, WorkspaceSession};
-use crate::test_utils::integration::TestProject;
+use crate::test_utils::{DEFAULT_INDEXING_TIMEOUT, integration::TestProject};
 use std::sync::Arc;
 
 /// Helper to create a test project with ComponentSession for document symbols tests  
@@ -30,7 +30,7 @@ async fn create_test_component_session() -> (TestProject, Arc<ComponentSession>)
         .await
         .unwrap();
     component_session
-        .ensure_indexed(std::time::Duration::from_secs(30))
+        .ensure_indexed(DEFAULT_INDEXING_TIMEOUT)
         .await
         .unwrap();
 
