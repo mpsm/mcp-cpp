@@ -5,15 +5,12 @@
 
 use std::sync::Arc;
 use std::time::Duration;
-use tokio::sync::{Mutex, Notify};
-use tracing::{debug, trace, warn};
+use tokio::sync::watch;
+use tracing::{debug, trace};
 
 /// Errors that can occur during latch operations
 #[derive(Debug, thiserror::Error)]
 pub enum LatchError {
-    #[error("Multiple waiters not allowed - only one waiter can wait at a time")]
-    MultipleWaiters,
-
     #[error("Timeout waiting for completion")]
     Timeout,
 
@@ -25,95 +22,93 @@ pub enum LatchError {
 }
 
 /// Internal state for the indexing latch
-#[derive(Debug, Default)]
-struct LatchState {
-    /// Whether the latch has been triggered
-    completed: bool,
-    /// Error state if indexing failed
-    error: Option<String>,
-    /// Whether someone is currently waiting
-    has_waiter: bool,
+#[derive(Clone, Debug, Default)]
+enum LatchState {
+    /// Initial state - not completed
+    #[default]
+    Pending,
+    /// Indexing completed successfully
+    Completed,
+    /// Indexing failed with error message
+    Failed(String),
 }
 
 /// Event latch for index completion waiting
 ///
-/// Uses a latch pattern with tokio::Notify to handle index completion waiting.
+/// Uses a watch channel to broadcast completion state to multiple waiters.
 /// Once triggered (either success or failure), the latch stays triggered.
-/// Enforces single waiter constraint and provides custom timeout support.
+/// Supports multiple concurrent waiters and provides race-condition safety.
 #[derive(Clone)]
 pub struct IndexLatch {
-    /// Shared state protected by mutex
-    state: Arc<Mutex<LatchState>>,
-    /// Notify for signaling completion
-    notify: Arc<Notify>,
+    /// Sender for state updates (single writer)
+    state_tx: Arc<watch::Sender<LatchState>>,
+    /// Template receiver for cloning to waiters
+    state_rx: watch::Receiver<LatchState>,
 }
 
 impl IndexLatch {
     /// Create a new index latch
     pub fn new() -> Self {
         debug!("Creating new IndexLatch");
+        let (state_tx, state_rx) = watch::channel(LatchState::default());
         Self {
-            state: Arc::new(Mutex::new(LatchState::default())),
-            notify: Arc::new(Notify::new()),
+            state_tx: Arc::new(state_tx),
+            state_rx,
         }
     }
 
     /// Wait for the latch to be triggered with custom timeout
     ///
     /// Returns error if:
-    /// - Another waiter is already waiting (single waiter enforcement)
     /// - Timeout is reached
     /// - Indexing failed
+    ///
+    /// Supports multiple concurrent waiters and handles race conditions
+    /// where completion occurs before waiting starts.
     pub async fn wait(&self, timeout: Duration) -> Result<(), LatchError> {
-        let mut state = self.state.lock().await;
+        let mut rx = self.state_rx.clone();
 
-        // Check if already completed (handles race where completion happens before wait)
-        if state.completed {
-            debug!("IndexLatch: Already completed, returning immediately");
-            return Ok(());
+        // Check current state first (handles race where completion happens before wait)
+        match *rx.borrow() {
+            LatchState::Completed => {
+                debug!("IndexLatch: Already completed, returning immediately");
+                return Ok(());
+            }
+            LatchState::Failed(ref error) => {
+                debug!("IndexLatch: Already failed, returning error immediately");
+                return Err(LatchError::IndexingFailed(error.clone()));
+            }
+            LatchState::Pending => {
+                trace!("IndexLatch: Waiting for completion");
+            }
         }
 
-        // Check if indexing failed
-        if let Some(error) = &state.error {
-            debug!("IndexLatch: Already failed, returning error immediately");
-            return Err(LatchError::IndexingFailed(error.clone()));
-        }
-
-        // Enforce single waiter constraint
-        if state.has_waiter {
-            warn!("IndexLatch: Multiple waiters not allowed");
-            return Err(LatchError::MultipleWaiters);
-        }
-
-        // Mark that we have a waiter
-        state.has_waiter = true;
-        trace!("IndexLatch: Waiter registered, waiting for completion");
-        drop(state); // Release lock before waiting
-
-        // Wait with timeout
-        let result = tokio::time::timeout(timeout, self.notify.notified()).await;
-
-        // Clear waiter flag regardless of outcome
-        {
-            let mut state = self.state.lock().await;
-            state.has_waiter = false;
-        }
+        // Wait for state change with timeout
+        let result = tokio::time::timeout(timeout, rx.changed()).await;
 
         match result {
-            Ok(_) => {
-                // Check final state after notification
-                let state = self.state.lock().await;
-                if state.completed {
-                    debug!("IndexLatch: Completed successfully");
-                    Ok(())
-                } else if let Some(error) = &state.error {
-                    debug!("IndexLatch: Failed with error: {}", error);
-                    Err(LatchError::IndexingFailed(error.clone()))
-                } else {
-                    // This shouldn't happen but handle gracefully
-                    warn!("IndexLatch: Notified but neither completed nor failed");
-                    Err(LatchError::Cancelled)
+            Ok(Ok(())) => {
+                // State changed, check new state
+                match *rx.borrow() {
+                    LatchState::Completed => {
+                        debug!("IndexLatch: Completed successfully");
+                        Ok(())
+                    }
+                    LatchState::Failed(ref error) => {
+                        debug!("IndexLatch: Failed with error: {}", error);
+                        Err(LatchError::IndexingFailed(error.clone()))
+                    }
+                    LatchState::Pending => {
+                        // Shouldn't happen since we got a change notification
+                        trace!("IndexLatch: Got change notification but still pending");
+                        Err(LatchError::Cancelled)
+                    }
                 }
+            }
+            Ok(Err(_)) => {
+                // Sender dropped
+                debug!("IndexLatch: Sender dropped");
+                Err(LatchError::Cancelled)
             }
             Err(_) => {
                 debug!("IndexLatch: Timeout after {:?}", timeout);
@@ -122,18 +117,12 @@ impl IndexLatch {
         }
     }
 
-    /// Wait for the latch with default timeout
-    pub async fn wait_default(&self) -> Result<(), LatchError> {
-        self.wait(Duration::from_secs(30)).await
-    }
-
     /// Trigger the latch with successful completion
     pub async fn trigger_success(&self) {
-        let mut state = self.state.lock().await;
-        if !state.completed && state.error.is_none() {
-            state.completed = true;
+        // Only update if still pending (idempotent)
+        if matches!(*self.state_rx.borrow(), LatchState::Pending) {
+            let _ = self.state_tx.send(LatchState::Completed);
             debug!("IndexLatch: Triggered success");
-            self.notify.notify_waiters(); // Use notify_waiters for robustness
         } else {
             trace!("IndexLatch: Already triggered, ignoring success trigger");
         }
@@ -141,45 +130,13 @@ impl IndexLatch {
 
     /// Trigger the latch with failure
     pub async fn trigger_failure(&self, error: String) {
-        let mut state = self.state.lock().await;
-        if !state.completed && state.error.is_none() {
-            state.error = Some(error.clone());
+        // Only update if still pending (idempotent)
+        if matches!(*self.state_rx.borrow(), LatchState::Pending) {
+            let _ = self.state_tx.send(LatchState::Failed(error.clone()));
             debug!("IndexLatch: Triggered failure: {}", error);
-            self.notify.notify_waiters(); // Use notify_waiters for robustness
         } else {
             trace!("IndexLatch: Already triggered, ignoring failure trigger");
         }
-    }
-
-    /// Check if the latch is triggered (completed or failed)
-    pub async fn is_triggered(&self) -> bool {
-        let state = self.state.lock().await;
-        state.completed || state.error.is_some()
-    }
-
-    /// Check if the latch completed successfully
-    pub async fn is_completed(&self) -> bool {
-        let state = self.state.lock().await;
-        state.completed
-    }
-
-    /// Check if the latch has failed
-    pub async fn has_failed(&self) -> Option<String> {
-        let state = self.state.lock().await;
-        state.error.clone()
-    }
-
-    /// Reset the latch to initial state
-    pub async fn reset(&self) {
-        let mut state = self.state.lock().await;
-        *state = LatchState::default();
-        debug!("IndexLatch: Reset to initial state");
-    }
-
-    /// Check if someone is currently waiting
-    pub async fn has_waiter(&self) -> bool {
-        let state = self.state.lock().await;
-        state.has_waiter
     }
 }
 
@@ -198,15 +155,15 @@ impl std::fmt::Debug for IndexLatch {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tokio::time::{Duration, sleep};
+    use tokio::time::Duration;
 
     #[tokio::test]
     async fn test_latch_creation() {
         let latch = IndexLatch::new();
-        assert!(!latch.is_triggered().await);
-        assert!(!latch.is_completed().await);
-        assert!(latch.has_failed().await.is_none());
-        assert!(!latch.has_waiter().await);
+        match *latch.state_rx.borrow() {
+            LatchState::Pending => {} // Expected initial state
+            _ => panic!("Expected Pending state on creation"),
+        }
     }
 
     #[tokio::test]
@@ -214,9 +171,10 @@ mod tests {
         let latch = IndexLatch::new();
         latch.trigger_success().await;
 
-        assert!(latch.is_triggered().await);
-        assert!(latch.is_completed().await);
-        assert!(latch.has_failed().await.is_none());
+        match *latch.state_rx.borrow() {
+            LatchState::Completed => {} // Expected after success
+            _ => panic!("Expected Completed state after trigger_success"),
+        }
     }
 
     #[tokio::test]
@@ -225,9 +183,10 @@ mod tests {
         let error_msg = "test error".to_string();
         latch.trigger_failure(error_msg.clone()).await;
 
-        assert!(latch.is_triggered().await);
-        assert!(!latch.is_completed().await);
-        assert_eq!(latch.has_failed().await, Some(error_msg));
+        match &*latch.state_rx.borrow() {
+            LatchState::Failed(msg) => assert_eq!(msg, &error_msg),
+            _ => panic!("Expected Failed state after trigger_failure"),
+        }
     }
 
     #[tokio::test]
@@ -255,27 +214,21 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_single_waiter_enforcement() {
+    async fn test_multiple_waiters_sequential() {
         let latch = IndexLatch::new();
 
-        // First waiter should succeed
-        let latch1 = latch.clone();
-        let waiter1 = tokio::spawn(async move { latch1.wait(Duration::from_secs(1)).await });
-
-        // Give first waiter time to register
-        sleep(Duration::from_millis(10)).await;
-
-        // Second waiter should fail immediately
-        let result = latch.wait(Duration::from_millis(100)).await;
-        match result {
-            Err(LatchError::MultipleWaiters) => {} // Expected
-            _ => panic!("Expected MultipleWaiters error, got: {:?}", result),
-        }
-
-        // Trigger success for first waiter
+        // Trigger completion first
         latch.trigger_success().await;
-        let result1 = waiter1.await.unwrap();
-        assert!(result1.is_ok());
+
+        // Multiple sequential waiters should all succeed immediately
+        let result1 = latch.wait(Duration::from_millis(100)).await;
+        assert!(result1.is_ok(), "First waiter should succeed");
+
+        let result2 = latch.wait(Duration::from_millis(100)).await;
+        assert!(result2.is_ok(), "Second waiter should succeed");
+
+        let result3 = latch.wait(Duration::from_millis(100)).await;
+        assert!(result3.is_ok(), "Third waiter should succeed");
     }
 
     #[tokio::test]
@@ -289,56 +242,48 @@ mod tests {
             _ => panic!("Expected Timeout error, got: {:?}", result),
         }
 
-        // Should no longer have waiter after timeout
-        assert!(!latch.has_waiter().await);
+        // State should still be pending after timeout
+        match *latch.state_rx.borrow() {
+            LatchState::Pending => {} // Expected - timeout doesn't change state
+            _ => panic!("Expected Pending state after timeout"),
+        }
     }
 
     #[tokio::test]
-    async fn test_concurrent_trigger_and_wait() {
+    async fn test_trigger_then_wait() {
         let latch = IndexLatch::new();
 
-        // Start waiter
-        let latch1 = latch.clone();
-        let waiter = tokio::spawn(async move { latch1.wait(Duration::from_secs(1)).await });
-
-        // Trigger success after short delay
-        let latch2 = latch.clone();
-        let trigger = tokio::spawn(async move {
-            sleep(Duration::from_millis(50)).await;
-            latch2.trigger_success().await;
-        });
-
-        // Both should complete successfully
-        let (wait_result, _) = tokio::join!(waiter, trigger);
-        assert!(wait_result.unwrap().is_ok());
-    }
-
-    #[tokio::test]
-    async fn test_reset() {
-        let latch = IndexLatch::new();
+        // Trigger success first
         latch.trigger_success().await;
 
-        assert!(latch.is_completed().await);
-
-        latch.reset().await;
-
-        assert!(!latch.is_triggered().await);
-        assert!(!latch.is_completed().await);
-        assert!(latch.has_failed().await.is_none());
-        assert!(!latch.has_waiter().await);
-    }
-
-    #[tokio::test]
-    async fn test_race_condition_pre_completion() {
-        // Test the race where completion happens before waiter registers
-        let latch = IndexLatch::new();
-
-        // Trigger completion first
-        latch.trigger_success().await;
-
-        // Then try to wait - should return immediately
+        // Then wait - should return immediately
         let result = latch.wait(Duration::from_millis(100)).await;
-        assert!(result.is_ok());
+        assert!(
+            result.is_ok(),
+            "Wait should succeed immediately after trigger"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_multiple_waiters_after_failure() {
+        let latch = IndexLatch::new();
+        let error_msg = "test failure".to_string();
+
+        // Trigger failure first
+        latch.trigger_failure(error_msg.clone()).await;
+
+        // Multiple waiters should all get the same error
+        let result1 = latch.wait(Duration::from_millis(100)).await;
+        match result1 {
+            Err(LatchError::IndexingFailed(msg)) => assert_eq!(msg, error_msg),
+            _ => panic!("Expected IndexingFailed error"),
+        }
+
+        let result2 = latch.wait(Duration::from_millis(100)).await;
+        match result2 {
+            Err(LatchError::IndexingFailed(msg)) => assert_eq!(msg, error_msg),
+            _ => panic!("Expected IndexingFailed error"),
+        }
     }
 
     #[tokio::test]
@@ -347,11 +292,16 @@ mod tests {
 
         // First trigger should work
         latch.trigger_success().await;
-        assert!(latch.is_completed().await);
+        match *latch.state_rx.borrow() {
+            LatchState::Completed => {} // Expected
+            _ => panic!("Expected Completed state after first trigger"),
+        }
 
-        // Second trigger should be ignored
+        // Second trigger should be ignored - state should remain Completed
         latch.trigger_failure("error".to_string()).await;
-        assert!(latch.is_completed().await);
-        assert!(latch.has_failed().await.is_none());
+        match *latch.state_rx.borrow() {
+            LatchState::Completed => {} // Should remain completed
+            _ => panic!("State should remain Completed after second trigger"),
+        }
     }
 }
