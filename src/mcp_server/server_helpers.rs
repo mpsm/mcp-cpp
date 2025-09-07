@@ -35,21 +35,31 @@ pub fn resolve_build_directory(
             );
             let requested_path = PathBuf::from(build_dir_str);
 
+            // Convert relative paths to absolute paths if needed
+            let absolute_path = if requested_path.is_absolute() {
+                requested_path
+            } else {
+                // Convert relative path to absolute by joining with workspace root
+                workspace.project_root_path.join(&requested_path)
+            };
+
+            // Check if component already exists in workspace
             if workspace
-                .get_component_by_build_dir(&requested_path)
+                .get_component_by_build_dir(&absolute_path)
                 .is_some()
             {
-                debug!("Build directory '{}' found in workspace", build_dir_str);
-                Ok(requested_path)
+                debug!(
+                    "Build directory '{}' found in workspace",
+                    absolute_path.display()
+                );
+                Ok(absolute_path)
             } else {
-                let available = workspace.get_build_dirs();
-                Err(CallToolError::new(std::io::Error::new(
-                    std::io::ErrorKind::InvalidInput,
-                    format!(
-                        "Build directory '{}' not found in project workspace. Available: {:?}",
-                        build_dir_str, available
-                    ),
-                )))
+                debug!(
+                    "Build directory '{}' not found in workspace, will attempt dynamic discovery",
+                    absolute_path.display()
+                );
+                // Return the path anyway - let get_component_session handle dynamic discovery
+                Ok(absolute_path)
             }
         }
         None => {
@@ -110,6 +120,7 @@ pub trait McpToolHandler<T> {
     const TOOL_NAME: &'static str;
 
     /// Handle sync tools (default implementation panics - override for sync tools)
+    #[allow(dead_code)]
     fn call_tool_sync(&self, _tool: T) -> Result<CallToolResult, CallToolError> {
         panic!("call_tool_sync not implemented - this tool should use call_tool_async")
     }

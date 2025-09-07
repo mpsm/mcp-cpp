@@ -6,7 +6,7 @@ use std::path::Path;
 /// Each provider implements detection and parsing logic for a specific build system.
 /// The provider should return None if the directory is not applicable to its build system,
 /// and Some(component) if it successfully detects and parses a project.
-pub trait ProjectComponentProvider {
+pub trait ProjectComponentProvider: Send + Sync {
     /// Scan a directory and attempt to create a project component
     ///
     /// Returns:

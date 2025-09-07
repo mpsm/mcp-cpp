@@ -30,14 +30,12 @@ impl CppServerHandler {
     }
 
     /// Resolves build directory from optional parameter using the helper function.
-    fn resolve_build_directory(
+    async fn resolve_build_directory(
         &self,
         requested_build_dir: Option<&str>,
     ) -> Result<PathBuf, CallToolError> {
-        server_helpers::resolve_build_directory(
-            self.workspace_session.get_workspace(),
-            requested_build_dir,
-        )
+        let workspace = self.workspace_session.get_workspace().lock().await;
+        server_helpers::resolve_build_directory(&workspace, requested_build_dir)
     }
 }
 
@@ -45,8 +43,12 @@ impl CppServerHandler {
 impl McpToolHandler<GetProjectDetailsTool> for CppServerHandler {
     const TOOL_NAME: &'static str = "get_project_details";
 
-    fn call_tool_sync(&self, tool: GetProjectDetailsTool) -> Result<CallToolResult, CallToolError> {
-        tool.call_tool(self.workspace_session.get_workspace())
+    async fn call_tool_async(
+        &self,
+        tool: GetProjectDetailsTool,
+    ) -> Result<CallToolResult, CallToolError> {
+        let workspace = self.workspace_session.get_workspace().lock().await;
+        tool.call_tool(&workspace)
     }
 }
 
@@ -57,7 +59,9 @@ impl McpToolHandler<SearchSymbolsTool> for CppServerHandler {
         &self,
         tool: SearchSymbolsTool,
     ) -> Result<CallToolResult, CallToolError> {
-        let build_dir = self.resolve_build_directory(tool.build_directory.as_deref())?;
+        let build_dir = self
+            .resolve_build_directory(tool.build_directory.as_deref())
+            .await?;
 
         let component_session = self
             .workspace_session
@@ -70,8 +74,8 @@ impl McpToolHandler<SearchSymbolsTool> for CppServerHandler {
                 )))
             })?;
 
-        tool.call_tool(component_session, self.workspace_session.get_workspace())
-            .await
+        let workspace = self.workspace_session.get_workspace().lock().await;
+        tool.call_tool(component_session, &workspace).await
     }
 }
 
@@ -82,7 +86,9 @@ impl McpToolHandler<AnalyzeSymbolContextTool> for CppServerHandler {
         &self,
         tool: AnalyzeSymbolContextTool,
     ) -> Result<CallToolResult, CallToolError> {
-        let build_dir = self.resolve_build_directory(tool.build_directory.as_deref())?;
+        let build_dir = self
+            .resolve_build_directory(tool.build_directory.as_deref())
+            .await?;
 
         let component_session = self
             .workspace_session
@@ -95,15 +101,15 @@ impl McpToolHandler<AnalyzeSymbolContextTool> for CppServerHandler {
                 )))
             })?;
 
-        tool.call_tool(component_session, self.workspace_session.get_workspace())
-            .await
+        let workspace = self.workspace_session.get_workspace().lock().await;
+        tool.call_tool(component_session, &workspace).await
     }
 }
 
 // Register all tools with compile-time safety - this generates dispatch_tool() and registered_tools()
 register_tools! {
     CppServerHandler {
-        GetProjectDetailsTool => call_tool_sync (sync),
+        GetProjectDetailsTool => call_tool_async (async),
         SearchSymbolsTool => call_tool_async (async),
         AnalyzeSymbolContextTool => call_tool_async (async),
     }

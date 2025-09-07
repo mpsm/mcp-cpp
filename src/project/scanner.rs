@@ -1,7 +1,7 @@
 use std::path::Path;
 use walkdir::WalkDir;
 
-use crate::project::{ProjectError, ProjectProviderRegistry, ProjectWorkspace};
+use crate::project::{ProjectComponent, ProjectError, ProjectProviderRegistry, ProjectWorkspace};
 
 /// Options for configuring project scanning behavior
 #[derive(Debug, Clone)]
@@ -49,6 +49,47 @@ impl ProjectScanner {
             .with_provider(Box::new(MesonProvider::new()));
 
         Self::new(registry)
+    }
+
+    /// Discover a single component in the specified directory
+    ///
+    /// This method scans only the specified directory (no traversal) to determine
+    /// if it contains a valid project component. Used for dynamic component discovery
+    /// when a build directory is requested that wasn't found in initial workspace scanning.
+    ///
+    /// # Arguments
+    /// * `build_dir` - Directory path to scan for project component
+    ///
+    /// # Returns
+    /// * `Ok(Some(component))` - If a valid project component is found
+    /// * `Ok(None)` - If the directory is not a valid build directory
+    /// * `Err(error)` - If scanning fails
+    pub fn discover_component(
+        &self,
+        build_dir: &Path,
+    ) -> Result<Option<ProjectComponent>, ProjectError> {
+        // Validate that the path exists and is a directory
+        if !build_dir.exists() {
+            return Err(ProjectError::PathNotFound {
+                path: build_dir.to_string_lossy().to_string(),
+            });
+        }
+
+        if !build_dir.is_dir() {
+            return Err(ProjectError::InvalidBuildDirectory {
+                reason: format!("Path is not a directory: {}", build_dir.display()),
+            });
+        }
+
+        // Try to discover a project component in this directory using the provider registry
+        match self.provider_registry.scan_directory(build_dir) {
+            Ok(Some(component)) => Ok(Some(component)),
+            Ok(None) => Ok(None), // No component found - not a build directory
+            Err(e) => {
+                tracing::debug!("Error scanning directory {}: {}", build_dir.display(), e);
+                Err(e)
+            }
+        }
     }
 
     /// Scan a directory tree for project components

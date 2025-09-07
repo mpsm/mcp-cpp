@@ -15,22 +15,25 @@ use crate::clangd::index::IndexLatch;
 use crate::clangd::version::ClangdVersion;
 use crate::project::component_session::ComponentSession;
 use crate::project::index::{ComponentIndexMonitor, ComponentIndexState};
-use crate::project::{ProjectError, ProjectWorkspace};
+use crate::project::{ProjectError, ProjectScanner, ProjectWorkspace};
 
 /// Manages ComponentSession instances for a project workspace
 ///
 /// `WorkspaceSession` provides pure session lifecycle management, handling the creation,
 /// reuse, and cleanup of ComponentSession instances for different build directories.
 /// This orchestrates component sessions while maintaining the same external API.
+/// Supports dynamic component discovery for build directories not found in initial scanning.
 pub struct WorkspaceSession {
-    /// Project workspace for determining project root and components
-    workspace: ProjectWorkspace,
+    /// Project workspace for determining project root and components (mutable for dynamic discovery)
+    workspace: Arc<Mutex<ProjectWorkspace>>,
     /// Map of build directories to their ComponentSession instances
     component_sessions: Arc<Mutex<HashMap<PathBuf, Arc<ComponentSession>>>>,
     /// Path to clangd executable
     clangd_path: String,
     /// Clangd version information
     clangd_version: ClangdVersion,
+    /// Project scanner for dynamic component discovery
+    scanner: ProjectScanner,
 }
 
 impl WorkspaceSession {
@@ -46,11 +49,15 @@ impl WorkspaceSession {
             clangd_version.major, clangd_version.minor, clangd_version.patch
         );
 
+        // Create scanner with default providers for dynamic discovery
+        let scanner = ProjectScanner::with_default_providers();
+
         Ok(Self {
-            workspace,
+            workspace: Arc::new(Mutex::new(workspace)),
             component_sessions: Arc::new(Mutex::new(HashMap::new())),
             clangd_path,
             clangd_version,
+            scanner,
         })
     }
 
@@ -76,26 +83,57 @@ impl WorkspaceSession {
             build_dir.display()
         );
 
-        // Get the component for this build directory
-        let component = self
-            .workspace
-            .get_component_by_build_dir(&build_dir)
-            .ok_or_else(|| {
-                ProjectError::SessionCreation("Component not found for build directory".to_string())
-            })?;
+        // Try to get the component from the workspace first
+        let component = {
+            let workspace = self.workspace.lock().await;
+            workspace.get_component_by_build_dir(&build_dir).cloned()
+        };
+
+        let component = match component {
+            Some(comp) => comp,
+            None => {
+                // Component not found in workspace - try dynamic discovery
+                info!(
+                    "Component not found in workspace, attempting dynamic discovery for: {}",
+                    build_dir.display()
+                );
+
+                match self.scanner.discover_component(&build_dir)? {
+                    Some(discovered_component) => {
+                        // Add the discovered component to the workspace
+                        let mut workspace = self.workspace.lock().await;
+                        workspace.add_component(discovered_component.clone());
+                        info!(
+                            "Successfully discovered and added component for build dir: {}",
+                            build_dir.display()
+                        );
+                        discovered_component
+                    }
+                    None => {
+                        return Err(ProjectError::SessionCreation(format!(
+                            "No valid project component found at build directory: {}",
+                            build_dir.display()
+                        )));
+                    }
+                }
+            }
+        };
 
         // Determine project root from workspace
-        let project_root = if self.workspace.project_root_path.exists() {
-            self.workspace.project_root_path.clone()
-        } else {
-            std::env::current_dir().map_err(|e| {
-                ProjectError::SessionCreation(format!("Failed to get current directory: {}", e))
-            })?
+        let project_root = {
+            let workspace = self.workspace.lock().await;
+            if workspace.project_root_path.exists() {
+                workspace.project_root_path.clone()
+            } else {
+                std::env::current_dir().map_err(|e| {
+                    ProjectError::SessionCreation(format!("Failed to get current directory: {}", e))
+                })?
+            }
         };
 
         // Create ComponentSession
         let component_session = ComponentSession::new(
-            component.clone(),
+            component,
             &self.clangd_path,
             &self.clangd_version,
             project_root,
@@ -176,7 +214,11 @@ impl WorkspaceSession {
     }
 
     /// Get a non-mutable reference to the project workspace
-    pub fn get_workspace(&self) -> &ProjectWorkspace {
+    ///
+    /// Note: This now returns an Arc<Mutex<ProjectWorkspace>> since the workspace
+    /// can be mutated during dynamic component discovery. Callers should lock
+    /// the mutex to access workspace data.
+    pub fn get_workspace(&self) -> &Arc<Mutex<ProjectWorkspace>> {
         &self.workspace
     }
 
@@ -212,6 +254,146 @@ impl Drop for WorkspaceSession {
         // ComponentSession::drop() will be called for proper cleanup of resources
         if let Ok(mut sessions) = self.component_sessions.try_lock() {
             sessions.clear();
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::test_utils::integration::TestProject;
+    use std::sync::Arc;
+
+    // Auto-initialize logging for all tests in this module
+    #[cfg(feature = "test-logging")]
+    #[ctor::ctor]
+    fn init_test_logging() {
+        crate::test_utils::logging::init();
+    }
+
+    #[cfg(feature = "clangd-integration-tests")]
+    #[tokio::test]
+    async fn test_dynamic_component_discovery() {
+        // Create test project and configure it
+        let test_project = TestProject::new().await.unwrap();
+        test_project.cmake_configure().await.unwrap();
+
+        // Create empty workspace (no initial scan)
+        let empty_workspace = ProjectWorkspace::new(
+            test_project.project_root.clone(),
+            vec![], // No components
+            0,
+        );
+
+        // Verify workspace is actually empty
+        assert_eq!(empty_workspace.component_count(), 0);
+        assert!(
+            empty_workspace
+                .get_component_by_build_dir(&test_project.build_dir)
+                .is_none()
+        );
+
+        // Create workspace session with empty workspace
+        let clangd_path = crate::test_utils::get_test_clangd_path();
+        let workspace_session = WorkspaceSession::new(empty_workspace, clangd_path).unwrap();
+
+        // Request component session for build directory not in workspace
+        // This should trigger dynamic discovery
+        let component_session = workspace_session
+            .get_component_session(test_project.build_dir.clone())
+            .await;
+
+        // Should succeed through dynamic discovery
+        assert!(
+            component_session.is_ok(),
+            "Dynamic discovery should have succeeded"
+        );
+        let session = component_session.unwrap();
+        assert_eq!(session.build_dir(), &test_project.build_dir);
+
+        // Verify the component was added to the workspace
+        {
+            let workspace = workspace_session.get_workspace().lock().await;
+            assert_eq!(workspace.component_count(), 1);
+            assert!(
+                workspace
+                    .get_component_by_build_dir(&test_project.build_dir)
+                    .is_some()
+            );
+        }
+
+        // Second request should reuse cached session
+        let second_session = workspace_session
+            .get_component_session(test_project.build_dir.clone())
+            .await
+            .unwrap();
+
+        // Verify it's the same session (Arc comparison)
+        assert!(Arc::ptr_eq(&session, &second_session));
+    }
+
+    #[cfg(feature = "clangd-integration-tests")]
+    #[tokio::test]
+    async fn test_invalid_build_directory_fails() {
+        // Create empty workspace
+        let temp_dir = tempfile::tempdir().unwrap();
+        let empty_workspace = ProjectWorkspace::new(temp_dir.path().to_path_buf(), vec![], 0);
+
+        let clangd_path = crate::test_utils::get_test_clangd_path();
+        let workspace_session = WorkspaceSession::new(empty_workspace, clangd_path).unwrap();
+
+        // Request session for non-existent/invalid build directory
+        let invalid_dir = temp_dir.path().join("not_a_build_dir");
+        std::fs::create_dir_all(&invalid_dir).unwrap(); // Create directory but don't make it a build directory
+
+        let result = workspace_session.get_component_session(invalid_dir).await;
+
+        // Should fail as it's not a valid build directory
+        assert!(result.is_err(), "Should fail for invalid build directory");
+    }
+
+    #[cfg(feature = "clangd-integration-tests")]
+    #[tokio::test]
+    async fn test_existing_component_not_rediscovered() {
+        // Create test project and configure it
+        let test_project = TestProject::new().await.unwrap();
+        test_project.cmake_configure().await.unwrap();
+
+        // Scan the project to create workspace with existing component
+        let scanner = crate::project::ProjectScanner::with_default_providers();
+        let workspace = scanner
+            .scan_project(&test_project.project_root, 2, None)
+            .unwrap();
+
+        // Verify component is already in workspace
+        assert_eq!(workspace.component_count(), 1);
+        assert!(
+            workspace
+                .get_component_by_build_dir(&test_project.build_dir)
+                .is_some()
+        );
+
+        // Create workspace session with pre-populated workspace
+        let clangd_path = crate::test_utils::get_test_clangd_path();
+        let workspace_session = WorkspaceSession::new(workspace, clangd_path).unwrap();
+
+        // Request component session - should use existing component, not rediscover
+        let component_session = workspace_session
+            .get_component_session(test_project.build_dir.clone())
+            .await;
+
+        // Should succeed using existing component
+        assert!(
+            component_session.is_ok(),
+            "Should succeed with existing component"
+        );
+        let session = component_session.unwrap();
+        assert_eq!(session.build_dir(), &test_project.build_dir);
+
+        // Verify workspace still has exactly one component (not duplicated)
+        {
+            let workspace = workspace_session.get_workspace().lock().await;
+            assert_eq!(workspace.component_count(), 1);
         }
     }
 }

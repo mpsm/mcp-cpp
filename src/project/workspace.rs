@@ -79,4 +79,21 @@ impl ProjectWorkspace {
         types.dedup();
         types
     }
+
+    /// Add a new component to this workspace
+    ///
+    /// This method is used for dynamic component discovery when a build directory
+    /// is requested that wasn't found during initial workspace scanning.
+    ///
+    /// # Arguments
+    /// * `component` - The project component to add to the workspace
+    pub fn add_component(&mut self, component: ProjectComponent) {
+        // Verify we don't already have this component (by build directory)
+        if self
+            .get_component_by_build_dir(&component.build_dir_path)
+            .is_none()
+        {
+            self.components.push(component);
+        }
+    }
 }
