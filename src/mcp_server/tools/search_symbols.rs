@@ -67,14 +67,60 @@ pub struct FileProcessingResult {
 
 #[mcp_tool(
     name = "search_symbols",
-    description = "Advanced C++ symbol search using clangd LSP with project-aware filtering"
+    description = "Advanced C++ symbol search engine with intelligent dual-mode operation for comprehensive \
+                   codebase exploration. Leverages clangd LSP for semantic understanding and provides \
+                   both broad workspace discovery and precise file-specific analysis capabilities.
+
+                   🔍 DUAL SEARCH MODES:
+                   • Workspace Search (default): Fuzzy matching across entire codebase using clangd workspace symbols
+                   • Document Search (with files parameter): Comprehensive symbol enumeration within specific files
+                   • Smart mode selection based on parameters for optimal results
+
+                   📋 SYMBOL OVERVIEW CAPABILITY:
+                   • Use empty query (\"\") with files parameter to list ALL symbols in specified files
+                   • Perfect for getting complete symbol inventory of headers or source files
+                   • Ideal for API exploration and codebase familiarization
+                   • No search filtering - shows comprehensive symbol catalog
+
+                   🎯 INTELLIGENT FILTERING:
+                   • Symbol kinds: Class, Function, Method, Variable, Enum, Namespace, Constructor, Field, Interface, Struct
+                   • Project boundary detection (exclude external/system symbols by default)
+                   • Fuzzy matching with clangd's relevance ranking preserved
+                   • Configurable result limits with smart client-side application
+
+                   ⚡ PERFORMANCE & RELIABILITY:
+                   • Fixed 2000-symbol queries to clangd with client-side limiting for consistent ranking
+                   • Indexing progress tracking with configurable timeout control
+                   • Automatic build directory detection and validation
+                   • Graceful handling of large codebases with intelligent result capping
+
+                   🏗️ BUILD SYSTEM INTEGRATION:
+                   • Multi-provider support (CMake, Meson, extensible architecture)
+                   • Automatic compilation database discovery and validation
+                   • Custom build directory specification for multi-component projects
+                   • Project vs external symbol classification using compilation database analysis
+
+                   🎮 USAGE PATTERNS:
+                   • Discovery: search_symbols {\"query\": \"vector\", \"max_results\": 10}
+                   • Type filtering: search_symbols {\"query\": \"Process\", \"kinds\": [\"Class\", \"Struct\"]}
+                   • File overview: search_symbols {\"query\": \"\", \"files\": [\"include/api.h\"]}
+                   • External symbols: search_symbols {\"query\": \"std::\", \"include_external\": true}
+
+                   INPUT PARAMETERS:
+                   • query: Search string (use \"\" with files for complete symbol listing)
+                   • files: Optional file paths for document-specific search
+                   • kinds: Optional symbol type filtering (PascalCase names)
+                   • max_results: Result limit (default: 100, max: 1000)
+                   • include_external: Include system/library symbols (default: false)
+                   • build_directory: Custom build directory path
+                   • wait_timeout: Indexing completion timeout in seconds (default: 20s)"
 )]
 #[derive(Debug, serde::Serialize, serde::Deserialize, JsonSchema)]
 pub struct SearchSymbolsTool {
-    /// Search query using clangd's native syntax
+    /// Search query using clangd's native syntax. Use empty string ("") with files parameter to list all symbols in specified files for comprehensive symbol overview.
     pub query: String,
 
-    /// Optional symbol kinds to filter results. Use PascalCase names like "Class", "Function", "Method", "Variable", "Enum", etc.
+    /// Optional symbol kinds to filter results. Supported PascalCase names: "Class", "Function", "Method", "Variable", "Enum", "Namespace", "Constructor", "Field", "Interface", "Struct". Can specify multiple kinds for combined filtering.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub kinds: Option<Vec<String>>,
 

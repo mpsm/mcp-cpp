@@ -317,6 +317,25 @@ Advanced C++ symbol search with dual-mode operation:
 - **Result**: Predictable symbol counts, preserved clangd relevance ranking
 - **Testing**: 10 comprehensive unit tests added for all edge cases
 
+**Usage Examples:**
+
+```bash
+# Workspace search - find symbols across entire codebase
+search_symbols {"query": "vector", "max_results": 10}
+search_symbols {"query": "Math::factorial", "kinds": ["Function", "Method"]}
+
+# Document search - comprehensive symbol overview of specific files
+search_symbols {"query": "", "files": ["include/Math.hpp"], "max_results": 20}
+search_symbols {"query": "", "files": ["src/calculator.cpp"], "kinds": ["Function", "Class"]}
+
+# Type filtering - find specific symbol types
+search_symbols {"query": "Process", "kinds": ["Class", "Struct", "Interface"]}
+search_symbols {"query": "", "files": ["include/"], "kinds": ["Constructor", "Method"]}
+
+# External symbols - include system/library symbols
+search_symbols {"query": "std::", "include_external": true, "max_results": 5}
+```
+
 ### `analyze_symbol_context`
 
 Comprehensive C++ symbol analysis with automatic multi-dimensional context extraction:
