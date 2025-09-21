@@ -49,10 +49,18 @@ use crate::project::ProjectWorkspace;
                    • Development environment verification • CI/CD build matrix generation
                    • Global compilation database configuration analysis
 
-                   INPUT REQUIREMENTS:
-                   • No parameters required - returns complete project analysis
-                   • Uses ProjectWorkspace scanning results
-                   • Returns all discovered components and global configuration"
+                   INPUT PARAMETERS:
+                   • path (optional): Project root path to scan (triggers fresh scan if different)
+                   • depth (optional): Scan depth for component discovery (0-10 levels)
+                   • include_details (optional): Include detailed build options (default: false)
+
+                   OUTPUT MODES:
+                   • Short view (default): Essential info + build_options_count to prevent context exhaustion
+                   • Detailed view (include_details=true): All build options for debugging/analysis
+
+                   RECOMMENDED USAGE:
+                   • Use default for project overview and general development
+                   • Use include_details=true only for build configuration debugging"
 )]
 #[derive(Debug, ::serde::Deserialize, ::serde::Serialize, JsonSchema)]
 pub struct GetProjectDetailsTool {
@@ -76,6 +84,20 @@ pub struct GetProjectDetailsTool {
     /// but discover components in deeply nested directory structures.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub depth: Option<u32>,
+
+    /// Include detailed build options and configuration variables. DEFAULT: false.
+    ///
+    /// BEHAVIOR: When false (default), provides a short view with essential information
+    /// and optional parameter counts. When true, includes all CMake/Meson variables
+    /// and build configuration details.
+    ///
+    /// SHORT VIEW (false): Essential paths, build type, generator, parameter count
+    /// DETAILED VIEW (true): All build_options variables included
+    ///
+    /// RECOMMENDED: Use false for general project overview, true only when debugging
+    /// build configuration issues or when detailed variable information is needed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub include_details: Option<bool>,
 }
 
 impl GetProjectDetailsTool {
@@ -114,11 +136,19 @@ impl GetProjectDetailsTool {
 
         let effective_meta_project = fresh_scan.as_ref().unwrap_or(meta_project);
         let rescanned_fresh = fresh_scan.is_some();
+        let include_details = self.include_details.unwrap_or(false);
 
-        // Serialize ProjectWorkspace directly
-        let mut content = serde_json::to_value(effective_meta_project).map_err(|e| {
+        // Create appropriate view based on include_details flag
+        let view = if include_details {
+            effective_meta_project.get_full_view()
+        } else {
+            effective_meta_project.get_short_view()
+        };
+
+        // Serialize the view
+        let mut content = serde_json::to_value(&view).map_err(|e| {
             CallToolError::new(std::io::Error::other(format!(
-                "Failed to serialize project details: {e}"
+                "Failed to serialize project view: {e}"
             )))
         })?;
 

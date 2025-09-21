@@ -259,6 +259,11 @@ Examples:
         metavar="0-10",
         help="Scan depth for component discovery (triggers fresh scan if different from server default)"
     )
+    project_details_parser.add_argument(
+        "--include-details",
+        action="store_true",
+        help="Include detailed build options and configuration variables (default: false to prevent context window exhaustion)"
+    )
     
     return parser
 
@@ -327,6 +332,8 @@ def main():
                 arguments["path"] = args.path
             if hasattr(args, 'depth') and args.depth is not None:
                 arguments["depth"] = args.depth
+            if hasattr(args, 'include_details') and args.include_details:
+                arguments["include_details"] = True
             response = client.call_tool("get_project_details", arguments)
         
         # Output the response
