@@ -206,3 +206,187 @@ async fn test_index_persistence_across_session_restarts() {
         debug!("Phase 3: Index persistence verified - session can read existing index from disk");
     }
 }
+
+#[tokio::test]
+#[cfg(feature = "clangd-integration-tests")]
+async fn test_meson_indexing_progress_tracking() {
+    // Test project has exactly this many unique files in compilation database
+    // (5 entries total: main.cpp once, math.cpp twice, utils.cpp twice, but 3 unique files)
+    const EXPECTED_MESON_CDB_FILES: usize = 3;
+
+    let test_project = crate::test_utils::integration::TestProject::new_meson()
+        .await
+        .unwrap();
+    test_project.configure().await.unwrap();
+
+    let scanner = ProjectScanner::with_default_providers();
+    let workspace = scanner
+        .scan_project(&test_project.project_root, 2, None)
+        .unwrap();
+
+    let clangd_path = crate::test_utils::get_test_clangd_path();
+    let workspace_session = WorkspaceSession::new(workspace, clangd_path).unwrap();
+
+    // Get component session first to create the monitor
+    let component_session = workspace_session
+        .get_component_session(test_project.build_dir.clone())
+        .await
+        .unwrap();
+
+    // Get initial coverage (should be 0)
+    let state = component_session.get_index_state().await;
+    assert_eq!(state.coverage(), 0.0);
+
+    let main_cpp_path = test_project.project_root.join("src/main.cpp");
+    component_session
+        .ensure_file_ready(&main_cpp_path)
+        .await
+        .unwrap();
+
+    // Wait for indexing with timeout
+    tokio::time::timeout(DEFAULT_INDEXING_TIMEOUT, async {
+        component_session
+            .wait_for_indexing_completion(DEFAULT_INDEXING_TIMEOUT)
+            .await
+    })
+    .await
+    .expect("Indexing timed out")
+    .expect("Indexing failed");
+
+    // Check final coverage
+    let final_state = component_session.get_index_state().await;
+    let coverage = final_state.coverage();
+    assert!(
+        (coverage - 1.0).abs() < 0.001,
+        "All compilation database files should be indexed, expected coverage = 1.0, got: {}",
+        coverage
+    );
+
+    // Verify file counts match expected Meson project
+    assert_eq!(
+        final_state.total_cdb_files, EXPECTED_MESON_CDB_FILES,
+        "Meson test project should have exactly {} CDB files",
+        EXPECTED_MESON_CDB_FILES
+    );
+    assert_eq!(
+        final_state.indexed_cdb_files, EXPECTED_MESON_CDB_FILES,
+        "All {} CDB files should be indexed after completion",
+        EXPECTED_MESON_CDB_FILES
+    );
+    assert_eq!(
+        final_state.state,
+        ComponentIndexingState::Completed,
+        "Component should be in Completed state"
+    );
+}
+
+#[tokio::test]
+#[cfg(feature = "clangd-integration-tests")]
+async fn test_meson_index_persistence_across_session_restarts() {
+    // Test project has exactly this many unique files in compilation database
+    // (5 entries total: main.cpp once, math.cpp twice, utils.cpp twice, but 3 unique files)
+    const EXPECTED_MESON_CDB_FILES: usize = 3;
+
+    let test_project = crate::test_utils::integration::TestProject::new_meson()
+        .await
+        .unwrap();
+    test_project.configure().await.unwrap();
+
+    let scanner = ProjectScanner::with_default_providers();
+    let workspace = scanner
+        .scan_project(&test_project.project_root, 2, None)
+        .unwrap();
+
+    let clangd_path = crate::test_utils::get_test_clangd_path();
+    let workspace_session = WorkspaceSession::new(workspace.clone(), clangd_path.clone()).unwrap();
+
+    // Phase 1: Initial indexing - create session and wait for completion
+    debug!("Phase 1: Starting initial Meson indexing");
+    {
+        let _component_session = workspace_session
+            .get_component_session(test_project.build_dir.clone())
+            .await
+            .unwrap();
+
+        // Wait for initial indexing completion
+        tokio::time::timeout(
+            DEFAULT_INDEXING_TIMEOUT,
+            _component_session.wait_for_indexing_completion(DEFAULT_INDEXING_TIMEOUT),
+        )
+        .await
+        .expect("Initial Meson indexing timed out")
+        .expect("Initial Meson indexing failed");
+
+        debug!("Phase 1: Initial Meson indexing completed");
+
+        // Verify indexing is complete with explicit state checks
+        let component_state = _component_session.get_index_state().await;
+
+        assert_eq!(
+            component_state.total_cdb_files, EXPECTED_MESON_CDB_FILES,
+            "Meson test project should have exactly {} CDB files",
+            EXPECTED_MESON_CDB_FILES
+        );
+        assert_eq!(
+            component_state.indexed_cdb_files, EXPECTED_MESON_CDB_FILES,
+            "All {} CDB files should be indexed after completion",
+            EXPECTED_MESON_CDB_FILES
+        );
+        assert_eq!(
+            component_state.state,
+            ComponentIndexingState::Completed,
+            "Component should be in Completed state"
+        );
+    }
+
+    // Phase 2: Cleanup session completely
+    debug!("Phase 2: Cleaning up Meson session and index monitor");
+
+    // Force cleanup of the session by dropping workspace session and recreating it
+    // This simulates complete cleanup including index monitors
+    drop(workspace_session);
+
+    // Recreate workspace session from scratch
+    let workspace_session = WorkspaceSession::new(workspace, clangd_path).unwrap();
+
+    // Phase 3: Restart session and verify index state persistence
+    debug!("Phase 3: Restarting Meson session and verifying index persistence");
+    {
+        let _component_session = workspace_session
+            .get_component_session(test_project.build_dir.clone())
+            .await
+            .unwrap();
+
+        tokio::time::timeout(
+            DEFAULT_INDEXING_TIMEOUT,
+            _component_session.wait_for_indexing_completion(DEFAULT_INDEXING_TIMEOUT),
+        )
+        .await
+        .expect("Second Meson indexing timed out")
+        .expect("Second Meson indexing failed");
+
+        let component_state = _component_session.get_index_state().await;
+
+        debug!("Meson component state after restart: {:?}", component_state);
+
+        // Explicit deterministic assertions
+        assert_eq!(
+            component_state.state,
+            ComponentIndexingState::Completed,
+            "Component should be Completed state from persisted index"
+        );
+        assert_eq!(
+            component_state.total_cdb_files, EXPECTED_MESON_CDB_FILES,
+            "Total CDB files should be detected from disk"
+        );
+        assert_eq!(
+            component_state.indexed_cdb_files, EXPECTED_MESON_CDB_FILES,
+            "All {} CDB files should be detected as indexed from disk",
+            EXPECTED_MESON_CDB_FILES
+        );
+
+        debug!(
+            "Phase 3: Meson index persistence verified - session can read existing index from disk"
+        );
+    }
+}

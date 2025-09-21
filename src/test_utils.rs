@@ -206,7 +206,10 @@ pub mod integration {
     #[derive(Debug, Clone, Copy, PartialEq)]
     pub enum ProjectType {
         CMake,
-        #[cfg(feature = "project-integration-tests")]
+        #[cfg(any(
+            feature = "project-integration-tests",
+            feature = "clangd-integration-tests"
+        ))]
         Meson,
     }
 
@@ -233,6 +236,26 @@ pub mod integration {
                 project_root,
                 build_dir,
                 project_type: ProjectType::CMake,
+            })
+        }
+
+        /// Create a new standalone Meson test project
+        #[cfg(any(
+            feature = "project-integration-tests",
+            feature = "clangd-integration-tests"
+        ))]
+        pub async fn new_meson() -> Result<Self, std::io::Error> {
+            // Create temp directory (auto-cleanup on drop)
+            let temp_dir = TempDir::new()?;
+            let project_root = temp_dir.path().to_path_buf();
+            let build_dir =
+                Self::init_project(&project_root, "test/test-meson-project", "builddir").await?;
+
+            Ok(TestProject {
+                _temp_dir: Some(temp_dir),
+                project_root,
+                build_dir,
+                project_type: ProjectType::Meson,
             })
         }
 
@@ -288,11 +311,20 @@ pub mod integration {
         }
 
         /// Configure the project using the appropriate build system
-        #[cfg_attr(not(feature = "project-integration-tests"), allow(dead_code))]
+        #[cfg_attr(
+            not(any(
+                feature = "project-integration-tests",
+                feature = "clangd-integration-tests"
+            )),
+            allow(dead_code)
+        )]
         pub async fn configure(&self) -> Result<(), std::io::Error> {
             match self.project_type {
                 ProjectType::CMake => self.cmake_configure().await,
-                #[cfg(feature = "project-integration-tests")]
+                #[cfg(any(
+                    feature = "project-integration-tests",
+                    feature = "clangd-integration-tests"
+                ))]
                 ProjectType::Meson => self.meson_configure().await,
             }
         }
@@ -324,7 +356,10 @@ pub mod integration {
         }
 
         /// Configure with meson to generate compile_commands.json
-        #[cfg(feature = "project-integration-tests")]
+        #[cfg(any(
+            feature = "project-integration-tests",
+            feature = "clangd-integration-tests"
+        ))]
         pub async fn meson_configure(&self) -> Result<(), std::io::Error> {
             use tokio::process::Command;
 

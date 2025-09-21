@@ -19,6 +19,8 @@ pub enum ComponentIndexError {
     IndexDirectoryAccess { path: String },
     #[error("File not found in index: {path}")]
     FileNotFound { path: String },
+    #[error("Path canonicalization failed for {path}: {error}")]
+    PathCanonicalization { path: String, error: String },
 }
 
 /// File indexing states
@@ -115,19 +117,25 @@ impl ComponentIndex {
         let format_version = clangd_version.index_format_version();
         let mut file_to_index = HashMap::new();
         let mut file_states = HashMap::new();
-        let mut cdb_files = HashSet::new();
 
-        // Build mapping for each file in the compilation database
-        for entry in compilation_db.entries() {
-            let source_file = &entry.file;
-            cdb_files.insert(source_file.to_path_buf());
+        // Get canonical source files using the single source of truth for path canonicalization
+        let canonical_files = compilation_db.canonical_source_files().map_err(|e| {
+            ComponentIndexError::PathCanonicalization {
+                path: "compilation database".to_string(),
+                error: e.to_string(),
+            }
+        })?;
 
-            // Compute hash for the source file path
-            let file_path_str = source_file.to_string_lossy();
+        let cdb_files: HashSet<PathBuf> = canonical_files.iter().cloned().collect();
+
+        // Build mapping for each canonical file
+        for canonical_source_file in canonical_files {
+            // Compute hash for the canonical source file path
+            let file_path_str = canonical_source_file.to_string_lossy();
             let hash = compute_file_hash(&file_path_str, format_version);
 
-            // Extract basename from path
-            let basename = source_file
+            // Extract basename from canonical path
+            let basename = canonical_source_file
                 .file_name()
                 .and_then(|name| name.to_str())
                 .unwrap_or("unknown");
@@ -136,11 +144,11 @@ impl ComponentIndex {
             let index_filename = format!("{basename}.{hash:016X}.idx");
             let index_path = index_dir.join(&index_filename);
 
-            // Add mapping
-            file_to_index.insert(source_file.to_path_buf(), index_path);
+            // Add mapping using canonical path as key
+            file_to_index.insert(canonical_source_file.clone(), index_path);
 
             // Initialize all files as pending - ComponentIndexMonitor will update states based on disk
-            file_states.insert(source_file.to_path_buf(), FileIndexState::Pending);
+            file_states.insert(canonical_source_file, FileIndexState::Pending);
         }
 
         Ok(ComponentIndex {

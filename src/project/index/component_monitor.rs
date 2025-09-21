@@ -14,6 +14,7 @@ use crate::clangd::version::ClangdVersion;
 use crate::project::index::reader::IndexReaderTrait;
 use crate::project::index::trigger::IndexTrigger;
 use crate::project::{CompilationDatabase, ProjectError};
+use crate::project::compilation_database::PathMappings;
 
 /// Result of validating a single index entry
 enum IndexValidationResult {
@@ -115,6 +116,10 @@ struct IndexMonitorState {
 
     /// Last updated timestamp
     last_updated: std::time::SystemTime,
+
+    /// Bidirectional path mappings for efficient path lookup
+    /// (original_path -> canonical_path, canonical_path -> original_path)
+    path_mappings: PathMappings,
 }
 
 /// Manages all index-related state and operations for a single build directory
@@ -235,6 +240,9 @@ impl ComponentIndexMonitor {
         // Create component index from compilation database (test version)
         let component_index = ComponentIndex::new_for_test(compilation_db, clangd_version);
 
+        // Get path mappings for testing (use empty mappings for test)
+        let path_mappings = (std::collections::HashMap::new(), std::collections::HashMap::new());
+
         // Create completion latch
         let completion_latch = IndexLatch::new();
 
@@ -245,6 +253,7 @@ impl ComponentIndexMonitor {
             completion_latch,
             indexing_start_time: None,
             last_updated: std::time::SystemTime::now(),
+            path_mappings,
         };
 
         debug!(
@@ -275,6 +284,15 @@ impl ComponentIndexMonitor {
             ))
         })?;
 
+        // Get path mappings for efficient lookup without repeated canonicalization
+        let path_mappings = compilation_db.path_mappings().map_err(|e| {
+            ProjectError::SessionCreation(format!(
+                "Failed to create path mappings for {}: {}",
+                build_directory.display(),
+                e
+            ))
+        })?;
+
         // Create completion latch
         let completion_latch = IndexLatch::new();
 
@@ -285,6 +303,7 @@ impl ComponentIndexMonitor {
             completion_latch,
             indexing_start_time: None,
             last_updated: std::time::SystemTime::now(),
+            path_mappings,
         })
     }
 
@@ -378,7 +397,34 @@ impl ComponentIndexMonitor {
         };
 
         debug!("File indexing started: {:?}", path);
-        state.component_index.mark_file_in_progress(&path);
+
+        // Canonicalize path for consistent HashMap lookup
+        let canonical_path = self.canonicalize_path_for_lookup(&path, &state.path_mappings);
+        state.component_index.mark_file_in_progress(&canonical_path);
+    }
+
+    /// Convert a path from progress events to canonical form using precomputed mappings
+    /// This replaces filesystem canonicalization with efficient HashMap lookup
+    fn canonicalize_path_for_lookup(&self, path: &Path, path_mappings: &PathMappings) -> PathBuf {
+        let (original_to_canonical, _canonical_to_original) = path_mappings;
+
+        // First try direct lookup for exact match
+        if let Some(canonical) = original_to_canonical.get(path) {
+            return canonical.clone();
+        }
+
+        // If path is relative, resolve it against the build directory (where clangd runs)
+        // and try lookup again
+        if path.is_relative() {
+            let resolved_path = self.build_directory.join(path);
+            if let Some(canonical) = original_to_canonical.get(&resolved_path) {
+                return canonical.clone();
+            }
+        }
+
+        // Fallback: return the path as-is if no mapping found
+        // This handles edge cases where clangd emits paths not in the compilation database
+        path.to_path_buf()
     }
 
     /// Handle file indexing completed event
@@ -398,7 +444,10 @@ impl ComponentIndexMonitor {
             "File indexing completed: {:?} ({} symbols, {} refs)",
             path, symbols, refs
         );
-        state.component_index.mark_file_indexed(&path);
+
+        // Canonicalize path for consistent HashMap lookup
+        let canonical_path = self.canonicalize_path_for_lookup(&path, &state.path_mappings);
+        state.component_index.mark_file_indexed(&canonical_path);
 
         debug!(
             "CDB file indexed: {:?} ({}/{})",
@@ -424,7 +473,9 @@ impl ComponentIndexMonitor {
         debug!("File AST indexed: {:?}", path);
 
         // Mark this file as indexed since AST is now available
-        state.component_index.mark_file_indexed(&path);
+        // Canonicalize path for consistent HashMap lookup
+        let canonical_path = self.canonicalize_path_for_lookup(&path, &state.path_mappings);
+        state.component_index.mark_file_indexed(&canonical_path);
 
         debug!(
             "AST indexed - marking file as indexed: {:?} ({}/{})",
@@ -487,9 +538,11 @@ impl ComponentIndexMonitor {
         debug!("File AST failed: {:?}", path);
 
         // Mark this file as failed since AST build failed
+        // Canonicalize path for consistent HashMap lookup
+        let canonical_path = self.canonicalize_path_for_lookup(&path, &state.path_mappings);
         state
             .component_index
-            .mark_file_failed(&path, "AST build failed".to_string());
+            .mark_file_failed(&canonical_path, "AST build failed".to_string());
 
         debug!(
             "AST failed - marking file as failed: {:?} ({}/{})",
@@ -1038,10 +1091,17 @@ impl ComponentIndexMonitor {
         compilation_db: Arc<CompilationDatabase>,
     ) -> Result<(), ProjectError> {
         if self.index_trigger.is_some() {
-            let source_files = compilation_db.source_files();
-            if let Some(&first_file) = source_files.first() {
+            // Use canonical files from the single source of truth
+            let canonical_files = compilation_db.canonical_source_files().map_err(|e| {
+                ProjectError::SessionCreation(format!(
+                    "Failed to get canonical source files for trigger: {}",
+                    e
+                ))
+            })?;
+
+            if let Some(first_file) = canonical_files.first() {
                 debug!(
-                    "Triggering initial indexing with first source file: {:?}",
+                    "Triggering initial indexing with first canonical source file: {:?}",
                     first_file
                 );
                 self.trigger_indexing(first_file).await?;
