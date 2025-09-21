@@ -77,6 +77,44 @@ impl MesonProvider {
         }
     }
 
+    /// Parse meson-info/intro-buildsystem_files.json to get source directory
+    ///
+    /// This extracts the source directory from the path to meson.build file,
+    /// which is more reliable than using parent directory for out-of-source builds.
+    fn parse_meson_buildsystem_files(
+        &self,
+        meson_info_dir: &Path,
+    ) -> Result<Option<PathBuf>, ProjectError> {
+        let buildsystem_files = meson_info_dir.join("intro-buildsystem_files.json");
+
+        if !buildsystem_files.exists() {
+            return Ok(None);
+        }
+
+        let content = fs::read_to_string(&buildsystem_files).map_err(ProjectError::Io)?;
+
+        let files: serde_json::Value =
+            serde_json::from_str(&content).map_err(|e| ProjectError::ParseError {
+                reason: format!("Failed to parse intro-buildsystem_files.json: {e}"),
+            })?;
+
+        // Extract source directory from the first meson.build file path
+        if let Some(files_array) = files.as_array() {
+            for file_value in files_array {
+                if let Some(file_path) = file_value.as_str() {
+                    let path = PathBuf::from(file_path);
+                    if path.file_name().and_then(|n| n.to_str()) == Some("meson.build")
+                        && let Some(parent) = path.parent()
+                    {
+                        return Ok(Some(parent.to_path_buf()));
+                    }
+                }
+            }
+        }
+
+        Ok(None)
+    }
+
     /// Find compilation database path in build directory
     fn find_compilation_database(&self, build_dir: &Path) -> Option<PathBuf> {
         let compile_commands = build_dir.join("compile_commands.json");
@@ -119,11 +157,15 @@ impl ProjectComponentProvider for MesonProvider {
         // Extract build options from meson-info
         let build_options = self.extract_build_options(&meson_info_dir)?;
 
-        // Determine source root
+        // Determine source root with multiple fallback strategies
         let source_root = if let Some(source_dir) = self.parse_meson_projectinfo(&meson_info_dir)? {
+            // First try: source_dir from intro-projectinfo.json
+            source_dir
+        } else if let Some(source_dir) = self.parse_meson_buildsystem_files(&meson_info_dir)? {
+            // Second try: extract source directory from meson.build path in intro-buildsystem_files.json
             source_dir
         } else {
-            // Fallback: assume source is parent of build directory
+            // Final fallback: assume source is parent of build directory
             path.parent()
                 .ok_or_else(|| ProjectError::SourceRootNotFound {
                     path: path.to_string_lossy().to_string(),
