@@ -78,9 +78,11 @@ pub struct FileProcessingResult {
 
                    📋 SYMBOL OVERVIEW CAPABILITY:
                    • Use empty query (\"\") with files parameter to list ALL symbols in specified files
+                   • Use empty query (\"\") without files for workspace-wide symbol discovery (subject to clangd heuristics)
                    • Perfect for getting complete symbol inventory of headers or source files
                    • Ideal for API exploration and codebase familiarization
                    • No search filtering - shows comprehensive symbol catalog
+                   • ⚠️ Note: Workspace-wide empty queries may not return all symbols due to clangd's internal filtering
 
                    🎯 INTELLIGENT FILTERING:
                    • Symbol kinds: Class, Function, Method, Variable, Enum, Namespace, Constructor, Field, Interface, Struct
@@ -104,10 +106,11 @@ pub struct FileProcessingResult {
                    • Discovery: search_symbols {\"query\": \"vector\", \"max_results\": 10}
                    • Type filtering: search_symbols {\"query\": \"Process\", \"kinds\": [\"Class\", \"Struct\"]}
                    • File overview: search_symbols {\"query\": \"\", \"files\": [\"include/api.h\"]}
+                   • Workspace overview: search_symbols {\"query\": \"\", \"max_results\": 500} (limited by clangd)
                    • External symbols: search_symbols {\"query\": \"std::\", \"include_external\": true}
 
                    INPUT PARAMETERS:
-                   • query: Search string (use \"\" with files for complete symbol listing)
+                   • query: Search string (use \"\" for symbol overview - with files for complete listing, without files for workspace discovery)
                    • files: Optional file paths for document-specific search
                    • kinds: Optional symbol type filtering (PascalCase names)
                    • max_results: Result limit (default: 100, max: 1000)
@@ -117,7 +120,7 @@ pub struct FileProcessingResult {
 )]
 #[derive(Debug, serde::Serialize, serde::Deserialize, JsonSchema)]
 pub struct SearchSymbolsTool {
-    /// Search query using clangd's native syntax. Use empty string ("") with files parameter to list all symbols in specified files for comprehensive symbol overview.
+    /// Search query using clangd's native syntax. Use empty string ("") for symbol overview: with files parameter for complete file-specific listing, or without files for workspace-wide discovery (subject to clangd heuristics - may not return all symbols).
     pub query: String,
 
     /// Optional symbol kinds to filter results. Supported PascalCase names: "Class", "Function", "Method", "Variable", "Enum", "Namespace", "Constructor", "Field", "Interface", "Struct". Can specify multiple kinds for combined filtering.
