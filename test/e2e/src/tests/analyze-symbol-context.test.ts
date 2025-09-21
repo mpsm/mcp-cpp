@@ -403,7 +403,7 @@ describe('Analyze Symbol Context Tool', () => {
       const response: AnalyzeSymbolResponse = parseResponse(responseText);
 
       if (response.isPlainTextError) {
-        expect(response.message).toContain('not found');
+        expect(response.message).toContain('Path does not exist');
       } else if (response.success === false) {
         expect(response.error).toBeDefined();
       }
