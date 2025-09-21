@@ -23,7 +23,7 @@ use rust_mcp_sdk::{
     error::SdkResult,
     mcp_server::{ServerRuntime, server_runtime},
 };
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use tracing::info;
 
 /// CLI arguments for the MCP C++ server
@@ -33,10 +33,6 @@ struct Args {
     /// Project root directory to scan for build configurations (defaults to current directory)
     #[arg(long, value_name = "DIR")]
     root: Option<PathBuf>,
-
-    /// Global compilation database path (overrides per-component compilation databases)
-    #[arg(long, short = 'c', value_name = "FILE")]
-    compilation_database: Option<PathBuf>,
 
     /// Path to clangd executable (overrides CLANGD_PATH env var)
     #[arg(long, value_name = "PATH")]
@@ -51,33 +47,6 @@ struct Args {
     log_file: Option<PathBuf>,
 }
 
-/// Detect global compilation database path from CLI args and auto-detection
-fn detect_global_compilation_database_from_args(
-    project_root: &Path,
-    compilation_database_arg: &Option<PathBuf>,
-) -> Option<PathBuf> {
-    if let Some(explicit_path) = compilation_database_arg {
-        // User provided explicit override - validate it exists
-        if explicit_path.exists() && explicit_path.is_file() {
-            Some(explicit_path.clone())
-        } else {
-            eprintln!(
-                "Error: Compilation database not found: {}",
-                explicit_path.display()
-            );
-            std::process::exit(1);
-        }
-    } else {
-        // Auto-detect: check for compile_commands.json in project root
-        let auto_detect_path = project_root.join("compile_commands.json");
-        if auto_detect_path.exists() && auto_detect_path.is_file() {
-            Some(auto_detect_path)
-        } else {
-            None
-        }
-    }
-}
-
 /// Resolve clangd path from CLI args and environment
 fn resolve_clangd_path(clangd_path_arg: Option<String>) -> String {
     // Priority: CLI arg > CLANGD_PATH env var > "clangd" default
@@ -87,10 +56,7 @@ fn resolve_clangd_path(clangd_path_arg: Option<String>) -> String {
 }
 
 /// Create ProjectWorkspace with all project setup logic centralized
-fn create_project_workspace(
-    project_root: PathBuf,
-    global_compilation_db: Option<PathBuf>,
-) -> ProjectWorkspace {
+fn create_project_workspace(project_root: PathBuf) -> ProjectWorkspace {
     info!(
         "Scanning project root for build configurations: {} (depth: 3)",
         project_root.display()
@@ -100,7 +66,7 @@ fn create_project_workspace(
     let scanner = ProjectScanner::with_default_providers();
 
     // Scan the project root with depth 3
-    let mut project_workspace = match scanner.scan_project(&project_root, 3, None) {
+    match scanner.scan_project(&project_root, 3, None) {
         Ok(project_workspace) => {
             info!(
                 "Successfully discovered {} components across {} providers: {:?}",
@@ -119,21 +85,7 @@ fn create_project_workspace(
             // Create empty ProjectWorkspace as fallback
             ProjectWorkspace::new(project_root, Vec::new(), 3)
         }
-    };
-
-    // Apply global compilation database if provided
-    if let Some(global_path) = global_compilation_db {
-        info!(
-            "Using global compilation database: {}",
-            global_path.display()
-        );
-        project_workspace.global_compilation_database = Some(
-            crate::project::CompilationDatabase::new(global_path)
-                .expect("Failed to load global compilation database"),
-        );
     }
-
-    project_workspace
 }
 
 #[tokio::main]
@@ -144,7 +96,6 @@ async fn main() -> SdkResult<()> {
     let log_level = args.log_level.clone();
     let log_file = args.log_file.clone();
     let root_arg = args.root.clone();
-    let compilation_database_arg = args.compilation_database.clone();
 
     // Initialize logging with configuration from env vars and CLI args
     let log_config = LogConfig::from_env().with_overrides(log_level, log_file);
@@ -162,12 +113,8 @@ async fn main() -> SdkResult<()> {
         })
     });
 
-    // Detect global compilation database
-    let global_compilation_db =
-        detect_global_compilation_database_from_args(&project_root, &compilation_database_arg);
-
     // Create ProjectWorkspace with all project setup
-    let project_workspace = create_project_workspace(project_root, global_compilation_db);
+    let project_workspace = create_project_workspace(project_root);
 
     info!(
         "Starting C++ MCP Server with project root: {}",
