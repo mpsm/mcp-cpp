@@ -121,11 +121,11 @@ impl From<AnalyzerError> for CallToolError {
                    • symbol: Required string - the symbol name to analyze
                    • build_directory: Optional - specific build directory containing compile_commands.json
                    • max_examples: Optional number - limits the number of usage examples (unlimited by default)
-                   
-                   FUTURE PARAMETERS (not yet implemented):
-                   • location: Optional - for disambiguating overloaded/template symbols
-                   • include_inheritance: Optional boolean - enables class hierarchy analysis
-                   • include_call_hierarchy: Optional boolean - enables function call analysis"
+                   • location_hint: Optional string - location hint for disambiguating overloaded symbols (format: \"/path/file.cpp:line:column\")
+                   • wait_timeout: Optional number - timeout for indexing completion in seconds (default: 20s, 0 = no wait)
+
+                   AUTOMATIC ANALYSIS (no flags required):
+                   Inheritance hierarchy, call relationships, and usage patterns are automatically included when applicable based on symbol type."
 )]
 #[derive(Debug, ::serde::Serialize, ::serde::Deserialize, JsonSchema)]
 pub struct AnalyzeSymbolContextTool {

@@ -87,10 +87,22 @@ Add to your Claude Desktop configuration file (`.mcp.json`):
 
 ### Basic Workflow
 
-1. **Discover Build Configurations**
+1. **Get Project Details**
 
    ```json
-   { "name": "list_build_dirs" }
+   { "name": "get_project_details" }
+   ```
+
+   With custom scan parameters:
+
+   ```json
+   {
+     "name": "get_project_details",
+     "arguments": {
+       "path": "/path/to/project",
+       "depth": 5
+     }
+   }
    ```
 
 2. **Search C++ Symbols**
@@ -102,14 +114,16 @@ Add to your Claude Desktop configuration file (`.mcp.json`):
    }
    ```
 
-   With custom build directory:
+   File-specific search with custom build directory:
 
    ```json
    {
      "name": "search_symbols",
      "arguments": {
        "query": "MyClass",
-       "build_directory": "build-debug"
+       "files": ["include/MyClass.hpp"],
+       "build_directory": "build-debug",
+       "wait_timeout": 30
      }
    }
    ```
@@ -121,13 +135,12 @@ Add to your Claude Desktop configuration file (`.mcp.json`):
      "name": "analyze_symbol_context",
      "arguments": {
        "symbol": "MyClass::process",
-       "include_inheritance": true,
-       "include_call_hierarchy": true
+       "max_examples": 5
      }
    }
    ```
 
-   With custom build directory:
+   With location hint for disambiguation:
 
    ```json
    {
@@ -135,7 +148,8 @@ Add to your Claude Desktop configuration file (`.mcp.json`):
      "arguments": {
        "symbol": "factorial",
        "build_directory": "/path/to/build",
-       "include_usage_patterns": true
+       "location_hint": "/path/to/file.cpp:42:15",
+       "wait_timeout": 0
      }
    }
    ```
@@ -166,42 +180,53 @@ Add to your Claude Desktop configuration file (`.mcp.json`):
 
 ### C++ Analysis Tools
 
-#### `list_build_dirs`
+#### `get_project_details`
 
-**Purpose**: Dynamic CMake build environment discovery with multi-configuration support  
+**Purpose**: Multi-provider build system analysis and project workspace discovery
 **Input**:
 
-- `target_dir` (optional): Specific build directory to analyze or switch to
+- `path` (optional): Project root path to scan (triggers fresh scan if different from server default)
+- `depth` (optional): Scan depth for component discovery (0-10 levels, triggers fresh scan if different)
 
-**Output**: Complete build environment analysis including compiler settings, available configurations, and compilation database status
+**Output**: Complete project analysis including build configurations, components, compilation database status, and multi-provider discovery (CMake, Meson, etc.)
 
 #### `search_symbols`
 
-**Purpose**: C++ symbol search with project boundary detection and intelligent filtering  
+**Purpose**: Advanced C++ symbol search with dual-mode operation and intelligent filtering
 **Input**:
 
-- `query` (required): Symbol name, pattern, or qualified name
-- `kinds` (optional): C++ symbol types (class, function, variable, namespace, etc.)
-- `files` (optional): Limit search to specific files or directories
-- `max_results` (optional): Result limit (1-1000, default 100)
+- `query` (required): Symbol name, pattern, or qualified name (empty string allowed only with `files` parameter)
+- `kinds` (optional): C++ symbol types (Class, Function, Method, Variable, etc. - use PascalCase)
+- `files` (optional): Limit search to specific files (enables document symbol mode for comprehensive results)
+- `max_results` (optional): Result limit (1-1000, default 100, applied client-side preserving clangd ranking)
 - `include_external` (optional): Include system headers and third-party libraries (default false)
+- `build_directory` (optional): Specify build directory path containing compile_commands.json
+- `wait_timeout` (optional): Timeout for indexing completion in seconds (default 20s, 0 = no wait)
 
-**Output**: Ranked symbol results with project/external classification and context information
+**Search Modes**:
+- **Workspace Search** (no `files`): Uses clangd workspace symbols with fuzzy matching (may be incomplete due to clangd heuristics)
+- **Document Search** (with `files`): Uses document symbols for predictable, comprehensive results within specified files
+
+**Output**: Ranked symbol results with project/external classification, search metadata, and optional indexing status
 
 #### `analyze_symbol_context`
 
-**Purpose**: Comprehensive C++ symbol analysis with inheritance and call hierarchy support  
+**Purpose**: Comprehensive C++ symbol analysis with automatic multi-dimensional context extraction
 **Input**:
 
-- `symbol` (required): C++ symbol name (supports qualified names and operators)
-- `location` (optional): Specific location for overload disambiguation
-- `include_usage_patterns` (optional): Enable usage statistics and examples
-- `include_inheritance` (optional): Include class hierarchy analysis
-- `include_call_hierarchy` (optional): Include function call relationships
-- `max_usage_examples` (optional): Limit usage examples
-- `max_call_depth` (optional): Call hierarchy traversal depth
+- `symbol` (required): C++ symbol name (supports simple names, qualified names like 'std::vector', global scope like '::main')
+- `build_directory` (optional): Specify build directory path containing compile_commands.json
+- `max_examples` (optional): Maximum number of usage examples to include (unlimited by default)
+- `location_hint` (optional): Location hint for disambiguating overloaded symbols (format: "/path/file.cpp:line:column" with 1-based coordinates)
+- `wait_timeout` (optional): Timeout for indexing completion in seconds (default 20s, 0 = no wait)
 
-**Output**: Complete symbol context including definition, inheritance relationships, and usage patterns
+**Automatic Analysis** (always included when applicable):
+- Usage examples from code references
+- Type hierarchy analysis for classes/structs/interfaces
+- Call hierarchy analysis for functions/methods/constructors
+- Class member enumeration for structural types
+
+**Output**: Complete symbol context including definition, type information, usage examples, inheritance relationships, call patterns, and member details
 
 ## Design Insights & Limitations
 

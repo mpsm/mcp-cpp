@@ -160,9 +160,10 @@ python3 /path/to/mcp-cpp/tools/mcp-cli.py [COMMAND] [OPTIONS]
 3. **Deep Symbol Analysis:**
 
    ```bash
-   # Comprehensive symbol analysis
-   python3 tools/mcp-cli.py analyze-symbol "Math::factorial" --include-usage-patterns
-   python3 tools/mcp-cli.py analyze-symbol "MyClass" --include-inheritance --include-call-hierarchy
+   # Comprehensive symbol analysis (automatic analysis based on symbol type)
+   python3 tools/mcp-cli.py analyze-symbol "Math::factorial" --max-examples 5
+   python3 tools/mcp-cli.py analyze-symbol "MyClass" --location-hint "/path/file.cpp:42:15"
+   python3 tools/mcp-cli.py analyze-symbol "factorial" --wait-timeout 0 --no-code
    ```
 
 4. **Tool Discovery:**
@@ -294,17 +295,20 @@ Comprehensive multi-provider project analysis including:
 - **Project Structure Mapping**: Build directories, source roots, and provider type identification
 - **Workspace Overview**: Project name, root directory, component count, and discovery metadata
 - **LSP Integration Assessment**: Compatibility validation across all discovered build systems
+- **Fresh Scan Support**: Optional `path` and `depth` parameters trigger fresh scans when different from cached values
 
 ### `search_symbols` - **FIXED Result Limiting Architecture**
 
-C++ symbol search with intelligent filtering:
+Advanced C++ symbol search with dual-mode operation:
 
-- Fuzzy matching across entire codebase using clangd workspace symbols
+- **Workspace Search Mode** (default): Fuzzy matching across entire codebase using clangd workspace symbols (may be incomplete due to clangd heuristics)
+- **Document Search Mode** (with `files` parameter): Comprehensive symbol search within specific files using document symbols (predictable results)
 - Project boundary detection (project vs external/system symbols)
-- Symbol kind filtering (class, function, variable, etc.)
-- File-specific search using document symbols
-- **FIXED: Proper result limiting** - clangd queried with 2000 limit, user max_results applied client-side
+- Symbol kind filtering (Class, Function, Method, Variable, etc. - PascalCase)
+- **FIXED: Proper result limiting** - clangd queried with 2000 limit, user max_results applied client-side preserving ranking
 - **Build directory parameter support**: Specify custom build directory or use auto-detection
+- **Indexing timeout control**: `wait_timeout` parameter (default 20s, 0 = no wait)
+- **Empty query support**: Allowed only with `files` parameter for comprehensive file symbol listing
 
 **Critical Fix Applied:**
 
@@ -315,17 +319,20 @@ C++ symbol search with intelligent filtering:
 
 ### `analyze_symbol_context`
 
-Deep symbol analysis for comprehensive understanding:
+Comprehensive C++ symbol analysis with automatic multi-dimensional context extraction:
 
-- Symbol definition and type information extraction
-- Class inheritance hierarchy analysis
-- Function call hierarchy mapping (incoming/outgoing calls)
-- Usage pattern analysis with concrete code examples
-- Related symbol discovery and disambiguation support
+- **Automatic Analysis** (always included when applicable):
+  - Symbol definition and type information extraction
+  - Usage examples from code references (configurable via `max_examples`)
+  - Type hierarchy analysis for classes/structs/interfaces (automatic)
+  - Call hierarchy analysis for functions/methods/constructors (automatic)
+  - Class member enumeration for structural types (automatic)
+- **Advanced Disambiguation**: `location_hint` parameter for overloaded symbols (format: "/path/file.cpp:line:column")
 - **Build directory parameter support**: Specify custom build directory or use auto-detection
-- Function call hierarchy mapping (incoming/outgoing calls)
-- Usage pattern analysis with concrete code examples
-- Related symbol discovery and disambiguation support
+- **Indexing timeout control**: `wait_timeout` parameter (default 20s, 0 = no wait)
+- **Symbol Resolution Modes**: Workspace symbol resolution (default) or location-specific resolution (with location_hint)
+
+**Note**: The tool automatically determines what analysis to perform based on symbol type - no manual flags required for inheritance, call hierarchy, or usage patterns.
 
 ## Implementation Guidelines
 
