@@ -58,16 +58,21 @@ pub trait WorkspaceSymbolFilter {
 }
 
 /// Filter for project boundary detection
-pub struct ProjectBoundaryFilter<'a> {
-    component: &'a ProjectComponent,
+pub struct ProjectBoundaryFilter {
     include_external: bool,
+    canonical_source_root: std::path::PathBuf,
 }
 
-impl<'a> ProjectBoundaryFilter<'a> {
-    pub fn new(component: &'a ProjectComponent, include_external: bool) -> Self {
+impl ProjectBoundaryFilter {
+    pub fn new(component: &ProjectComponent, include_external: bool) -> Self {
+        let canonical_source_root = component
+            .source_root_path
+            .canonicalize()
+            .unwrap_or_else(|_| component.source_root_path.clone());
+
         Self {
-            component,
             include_external,
+            canonical_source_root,
         }
     }
 
@@ -75,16 +80,15 @@ impl<'a> ProjectBoundaryFilter<'a> {
     fn is_project_file(&self, path: &str) -> bool {
         let file_path = std::path::PathBuf::from(path);
 
-        if let Ok(canonical_file) = file_path.canonicalize()
-            && canonical_file.starts_with(&self.component.source_root_path)
-        {
-            return true;
+        if let Ok(canonical_file) = file_path.canonicalize() {
+            canonical_file.starts_with(&self.canonical_source_root)
+        } else {
+            false
         }
-        false
     }
 }
 
-impl<'a> WorkspaceSymbolFilter for ProjectBoundaryFilter<'a> {
+impl WorkspaceSymbolFilter for ProjectBoundaryFilter {
     fn matches(&self, symbol: &WorkspaceSymbol) -> bool {
         if self.include_external {
             return true;
@@ -611,5 +615,11 @@ mod tests {
         // In practice, canonicalize() would be mocked or tested with real files
         // For now, we test the structure is correct
         assert!(!filter.include_external);
+        // canonical_source_root should be the canonicalized version of source_root_path
+        // In tests, canonicalize might fail, so it falls back to the original path
+        assert!(
+            filter.canonical_source_root == component.source_root_path
+                || filter.canonical_source_root.ends_with("test/project")
+        );
     }
 }
