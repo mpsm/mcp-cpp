@@ -364,11 +364,11 @@ jobs:
           fi
           echo "Version verification passed: $CARGO_VERSION"
 
-  # Publish to crates.io
+  # Publish to crates.io - only after successful GitHub release
   publish-crates:
     name: Publish to crates.io
     runs-on: ubuntu-latest
-    needs: [rust-checks, cpp-checks, ts-checks, e2e-integration, version-check]
+    needs: [create-github-release]
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -392,7 +392,7 @@ jobs:
         env:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
 
-  # Create GitHub release - can run in parallel with crates.io publish
+  # Create GitHub release first - crates.io publish depends on this
   create-github-release:
     name: Create GitHub Release
     runs-on: ubuntu-latest
