@@ -100,10 +100,6 @@ jobs:
             os: ubuntu-latest
             binary: mcp-cpp-server
             name: mcp-cpp-server-linux-aarch64
-          - target: x86_64-pc-windows-msvc
-            os: windows-latest
-            binary: mcp-cpp-server.exe
-            name: mcp-cpp-server-windows-x86_64.exe
           - target: x86_64-apple-darwin
             os: macos-latest
             binary: mcp-cpp-server
@@ -129,10 +125,6 @@ jobs:
               sudo apt-get update
               sudo apt-get install -y gcc-aarch64-linux-gnu
               echo "CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-linux-gnu-gcc" >> $GITHUB_ENV
-              ;;
-            "x86_64-pc-windows-msvc")
-              # Windows builds run on windows-latest, no cross-compilation needed
-              echo "Native Windows build"
               ;;
             "x86_64-apple-darwin"|"aarch64-apple-darwin")
               # macOS builds run on macos-latest with universal support
@@ -463,7 +455,6 @@ jobs:
             Choose the appropriate binary for your platform:
             - **Linux x86_64**: `mcp-cpp-server-linux-x86_64`
             - **Linux ARM64**: `mcp-cpp-server-linux-aarch64`
-            - **Windows x86_64**: `mcp-cpp-server-windows-x86_64.exe`
             - **macOS x86_64**: `mcp-cpp-server-macos-x86_64`
             - **macOS ARM64**: `mcp-cpp-server-macos-aarch64`
 
