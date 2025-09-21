@@ -35,18 +35,18 @@ jobs:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
-          key: ${{ runner.os }}-release-cargo-registry-${{ hashFiles('**/Cargo.lock') }}
+          key: ${{ runner.os }}-rust-checks-cargo-registry-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: |
-            ${{ runner.os }}-release-cargo-registry-
+            ${{ runner.os }}-rust-checks-cargo-registry-
             ${{ runner.os }}-cargo-registry-
 
       - name: Cache cargo build
         uses: actions/cache@v4
         with:
           path: target
-          key: ${{ runner.os }}-release-cargo-build-${{ hashFiles('**/Cargo.lock') }}
+          key: ${{ runner.os }}-rust-checks-cargo-build-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: |
-            ${{ runner.os }}-release-cargo-build-
+            ${{ runner.os }}-rust-checks-cargo-build-
             ${{ runner.os }}-cargo-build-
 
       - name: Check formatting
@@ -88,6 +88,7 @@ jobs:
   # Cross-platform binary builds
   build-binaries:
     name: Build Cross-Platform Binaries
+    needs: [rust-checks]
     strategy:
       matrix:
         include:
@@ -121,11 +122,31 @@ jobs:
         with:
           targets: ${{ matrix.target }}
 
-      - name: Install cross-compilation tools (Linux ARM64)
-        if: matrix.target == 'aarch64-unknown-linux-gnu'
+      - name: Install cross-compilation tools
         run: |
-          sudo apt-get update
-          sudo apt-get install -y gcc-aarch64-linux-gnu
+          case "${{ matrix.target }}" in
+            "aarch64-unknown-linux-gnu")
+              sudo apt-get update
+              sudo apt-get install -y gcc-aarch64-linux-gnu
+              echo "CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-linux-gnu-gcc" >> $GITHUB_ENV
+              ;;
+            "x86_64-pc-windows-msvc")
+              # Windows builds run on windows-latest, no cross-compilation needed
+              echo "Native Windows build"
+              ;;
+            "x86_64-apple-darwin"|"aarch64-apple-darwin")
+              # macOS builds run on macos-latest with universal support
+              echo "Native macOS build"
+              ;;
+            "x86_64-unknown-linux-gnu")
+              # Native Linux build
+              echo "Native Linux build"
+              ;;
+            *)
+              echo "Unknown target: ${{ matrix.target }}"
+              exit 1
+              ;;
+          esac
 
       - name: Cache cargo registry
         uses: actions/cache@v4
@@ -133,30 +154,52 @@ jobs:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
-          key: ${{ runner.os }}-${{ matrix.target }}-cargo-registry-${{ hashFiles('**/Cargo.lock') }}
+          key: ${{ runner.os }}-${{ matrix.target }}-build-binaries-cargo-registry-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: |
-            ${{ runner.os }}-${{ matrix.target }}-cargo-registry-
+            ${{ runner.os }}-${{ matrix.target }}-build-binaries-cargo-registry-
             ${{ runner.os }}-cargo-registry-
 
       - name: Cache cargo build
         uses: actions/cache@v4
         with:
           path: target
-          key: ${{ runner.os }}-${{ matrix.target }}-cargo-build-${{ hashFiles('**/Cargo.lock') }}
+          key: ${{ runner.os }}-${{ matrix.target }}-build-binaries-cargo-build-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: |
-            ${{ runner.os }}-${{ matrix.target }}-cargo-build-
+            ${{ runner.os }}-${{ matrix.target }}-build-binaries-cargo-build-
             ${{ runner.os }}-cargo-build-
 
       - name: Build binary
         run: cargo build --release --target ${{ matrix.target }}
-        env:
-          CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: aarch64-linux-gnu-gcc
+
+      - name: Verify binary exists
+        run: |
+          if [ ! -f "target/${{ matrix.target }}/release/${{ matrix.binary }}" ]; then
+            echo "Error: Binary not found after build"
+            echo "Expected: target/${{ matrix.target }}/release/${{ matrix.binary }}"
+            echo "Contents of target/${{ matrix.target }}/release/:"
+            ls -la target/${{ matrix.target }}/release/ || echo "Directory does not exist"
+            exit 1
+          fi
+          echo "Binary verified: target/${{ matrix.target }}/release/${{ matrix.binary }}"
+          ls -la target/${{ matrix.target }}/release/${{ matrix.binary }}
 
       - name: Rename binary
         shell: bash
         run: |
           mkdir -p dist
           cp target/${{ matrix.target }}/release/${{ matrix.binary }} dist/${{ matrix.name }}
+
+      - name: Verify renamed binary
+        run: |
+          if [ ! -f "dist/${{ matrix.name }}" ]; then
+            echo "Error: Renamed binary not found"
+            echo "Expected: dist/${{ matrix.name }}"
+            echo "Contents of dist/:"
+            ls -la dist/ || echo "Directory does not exist"
+            exit 1
+          fi
+          echo "Renamed binary verified: dist/${{ matrix.name }}"
+          ls -la dist/${{ matrix.name }}
 
       - name: Upload binary artifact
         uses: actions/upload-artifact@v4
@@ -246,11 +289,21 @@ jobs:
           # Get Ubuntu codename dynamically
           UBUNTU_CODENAME=$(lsb_release -cs)
           echo "Detected Ubuntu codename: $UBUNTU_CODENAME"
-          # Add LLVM repository
-          wget -O - https://apt.llvm.org/llvm-snapshot.gpg.key | sudo apt-key add -
-          echo "deb http://apt.llvm.org/${UBUNTU_CODENAME}/ llvm-toolchain-${UBUNTU_CODENAME}-20 main" | sudo tee /etc/apt/sources.list.d/llvm.list
+          # Add LLVM repository using modern method
+          curl -fsSL https://apt.llvm.org/llvm-snapshot.gpg.key | sudo gpg --dearmor -o /usr/share/keyrings/llvm-archive-keyring.gpg
+          echo "deb [signed-by=/usr/share/keyrings/llvm-archive-keyring.gpg] http://apt.llvm.org/${UBUNTU_CODENAME}/ llvm-toolchain-${UBUNTU_CODENAME}-20 main" | sudo tee /etc/apt/sources.list.d/llvm.list
           sudo apt-get update
           sudo apt-get install -y build-essential cmake clangd-20
+
+      - name: Verify clangd installation
+        run: |
+          if ! command -v clangd-20 &> /dev/null; then
+            echo "Error: clangd-20 not found in PATH"
+            exit 1
+          fi
+          echo "clangd-20 version:"
+          clangd-20 --version
+          echo "clangd-20 path: $(which clangd-20)"
 
       - name: Cache cargo registry
         uses: actions/cache@v4
@@ -258,9 +311,9 @@ jobs:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
-          key: ${{ runner.os }}-release-cargo-registry-${{ hashFiles('**/Cargo.lock') }}
+          key: ${{ runner.os }}-e2e-integration-cargo-registry-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: |
-            ${{ runner.os }}-release-cargo-registry-
+            ${{ runner.os }}-e2e-integration-cargo-registry-
             ${{ runner.os }}-cargo-registry-
 
       - name: Restore release binary
@@ -337,9 +390,9 @@ jobs:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
-          key: ${{ runner.os }}-release-cargo-registry-${{ hashFiles('**/Cargo.lock') }}
+          key: ${{ runner.os }}-publish-crates-cargo-registry-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: |
-            ${{ runner.os }}-release-cargo-registry-
+            ${{ runner.os }}-publish-crates-cargo-registry-
             ${{ runner.os }}-cargo-registry-
 
       - name: Publish to crates.io

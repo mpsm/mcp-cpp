@@ -1,6 +1,6 @@
 [package]
 name = "mcp-cpp-server"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2024"
 license = "MIT"
 description = "A high-performance Model Context Protocol (MCP) server for C++ code analysis using clangd LSP integration"

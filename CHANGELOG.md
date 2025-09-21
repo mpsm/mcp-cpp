@@ -1,6 +1,6 @@
 # Changelog
 
-## [0.2.0] - pending
+## [0.2.0] - 2025-01-21
 
 Complete rewrite of the initial MVP release. Redesigned to provide a stable
 foundation for further development with improved stability and functionality.
