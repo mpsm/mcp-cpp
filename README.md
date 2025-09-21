@@ -30,14 +30,15 @@ The current implementation focuses on essential C++ development workflows, with 
 
 ### Current Capabilities
 
-- **Dynamic Build Detection**: Automatic discovery and switching between build configurations
+- **Multi-Build System Support**: Works with both CMake and Meson projects seamlessly
+- **Multi-Component Projects**: Handle projects with multiple libraries and executables
 - **Project Boundary Intelligence**: Distinguish between project code and external dependencies
-- **C++-Focused Search**: Optimized symbol discovery for C++ development patterns
+- **Dynamic Build Detection**: Automatic discovery and switching between build configurations
 - **Comprehensive Analysis**: Deep symbol context with inheritance and usage patterns
+- **Python CLI Tool**: Easy command-line interface for quick symbol exploration
 
 ### Planned C++ Enhancements
 
-- **Multi-Component Support**: Simultaneous analysis across multiple C++ libraries and executables
 - **Advanced Template Intelligence**: Enhanced template instantiation and specialization analysis
 - **C++-Specific Refactoring**: Specialized refactoring patterns for C++ codebases
 
@@ -45,7 +46,7 @@ The current implementation focuses on essential C++ development workflows, with 
 
 ### Required
 
-- **clangd 20+**: Language server for C++ semantic analysis
+- **clangd 11+**: Language server for C++ semantic analysis (clangd 20+ recommended)
 - **Rust 2024 edition**: For building the MCP server
 - **CMake or Meson**: For generating compilation databases (`compile_commands.json`)
 
@@ -216,12 +217,14 @@ python3 tools/mcp-cli.py get-project-details
 **Purpose**: Find C++ symbols across your codebase or get complete API overviews
 
 **Key Capabilities**:
+
 - **Symbol Discovery**: Find functions, classes, variables by name or pattern
 - **Complete File Overview**: Use empty query (`""`) with file parameter to list all symbols in any file
 - **API Exploration**: Perfect for understanding unfamiliar headers or source files
 - **Smart Filtering**: Filter by symbol types (Class, Function, Method, etc.) and exclude external libraries
 
 **Common Use Cases**:
+
 ```bash
 # Find all vector-related symbols
 search_symbols {"query": "vector"}
@@ -238,6 +241,7 @@ search_symbols {"query": "Process", "kinds": ["Class", "Struct"]}
 **Purpose**: Deep dive analysis of any C++ symbol with comprehensive context
 
 **What You Get**:
+
 - **Symbol Definition**: Complete type information, location, documentation
 - **Usage Examples**: Real code showing how the symbol is used
 - **Class Members**: All methods, fields, constructors (for classes)
@@ -245,6 +249,7 @@ search_symbols {"query": "Process", "kinds": ["Class", "Struct"]}
 - **Call Relationships**: What calls this function and what it calls (for functions)
 
 **Perfect For**:
+
 - Understanding unfamiliar code
 - Finding all usages before refactoring
 - Exploring class hierarchies and relationships
