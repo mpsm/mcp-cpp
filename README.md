@@ -13,7 +13,7 @@ Modern C++ development relies heavily on advanced tooling to navigate complex co
 
 This MCP server bridges that gap by providing AI agents with semantic analysis capabilities comparable to what developers experience in modern IDEs. Unlike existing LSP MCP implementations that offer generic language server integration, this server provides a C++-focused approach with:
 
-- **Dynamic Build Management**: On-the-fly CMake build directory detection and switching
+- **Dynamic Build Management**: On-the-fly CMake and Meson build directory detection and switching
 - **C++-Optimized Tool Design**: Tools specifically designed for C++ workflows and symbol patterns
 - **Project-Aware Analysis**: Intelligent filtering between project code and external dependencies
 - **Future C++ Specialization**: Foundation for advanced C++ features like multi-component analysis
@@ -24,7 +24,7 @@ The current implementation focuses on essential C++ development workflows, with 
 
 ### Core C++ Analysis Tools
 
-- **`list_build_dirs`**: Dynamic CMake build environment discovery and configuration switching
+- **`get_project_details`**: Dynamic CMake and Meson build environment discovery and configuration switching
 - **`search_symbols`**: C++ symbol search with project boundary detection and intelligent filtering
 - **`analyze_symbol_context`**: Comprehensive symbol analysis with inheritance and call hierarchy support
 
@@ -47,7 +47,7 @@ The current implementation focuses on essential C++ development workflows, with 
 
 - **clangd 20+**: Language server for C++ semantic analysis
 - **Rust 2024 edition**: For building the MCP server
-- **CMake**: For generating compilation databases (`compile_commands.json`)
+- **CMake or Meson**: For generating compilation databases (`compile_commands.json`)
 
 ### Optional
 
@@ -83,6 +83,27 @@ Add to your Claude Desktop configuration file (`.mcp.json`):
     }
   }
 }
+```
+
+### Quick Start with Python CLI
+
+For easier interaction, use the included Python CLI:
+
+```bash
+# Install CLI dependencies
+pip install -r tools/requirements.txt
+
+# Search for symbols
+python3 tools/mcp-cli.py search-symbols "MyClass"
+
+# Get complete API overview of a header file
+python3 tools/mcp-cli.py search-symbols "" --files include/api.h
+
+# Analyze a symbol with examples
+python3 tools/mcp-cli.py analyze-symbol "MyClass::process"
+
+# Get project overview
+python3 tools/mcp-cli.py get-project-details
 ```
 
 ### Basic Workflow
@@ -192,48 +213,57 @@ Add to your Claude Desktop configuration file (`.mcp.json`):
 
 #### `search_symbols`
 
-**Purpose**: Advanced C++ symbol search with dual-mode operation and intelligent filtering
-**Input**:
+**Purpose**: Find C++ symbols across your codebase or get complete API overviews
 
-- `query` (required): Symbol name, pattern, or qualified name (empty string allowed only with `files` parameter)
-- `kinds` (optional): C++ symbol types (Class, Function, Method, Variable, etc. - use PascalCase)
-- `files` (optional): Limit search to specific files (enables document symbol mode for comprehensive results)
-- `max_results` (optional): Result limit (1-1000, default 100, applied client-side preserving clangd ranking)
-- `include_external` (optional): Include system headers and third-party libraries (default false)
-- `build_directory` (optional): Specify build directory path containing compile_commands.json
-- `wait_timeout` (optional): Timeout for indexing completion in seconds (default 20s, 0 = no wait)
+**Key Capabilities**:
+- **Symbol Discovery**: Find functions, classes, variables by name or pattern
+- **Complete File Overview**: Use empty query (`""`) with file parameter to list all symbols in any file
+- **API Exploration**: Perfect for understanding unfamiliar headers or source files
+- **Smart Filtering**: Filter by symbol types (Class, Function, Method, etc.) and exclude external libraries
 
-**Search Modes**:
-- **Workspace Search** (no `files`): Uses clangd workspace symbols with fuzzy matching (may be incomplete due to clangd heuristics)
-- **Document Search** (with `files`): Uses document symbols for predictable, comprehensive results within specified files
+**Common Use Cases**:
+```bash
+# Find all vector-related symbols
+search_symbols {"query": "vector"}
 
-**Output**: Ranked symbol results with project/external classification, search metadata, and optional indexing status
+# Get complete overview of a header file
+search_symbols {"query": "", "files": ["include/api.h"]}
+
+# Find only classes and structs
+search_symbols {"query": "Process", "kinds": ["Class", "Struct"]}
+```
 
 #### `analyze_symbol_context`
 
-**Purpose**: Comprehensive C++ symbol analysis with automatic multi-dimensional context extraction
-**Input**:
+**Purpose**: Deep dive analysis of any C++ symbol with comprehensive context
 
-- `symbol` (required): C++ symbol name (supports simple names, qualified names like 'std::vector', global scope like '::main')
-- `build_directory` (optional): Specify build directory path containing compile_commands.json
-- `max_examples` (optional): Maximum number of usage examples to include (unlimited by default)
-- `location_hint` (optional): Location hint for disambiguating overloaded symbols (format: "/path/file.cpp:line:column" with 1-based coordinates)
-- `wait_timeout` (optional): Timeout for indexing completion in seconds (default 20s, 0 = no wait)
+**What You Get**:
+- **Symbol Definition**: Complete type information, location, documentation
+- **Usage Examples**: Real code showing how the symbol is used
+- **Class Members**: All methods, fields, constructors (for classes)
+- **Inheritance Tree**: Base classes and derived classes (for classes)
+- **Call Relationships**: What calls this function and what it calls (for functions)
 
-**Automatic Analysis** (always included when applicable):
-- Usage examples from code references
-- Type hierarchy analysis for classes/structs/interfaces
-- Call hierarchy analysis for functions/methods/constructors
-- Class member enumeration for structural types
+**Perfect For**:
+- Understanding unfamiliar code
+- Finding all usages before refactoring
+- Exploring class hierarchies and relationships
+- Learning how to use a function or class
 
-**Output**: Complete symbol context including definition, type information, usage examples, inheritance relationships, call patterns, and member details
+```bash
+# Analyze a class and its members
+analyze_symbol_context {"symbol": "MyClass"}
+
+# Deep dive into a specific method
+analyze_symbol_context {"symbol": "MyClass::process", "max_examples": 3}
+```
 
 ## Design Insights & Limitations
 
 ### Current Implementation
 
-- **Build Directory Detection**: Automatically discovers existing CMake build directories or uses agent-provided paths
-- **CMake Configuration Analysis**: Extracts compiler settings, generator type, and build options from CMake cache
+- **Build Directory Detection**: Automatically discovers existing CMake and Meson build directories or uses agent-provided paths
+- **Build Configuration Analysis**: Extracts compiler settings, generator type, and build options from build systems
 - **Indexing Management**: Monitors clangd indexing progress and waits for completion before returning results
 - **Basic Error Handling**: Provides build configuration validation and clangd lifecycle management
 
@@ -241,7 +271,7 @@ Add to your Claude Desktop configuration file (`.mcp.json`):
 
 - **Indexing Wait Strategy**: Currently blocks until indexing completes, which can be slow for large projects
 - **Single Configuration Focus**: Works with one build directory at a time, no multi-config support yet
-- **Limited Build System Support**: Only handles CMake projects with `compile_commands.json`
+- **Modern Build Systems**: Works with CMake and Meson projects that generate `compile_commands.json`
 - **No Incremental Updates**: Requires full re-indexing when switching build configurations
 
 ### Future Considerations
