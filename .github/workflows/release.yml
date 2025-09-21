@@ -366,6 +366,10 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
+      - name: Extract changelog for this version
+        id: changelog
+        uses: ffurrer2/extract-release-notes@v2
+
       - name: Download all binary artifacts
         uses: actions/download-artifact@v4
         with:
@@ -383,9 +387,9 @@ jobs:
           files: |
             dist/*/mcp-cpp-server-*
           body: |
-            ## MCP C++ Server ${{ github.ref_name }}
+            ${{ steps.changelog.outputs.release_notes }}
 
-            This release includes compiled binaries for multiple platforms.
+            ---
 
             ### 🔍 What's Tested
             - ✅ All unit tests passed
