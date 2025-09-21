@@ -5,79 +5,71 @@
 [![Rust](https://img.shields.io/badge/rust-2024%2B-orange.svg)](https://www.rust-lang.org)
 [![Crates.io](https://img.shields.io/crates/v/mcp-cpp-server?label=crates.io)](https://crates.io/crates/mcp-cpp-server)
 
-A high-performance Model Context Protocol (MCP) server providing comprehensive C++ code analysis capabilities through integration with clangd Language Server Protocol (LSP). Designed to enable AI agents to work with C++ codebases with the same semantic understanding as modern IDEs.
+A Model Context Protocol (MCP) server that provides C++ code analysis capabilities through clangd LSP integration. Enables AI agents to work with C++ codebases using semantic understanding similar to modern IDEs.
 
 ## Why This MCP Server?
 
 Modern C++ development relies heavily on advanced tooling to navigate complex codebases with preprocessor macros, template instantiations, and intricate inheritance hierarchies. While humans use IntelliSense-powered IDEs to understand these complexities, most AI agents rely on text-only browsing.
 
-This MCP server bridges that gap by providing AI agents with semantic analysis capabilities comparable to what developers experience in modern IDEs. Unlike existing LSP MCP implementations that offer generic language server integration, this server provides a C++-focused approach with:
+This MCP server bridges that gap by providing AI agents with semantic analysis capabilities similar to what developers experience in modern IDEs. Unlike generic LSP MCP implementations, this server focuses specifically on C++ workflows.
 
-- **Dynamic Build Management**: On-the-fly CMake and Meson build directory detection and switching
-- **C++-Optimized Tool Design**: Tools specifically designed for C++ workflows and symbol patterns
-- **Project-Aware Analysis**: Intelligent filtering between project code and external dependencies
-- **Future C++ Specialization**: Foundation for advanced C++ features like multi-component analysis
+The server can handle multiple C++ projects simultaneously, which is particularly useful for complex scenarios like embedded Linux development where understanding interactions between individual components is crucial. It supports both CMake and Meson build systems with automatic build directory detection and switching.
 
-The current implementation focuses on essential C++ development workflows, with plans for future C++-specific optimizations like simultaneous multi-project analysis, advanced template relationship mapping, and C++-aware refactoring patterns.
+Advanced indexing monitoring tracks both clangd's index state and logs to ensure complete symbol coverage, while intelligent filtering distinguishes between project code and external dependencies.
 
 ## Features
 
-### Core C++ Analysis Tools
+The server provides three core analysis tools for C++ development. The `get_project_details` tool performs dynamic CMake and Meson build environment discovery and enables configuration switching. For symbol exploration, `search_symbols` offers C++ symbol search with project boundary detection and intelligent filtering. When deeper analysis is needed, `analyze_symbol_context` provides symbol analysis with inheritance and call hierarchy support.
 
-- **`get_project_details`**: Dynamic CMake and Meson build environment discovery and configuration switching
-- **`search_symbols`**: C++ symbol search with project boundary detection and intelligent filtering
-- **`analyze_symbol_context`**: Comprehensive symbol analysis with inheritance and call hierarchy support
+The implementation works with both CMake and Meson projects, handling projects with multiple libraries and executables simultaneously. Advanced indexing monitors clangd's index state and logs to ensure complete symbol coverage, while intelligent filtering distinguishes between project code and external dependencies. The server automatically discovers and switches between build configurations, and includes a Python CLI tool for quick symbol exploration.
 
-### Current Capabilities
+## Component Discovery
 
-- **Multi-Build System Support**: Works with both CMake and Meson projects seamlessly
-- **Multi-Component Projects**: Handle projects with multiple libraries and executables
-- **Project Boundary Intelligence**: Distinguish between project code and external dependencies
-- **Dynamic Build Detection**: Automatic discovery and switching between build configurations
-- **Comprehensive Analysis**: Deep symbol context with inheritance and usage patterns
-- **Python CLI Tool**: Easy command-line interface for quick symbol exploration
-
-### Planned C++ Enhancements
-
-- **Advanced Template Intelligence**: Enhanced template instantiation and specialization analysis
-- **C++-Specific Refactoring**: Specialized refactoring patterns for C++ codebases
+The MCP server automatically looks for components in the current working directory, scanning 2 levels below by default. This scan depth can be changed using tool options. When an AI agent requests analysis using a build directory outside the project, the MCP server will use that hint path and create a component from it, allowing flexible project analysis beyond the default scanning scope.
 
 ## Dependencies
 
-### Required
+The server requires clangd 11 or later for C++ semantic analysis (clangd 20+ recommended), and Rust 2024 edition for building. Your project must use CMake or Meson to generate compilation databases (`compile_commands.json`).
 
-- **clangd 11+**: Language server for C++ semantic analysis (clangd 20+ recommended)
-- **Rust 2024 edition**: For building the MCP server
-- **CMake or Meson**: For generating compilation databases (`compile_commands.json`)
+You can optionally set the `CLANGD_PATH` environment variable to specify a custom clangd binary location.
 
-### Optional
+## Installation
 
-- **CLANGD_PATH**: Environment variable to specify custom clangd binary location
+### Install from Crates.io (Recommended)
 
-## Installation & Build
+```bash
+# Install directly from the registry
+cargo install mcp-cpp-server
+
+# The binary will be available in your cargo bin directory
+# (usually ~/.cargo/bin/mcp-cpp-server)
+```
+
+### Install from Source
 
 ```bash
 # Clone the repository
 git clone https://github.com/mpsm/mcp-cpp.git
 cd mcp-cpp
 
-# Build the server
-cargo build --release
+# Install from source
+cargo install --path .
 
-# The binary will be available at target/release/mcp-cpp-server
+# The binary will be available in your cargo bin directory
+# (usually ~/.cargo/bin/mcp-cpp-server)
 ```
 
 ## Usage
 
-### Claude Desktop Integration
+### Claude CLI Integration (Tested)
 
-Add to your Claude Desktop configuration file (`.mcp.json`):
+For Claude CLI, create or update your MCP configuration file (`~/.config/claude-cli/mcp_servers.json`):
 
 ```json
 {
   "mcpServers": {
     "cpp-tools": {
-      "command": "/path/to/mcp-cpp/target/release/mcp-cpp-server",
+      "command": "mcp-cpp-server",
       "env": {
         "CLANGD_PATH": "/usr/bin/clangd-20"
       }
@@ -86,15 +78,84 @@ Add to your Claude Desktop configuration file (`.mcp.json`):
 }
 ```
 
-### Quick Start with Python CLI
+### Amazon Q Developer CLI Integration (Tested)
 
-For easier interaction, use the included Python CLI:
+For Amazon Q Developer CLI, add to your MCP configuration:
+
+```json
+{
+  "mcpServers": {
+    "cpp-tools": {
+      "command": "mcp-cpp-server",
+      "env": {
+        "CLANGD_PATH": "/usr/bin/clangd-20"
+      }
+    }
+  }
+}
+```
+
+### Claude Desktop Integration
+
+Add to your Claude Desktop configuration file (`~/.claude_desktop_config.json`):
+
+```json
+{
+  "mcpServers": {
+    "cpp-tools": {
+      "command": "mcp-cpp-server",
+      "env": {
+        "CLANGD_PATH": "/usr/bin/clangd-20"
+      }
+    }
+  }
+}
+```
+
+## Platform Support
+
+Tested on:
+
+- **Windows with WSL2 Ubuntu**
+- **Ubuntu (native)**
+- **macOS**
+
+## Configuration
+
+### CLI Options
+
+The server supports the following command-line options:
 
 ```bash
+mcp-cpp-server --help
+
+# Options:
+--root <DIR>             Project root directory to scan for build configurations (defaults to current directory)
+--clangd-path <PATH>     Path to clangd executable (overrides CLANGD_PATH env var)
+--log-level <LEVEL>      Log level (overrides RUST_LOG env var) 
+--log-file <FILE>        Log file path (overrides MCP_LOG_FILE env var)
+```
+
+### Environment Variables
+
+- **`CLANGD_PATH`**: Path to clangd executable (default: "clangd")
+- **`RUST_LOG`**: Log level - trace, debug, info, warn, error (default: "info")
+- **`MCP_LOG_FILE`**: Path to log file (default: logs to stderr only)
+- **`MCP_LOG_UNIQUE`**: Set to "true" to append process ID to log filename
+
+### Python CLI for Debugging
+
+The Python CLI helps you understand what your AI agent sees from the MCP server, making it useful for debugging interactions. Note that this tool is not included in the distributed package and must be used directly from the repository:
+
+```bash
+# Clone the repository if you haven't already
+git clone https://github.com/mpsm/mcp-cpp.git
+cd mcp-cpp
+
 # Install CLI dependencies
 pip install -r tools/requirements.txt
 
-# Search for symbols
+# Search for symbols (see what the agent would see)
 python3 tools/mcp-cli.py search-symbols "MyClass"
 
 # Get complete API overview of a header file
@@ -178,25 +239,11 @@ python3 tools/mcp-cli.py get-project-details
 
 ## Use Cases
 
-### Code Exploration & Navigation
+The server excels at code exploration and navigation, helping you find functions, classes, and variables across large codebases. It can analyze relationships between code components and navigate system libraries and third-party dependencies to understand how different parts of your project interact.
 
-- **Symbol Discovery**: Find functions, classes, and variables across large codebases
-- **Dependency Analysis**: Understand relationships between code components
-- **API Exploration**: Navigate system libraries and third-party dependencies
+For code analysis and review, the server provides detailed symbol context including usage patterns, inheritance relationships, and call hierarchies. This helps you explore class hierarchies and call patterns, making it easier to understand unfamiliar code or prepare for refactoring by identifying all usages and dependencies.
 
-### Code Analysis & Review
-
-- **Symbol Context**: Comprehensive analysis of symbol usage, inheritance, and relationships
-- **Architecture Understanding**: Explore class hierarchies and call patterns
-- **Refactoring Preparation**: Identify all usages and dependencies before changes
-
-### Development Assistance
-
-- **Dynamic Build Management**: Seamless switching between Debug, Release, and custom build configurations
-- **Project-Focused Analysis**: Clear separation between project symbols and external library symbols
-- **Efficient Symbol Discovery**: Fast navigation through large C++ codebases with intelligent filtering
-- **Comprehensive Context**: Complete symbol analysis including inheritance hierarchies and call patterns
-- **Cross-Reference Generation**: Find all references, implementations, and related symbols
+The server also assists with development workflows by enabling switching between Debug, Release, and custom build configurations. It provides clear separation between project symbols and external library symbols, making navigation through large C++ codebases more efficient. The cross-reference generation helps you find all references, implementations, and related symbols quickly.
 
 ## Tool Reference
 
@@ -205,12 +252,14 @@ python3 tools/mcp-cli.py get-project-details
 #### `get_project_details`
 
 **Purpose**: Multi-provider build system analysis and project workspace discovery
-**Input**:
 
-- `path` (optional): Project root path to scan (triggers fresh scan if different from server default)
-- `depth` (optional): Scan depth for component discovery (0-10 levels, triggers fresh scan if different)
+**Options**:
+- `path` (optional): Project root path to scan. If different from server default, triggers fresh scan
+- `depth` (optional): Scan depth for component discovery (0-10 levels, default: 2). Controls how many directory levels below the current working directory to search for CMake/Meson components
 
 **Output**: Complete project analysis including build configurations, components, compilation database status, and multi-provider discovery (CMake, Meson, etc.)
+
+**Component Discovery**: By default, scans 2 levels below the current working directory for components. When AI agents specify build directories outside this scope, the server creates components from those hint paths automatically.
 
 #### `search_symbols`
 
@@ -263,29 +312,7 @@ analyze_symbol_context {"symbol": "MyClass"}
 analyze_symbol_context {"symbol": "MyClass::process", "max_examples": 3}
 ```
 
-## Design Insights & Limitations
+## Limitations
 
-### Current Implementation
-
-- **Build Directory Detection**: Automatically discovers existing CMake and Meson build directories or uses agent-provided paths
-- **Build Configuration Analysis**: Extracts compiler settings, generator type, and build options from build systems
-- **Indexing Management**: Monitors clangd indexing progress and waits for completion before returning results
-- **Basic Error Handling**: Provides build configuration validation and clangd lifecycle management
-
-### Known Limitations
-
-- **Indexing Wait Strategy**: Currently blocks until indexing completes, which can be slow for large projects
-- **Single Configuration Focus**: Works with one build directory at a time, no multi-config support yet
-- **Modern Build Systems**: Works with CMake and Meson projects that generate `compile_commands.json`
-- **No Incremental Updates**: Requires full re-indexing when switching build configurations
-
-### Future Considerations
-
-- **Fail-Fast Indexing**: Could provide partial results with indexing progress info, letting AI agents decide whether to wait
-- **Multi-Configuration Support**: Enable simultaneous analysis across Debug/Release/custom builds
-- **Build System Expansion**: Support for other build systems beyond CMake
-- **Incremental Analysis**: Smarter indexing updates when build configurations change
-
-### Architecture Decisions
-
-The current design prioritizes accuracy over speed by waiting for complete indexing. This ensures reliable symbol information but can introduce latency. The trade-off between response time and accuracy may be configurable in future versions, allowing AI agents to choose between fast partial results or complete analysis.
+- Requires CMake or Meson projects that generate `compile_commands.json`
+- First-time indexing can take time on large projects (configurable timeout, default 20s)
