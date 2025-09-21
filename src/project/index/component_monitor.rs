@@ -11,10 +11,10 @@ use tracing::{debug, info, trace, warn};
 
 use crate::clangd::index::{ComponentIndex, IndexLatch, ProgressEvent};
 use crate::clangd::version::ClangdVersion;
+use crate::project::compilation_database::PathMappings;
 use crate::project::index::reader::IndexReaderTrait;
 use crate::project::index::trigger::IndexTrigger;
 use crate::project::{CompilationDatabase, ProjectError};
-use crate::project::compilation_database::PathMappings;
 
 /// Result of validating a single index entry
 enum IndexValidationResult {
@@ -241,7 +241,10 @@ impl ComponentIndexMonitor {
         let component_index = ComponentIndex::new_for_test(compilation_db, clangd_version);
 
         // Get path mappings for testing (use empty mappings for test)
-        let path_mappings = (std::collections::HashMap::new(), std::collections::HashMap::new());
+        let path_mappings = (
+            std::collections::HashMap::new(),
+            std::collections::HashMap::new(),
+        );
 
         // Create completion latch
         let completion_latch = IndexLatch::new();

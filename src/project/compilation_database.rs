@@ -114,7 +114,6 @@ impl CompilationDatabase {
     /// Returns (original -> canonical, canonical -> original) mappings.
     /// This enables efficient lookup in both directions without repeated canonicalization.
     pub fn path_mappings(&self) -> Result<PathMappings, CompilationDatabaseError> {
-
         let mut original_to_canonical = HashMap::new();
         let mut canonical_to_original = HashMap::new();
 
