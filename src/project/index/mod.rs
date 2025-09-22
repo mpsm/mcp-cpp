@@ -23,7 +23,7 @@ pub mod storage;
 pub mod trigger;
 
 // Public exports
-#[cfg(test)]
+#[cfg(all(test, feature = "clangd-integration-tests"))]
 pub use component_monitor::ComponentIndexState;
 pub use component_monitor::{ComponentIndexMonitor, ComponentIndexingState};
 pub use status::IndexStatusView;

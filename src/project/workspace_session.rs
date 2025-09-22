@@ -174,8 +174,11 @@ impl Drop for WorkspaceSession {
 
 #[cfg(test)]
 mod tests {
+    #[cfg(feature = "clangd-integration-tests")]
     use super::*;
+    #[cfg(feature = "clangd-integration-tests")]
     use crate::test_utils::integration::TestProject;
+    #[cfg(feature = "clangd-integration-tests")]
     use std::sync::Arc;
 
     // Auto-initialize logging for all tests in this module

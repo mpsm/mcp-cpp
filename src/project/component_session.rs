@@ -16,7 +16,7 @@ use crate::clangd::session::ClangdSessionTrait;
 use crate::clangd::version::ClangdVersion;
 use crate::clangd::{ClangdConfigBuilder, ClangdSession, ClangdSessionBuilder};
 use crate::io::file_system::RealFileSystem;
-#[cfg(test)]
+#[cfg(all(test, feature = "clangd-integration-tests"))]
 use crate::project::index::ComponentIndexState;
 use crate::project::index::reader::{IndexReader, IndexReaderTrait};
 use crate::project::index::storage::IndexStorage;
@@ -246,9 +246,9 @@ impl ComponentSession {
     }
 
     /// Get component indexing state
-    #[cfg(test)]
+    #[cfg(all(test, feature = "clangd-integration-tests"))]
     pub async fn get_index_state(&self) -> ComponentIndexState {
-        self.index_monitor.get_component_state().await
+        (*self.index_monitor).get_component_state().await
     }
 
     /// Wait for indexing completion with timeout

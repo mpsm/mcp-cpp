@@ -124,7 +124,7 @@ pub fn get_test_clangd_path() -> String {
 /// This provides a standard timeout duration for clangd indexing operations across
 /// all integration tests. Using a constant ensures consistency and makes it easy to
 /// adjust timeout values globally if needed.
-#[cfg(test)]
+#[cfg(all(test, feature = "clangd-integration-tests"))]
 pub const DEFAULT_INDEXING_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
 
 /// Integration test helpers for working with test/test-project
