@@ -107,9 +107,13 @@ impl WorkspaceSession {
                         discovered_component
                     }
                     None => {
+                        let workspace = self.workspace.lock().await;
+                        let available_dirs = workspace.get_build_dirs();
                         return Err(ProjectError::SessionCreation(format!(
-                            "No valid project component found at build directory: {}",
-                            build_dir.display()
+                            "No valid project component found at build directory: '{}'. Scan root: '{}'. Use get_project_details to discover available build directories. Available directories: {:?}. Ensure you're using absolute paths from that output to avoid path concatenation issues.",
+                            build_dir.display(),
+                            workspace.project_root_path.display(),
+                            available_dirs
                         )));
                     }
                 }

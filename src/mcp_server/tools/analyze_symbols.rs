@@ -67,6 +67,23 @@ impl From<AnalyzerError> for CallToolError {
                    This tool performs deep semantic analysis combining multiple LSP operations to deliver \
                    complete symbol intelligence for complex C++ codebases.
 
+                   🚀 RECOMMENDED WORKFLOW FOR AI AGENTS:
+                   1. ALWAYS call get_project_details first to discover available build directories
+                   2. Use the ABSOLUTE build directory paths from get_project_details output
+                   3. Use search_symbols with empty query to find symbols of interest first
+                   4. Then call analyze_symbol_context with specific symbol names
+
+                   Example workflow:
+                   • get_project_details {} → Returns: {\"/home/project/build-debug\": {...}}
+                   • search_symbols {\"query\": \"\", \"build_directory\": \"/home/project/build-debug\"} → Discover symbols
+                   • analyze_symbol_context {\"symbol\": \"Math\", \"build_directory\": \"/home/project/build-debug\"}
+
+                   ⚡ WHY USE THESE TOOLS:
+                   • MUCH FASTER than filesystem reads (grep, find, cat commands)
+                   • SEMANTIC AWARENESS: Deep understanding of C++ relationships, inheritance, calls
+                   • COMPREHENSIVE ANALYSIS: Gets all context (usage, hierarchy, documentation) in one call
+                   • LSP INTEGRATION: Uses same semantic understanding as IDEs
+
                    🔍 SYMBOL RESOLUTION CAPABILITIES:
                    • Simple names: 'MyClass', 'factorial', 'process'
                    • Fully qualified names: 'std::vector', 'MyNamespace::MyClass'
@@ -118,8 +135,8 @@ impl From<AnalyzerError> for CallToolError {
                    • Class member discovery and API exploration
 
                    INPUT REQUIREMENTS:
-                   • symbol: Required string - the symbol name to analyze
-                   • build_directory: Optional - specific build directory containing compile_commands.json
+                   • symbol: Required C++ symbol name to analyze (NOT file paths!)
+                   • build_directory: Optional - STRONGLY PREFER absolute paths from get_project_details
                    • max_examples: Optional number - limits the number of usage examples (unlimited by default)
                    • location_hint: Optional string - location hint for disambiguating overloaded symbols (format: \"/path/file.cpp:line:column\")
                    • wait_timeout: Optional number - timeout for indexing completion in seconds (default: 20s, 0 = no wait)
@@ -129,23 +146,36 @@ impl From<AnalyzerError> for CallToolError {
 )]
 #[derive(Debug, ::serde::Serialize, ::serde::Deserialize, JsonSchema)]
 pub struct AnalyzeSymbolContextTool {
-    /// The symbol name to analyze. REQUIRED.
+    /// The C++ SYMBOL NAME to analyze (NOT file paths, component names, or directory names).
+    /// This must be the exact name of a C++ code symbol.
     ///
-    /// EXAMPLES:
-    /// • Simple names: "MyClass", "factorial", "calculateSum"
-    /// • Fully qualified: "std::vector", "MyNamespace::MyClass"  
+    /// SYMBOL NAME EXAMPLES:
+    /// • Class names: "Math", "Calculator", "MyClass"
+    /// • Function names: "factorial", "main", "processData"
+    /// • Fully qualified: "std::vector", "MyNamespace::MyClass"
     /// • Global scope: "::main", "::global_var"
     /// • Methods: "MyClass::method" (class context will be analyzed)
     ///
+    /// NOT VALID (these are not symbol names):
+    /// • File paths: "src/math.cpp", "include/header.h"
+    /// • Component names: "math_library", "core_module"
+    /// • Directory names: "src", "include"
+    ///
+    /// TIP: Use search_symbols with empty query first to discover what symbols exist.
     /// For overloaded functions or template specializations, consider providing
-    /// the optional 'location' parameter for precise disambiguation.
+    /// the optional 'location_hint' parameter for precise disambiguation.
     pub symbol: String,
 
-    /// Build directory path containing compile_commands.json. OPTIONAL.
+    /// Build directory path containing compile_commands.json. STRONGLY RECOMMENDED: Use absolute paths from get_project_details output.
     ///
-    /// FORMATS ACCEPTED:
-    /// • Relative path: "build", "build-debug", "out/Debug"
-    /// • Absolute path: "/home/project/build", "/path/to/build-dir"
+    /// WORKFLOW:
+    /// 1. Call get_project_details to see available build directories with absolute paths
+    /// 2. Copy the absolute path from that output (e.g., "/home/project/build-debug")
+    /// 3. Use that absolute path here to avoid path concatenation issues
+    ///
+    /// EXAMPLES:
+    /// • GOOD: "/home/project/build-debug", "/absolute/path/to/build"
+    /// • AVOID: "build", "../build" (relative paths can cause concatenation issues)
     ///
     /// BEHAVIOR: When specified, uses this build directory instead of auto-detection.
     /// The build directory must contain compile_commands.json for clangd integration.

@@ -37,10 +37,18 @@ pub fn resolve_build_directory(
 
             // Convert relative paths to absolute paths if needed
             let absolute_path = if requested_path.is_absolute() {
+                debug!("Using absolute path as-is: {}", requested_path.display());
                 requested_path
             } else {
                 // Convert relative path to absolute by joining with workspace root
-                workspace.project_root_path.join(&requested_path)
+                let absolute = workspace.project_root_path.join(&requested_path);
+                debug!(
+                    "Converting relative path '{}' to absolute path '{}' using project root '{}'",
+                    build_dir_str,
+                    absolute.display(),
+                    workspace.project_root_path.display()
+                );
+                absolute
             };
 
             // Check if component already exists in workspace
@@ -58,6 +66,34 @@ pub fn resolve_build_directory(
                     "Build directory '{}' not found in workspace, will attempt dynamic discovery",
                     absolute_path.display()
                 );
+
+                // If the path doesn't exist, provide helpful error
+                if !absolute_path.exists() {
+                    let available_dirs = workspace.get_build_dirs();
+                    let is_relative = !PathBuf::from(build_dir_str).is_absolute();
+                    let relative_path_note = if is_relative {
+                        format!(
+                            " (You provided relative path '{}' which was resolved to '{}' using scan root '{}')",
+                            build_dir_str,
+                            absolute_path.display(),
+                            workspace.project_root_path.display()
+                        )
+                    } else {
+                        String::new()
+                    };
+
+                    return Err(CallToolError::new(std::io::Error::new(
+                        std::io::ErrorKind::NotFound,
+                        format!(
+                            "Build directory '{}' does not exist{}. Scan root: '{}'. Run get_project_details first to see available build directories with absolute paths. Available directories: {:?}. STRONGLY RECOMMEND: Use absolute paths from get_project_details output.",
+                            absolute_path.display(),
+                            relative_path_note,
+                            workspace.project_root_path.display(),
+                            available_dirs
+                        ),
+                    )));
+                }
+
                 // Return the path anyway - let get_component_session handle dynamic discovery
                 Ok(absolute_path)
             }
@@ -71,7 +107,10 @@ pub fn resolve_build_directory(
                     debug!("No build directories found in workspace");
                     Err(CallToolError::new(std::io::Error::new(
                         std::io::ErrorKind::NotFound,
-                        "No build directories found in project. Run cmake to generate build configuration.",
+                        format!(
+                            "No build directories found in project. Scan root: '{}'. Run get_project_details first to see project status and available build configurations. If no build directories exist, you may need to run cmake or meson to generate build configuration.",
+                            workspace.project_root_path.display()
+                        ),
                     )))
                 }
                 1 => {
@@ -83,7 +122,8 @@ pub fn resolve_build_directory(
                     Err(CallToolError::new(std::io::Error::new(
                         std::io::ErrorKind::InvalidInput,
                         format!(
-                            "Multiple build directories found. Please specify build_directory parameter. Available: {:?}",
+                            "Multiple build directories found. Scan root: '{}'. Run get_project_details to see all available options with absolute paths, then specify one using the build_directory parameter. Available directories: {:?}. STRONGLY RECOMMEND: Use absolute paths from get_project_details output.",
+                            workspace.project_root_path.display(),
                             build_dirs
                         ),
                     )))

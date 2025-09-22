@@ -13,11 +13,21 @@ use crate::project::ProjectWorkspace;
                    and global compilation database information. Provides complete workspace \
                    intelligence for multi-provider build systems.
 
+                   🚀 PRIMARY PURPOSE FOR AI AGENTS:
+                   This tool provides ABSOLUTE BUILD DIRECTORY PATHS that you should use with search_symbols and analyze_symbol_context.
+                   ALWAYS call this tool FIRST to discover available build directories before using other MCP tools.
+
+                   TYPICAL AI AGENT WORKFLOW:
+                   1. get_project_details {} → Get absolute build paths: {\"/home/project/build-debug\": {...}}
+                   2. search_symbols {\"query\": \"\", \"build_directory\": \"/home/project/build-debug\"} → Explore symbols
+                   3. analyze_symbol_context {\"symbol\": \"FoundSymbol\", \"build_directory\": \"/home/project/build-debug\"}
+
                    🏗️ PROJECT OVERVIEW:
                    • Project name and root directory information
                    • Global compilation database path (if configured)
                    • Component count and provider type summary
                    • Discovery timestamp and scan configuration
+                   • ABSOLUTE BUILD DIRECTORY PATHS for use in other tools
 
                    🔧 MULTI-PROVIDER DISCOVERY:
                    • Automatic detection of CMake projects (CMakeLists.txt + build directories)
@@ -38,7 +48,7 @@ use crate::project::ProjectWorkspace;
 
                    🎯 PROJECT STRUCTURE DETAILS:
                    Each discovered component includes:
-                   • Build directory path and source root location
+                   • Build directory path (ABSOLUTE) and source root location
                    • Provider type (cmake, meson, etc.) for build system identification
                    • Generator and build type information in standardized format
                    • Complete build options and configuration details
@@ -48,10 +58,11 @@ use crate::project::ProjectWorkspace;
                    Project assessment • Build system inventory • LSP setup validation
                    • Development environment verification • CI/CD build matrix generation
                    • Global compilation database configuration analysis
+                   • PROVIDING ABSOLUTE PATHS for other MCP tools
 
                    INPUT PARAMETERS:
-                   • path (optional): Project root path to scan (triggers fresh scan if different)
-                   • depth (optional): Scan depth for component discovery (0-10 levels)
+                   • path (optional): Project root path to scan (triggers fresh scan if different) - AVOID \".\" use None for cached scan
+                   • depth (optional): Scan depth for component discovery (0-10 levels) - only specify if different from cached scan
                    • include_details (optional): Include detailed build options (default: false)
 
                    OUTPUT MODES:
@@ -60,14 +71,18 @@ use crate::project::ProjectWorkspace;
 
                    RECOMMENDED USAGE:
                    • Use default for project overview and general development
-                   • Use include_details=true only for build configuration debugging"
+                   • Use include_details=true only for build configuration debugging
+                   • Copy the absolute build directory paths from output to use in other tools"
 )]
 #[derive(Debug, ::serde::Deserialize, ::serde::Serialize, JsonSchema)]
 pub struct GetProjectDetailsTool {
-    /// Optional project root path to scan. DEFAULT: uses server's initial scan root.
+    /// Optional project root path to scan. DEFAULT: uses server's cached scan results.
+    ///
+    /// IMPORTANT: AVOID using "." as it discards cached scan and may override user choices.
+    /// Use None (omit parameter) to use cached scan results which is usually what you want.
     ///
     /// FORMATS ACCEPTED:
-    /// • Relative path: ".", "..", "subproject/"
+    /// • Relative path: "..", "subproject/" (AVOID "." - use None instead)
     /// • Absolute path: "/home/project", "/path/to/workspace"
     ///
     /// BEHAVIOR: When specified and different from server's initial scan, performs

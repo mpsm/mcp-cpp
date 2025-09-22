@@ -1,5 +1,30 @@
 # Changelog
 
+## [0.2.1] - Pending
+
+Improved AI agent guidance and error handling for C++ codebase navigation.
+
+### AI Agent Workflow Guidance
+
+Tools now guide agents to call `get_project_details` first for absolute build
+directory paths, then use those paths with `search_symbols` and `analyze_symbol_context`.
+Eliminates relative vs absolute path confusion and concatenation errors.
+
+Search tools distinguish C++ symbol names from file paths in query parameters.
+Empty query exploration recommended for unfamiliar codebases.
+
+### Enhanced Error Messages
+
+Path resolution errors now include scan root directory, available build directories,
+and path resolution details. Errors guide agents toward correct usage instead of
+providing cryptic failures.
+
+### Tool Performance Documentation
+
+Documentation emphasizes semantic-aware tools outperform filesystem operations
+(`find`, `grep`, `cat`) with C++ syntax understanding, template awareness, and
+automatic project boundary detection.
+
 ## [0.2.0] - 2025-01-21
 
 Complete rewrite of the initial MVP release. Redesigned to provide a stable
