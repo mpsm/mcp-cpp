@@ -1,6 +1,6 @@
 # Changelog
 
-## [0.2.1] - Pending
+## [0.2.1] - 2025-01-22
 
 Improved AI agent guidance and error handling for C++ codebase navigation.
 
