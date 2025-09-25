@@ -288,11 +288,6 @@ def main():
             response = client.list_tools()
             
         elif args.command == "search-symbols":
-            # Validate empty query only allowed with files parameter
-            if args.query == "" and not args.files:
-                print("Error: Empty query requires --files parameter for file-specific search", file=sys.stderr)
-                sys.exit(1)
-                
             arguments = {"query": args.query}
             
             # Add optional parameters
