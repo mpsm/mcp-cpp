@@ -156,7 +156,7 @@ async fn main() -> SdkResult<()> {
     // Create MCP server
     let server: ServerRuntime = server_runtime::create_server(server_details, transport, handler);
 
-    info!("C++ MCP Server ready, starting...");
+    info!("C++ MCP Server ready and listening for requests");
 
     // Start the server
     if let Err(start_error) = server.start().await {
