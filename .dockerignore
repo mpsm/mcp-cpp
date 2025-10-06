@@ -1,0 +1,43 @@
+# Build artifacts
+target/
+*.o
+*.a
+*.so
+
+# Git
+.git/
+.gitignore
+
+# Testing
+test/
+temp/
+
+# Node.js
+node_modules/
+package-lock.json
+
+# IDE and editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Documentation (not needed for build)
+*.md
+!README.md
+
+# CI/CD
+.github/
+
+# Logs
+*.log
+
+# Python
+__pycache__/
+*.pyc
+tools/
+
+# Docker (keep docker/ for entrypoint.sh)
+Dockerfile
+.dockerignore

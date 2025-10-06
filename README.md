@@ -59,6 +59,21 @@ cargo install --path .
 # (usually ~/.cargo/bin/mcp-cpp-server)
 ```
 
+### Docker Installation
+
+```bash
+# Build the Docker image
+docker build -t mcp-cpp-server .
+
+# Run with your C++ project mounted
+docker run -i --rm -v /path/to/your/cpp-project:/workspace mcp-cpp-server
+```
+
+The Docker image includes:
+- mcp-cpp-server binary
+- clangd-20 for C++ semantic analysis
+- Minimal Ubuntu-based runtime
+
 ## Usage
 
 ### Claude CLI Integration (Tested)
@@ -111,6 +126,28 @@ Add to your Claude Desktop configuration file (`~/.claude_desktop_config.json`):
   }
 }
 ```
+
+### Docker Usage with MCP Clients
+
+**Claude Desktop/CLI:**
+
+```json
+{
+  "mcpServers": {
+    "cpp-tools": {
+      "command": "docker",
+      "args": [
+        "run", "-i", "--rm",
+        "-v", "/path/to/cpp-project:/workspace",
+        "mcp-cpp-server",
+        "--root", "/workspace"
+      ]
+    }
+  }
+}
+```
+
+**Note:** Arguments after the image name are passed to mcp-cpp-server. Use `-e RUST_LOG=debug` for verbose logging.
 
 ## Platform Support
 
