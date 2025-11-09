@@ -125,6 +125,51 @@ jobs:
       - name: Build debug
         run: cargo build --verbose
 
+  cross-platform-build:
+    name: Cross-Platform Build (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: ${{ runner.os }}-cargo-registry-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-registry-
+
+      - name: Cache cargo build
+        uses: actions/cache@v4
+        with:
+          path: target
+          key: ${{ runner.os }}-cargo-build-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-build-
+            ${{ runner.os }}-cargo-
+
+      - name: Build release
+        run: cargo build --release --verbose
+
+      - name: Verify binary exists (Unix)
+        if: runner.os != 'Windows'
+        run: test -f target/release/mcp-cpp-server
+
+      - name: Verify binary exists (Windows)
+        if: runner.os == 'Windows'
+        run: Test-Path target/release/mcp-cpp-server.exe
+        shell: pwsh
+
   rust-integration-tests:
     name: Rust Integration Tests (clangd)
     runs-on: ubuntu-latest
