@@ -13,7 +13,7 @@ use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::{Child, Command};
 use tokio::task::JoinHandle;
 // warn! is used in Windows-specific code blocks
-use tracing::{error, info, trace};
+use tracing::{error, info, trace, warn};
 
 // ============================================================================
 // Process State Management
