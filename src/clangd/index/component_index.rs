@@ -24,9 +24,10 @@ pub enum ComponentIndexError {
 }
 
 /// File indexing states
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Default)]
 pub enum FileIndexState {
     /// File is pending indexing (not yet processed)
+    #[default]
     Pending,
     /// File is currently being indexed
     InProgress,
@@ -34,12 +35,6 @@ pub enum FileIndexState {
     Indexed,
     /// File indexing failed with error message
     Failed(String),
-}
-
-impl Default for FileIndexState {
-    fn default() -> Self {
-        Self::Pending
-    }
 }
 
 /// Comprehensive indexing summary with detailed state information

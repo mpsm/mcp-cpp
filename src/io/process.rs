@@ -12,8 +12,10 @@ use std::sync::{Arc, Mutex};
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::{Child, Command};
 use tokio::task::JoinHandle;
+use tracing::{error, info, trace};
 // warn! is used in Windows-specific code blocks
-use tracing::{error, info, trace, warn};
+#[cfg(windows)]
+use tracing::warn;
 
 // ============================================================================
 // Process State Management
