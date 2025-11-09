@@ -127,6 +127,39 @@ Add to your Claude Desktop configuration file (`~/.claude_desktop_config.json`):
 }
 ```
 
+### Claude Code Integration (VS Code Extension)
+
+Claude Code uses a different configuration file location and requires explicit permissions. Add to your Claude Code configuration file (`~/.claude.json`):
+
+```json
+{
+  "mcpServers": {
+    "cpp": {
+      "type": "stdio",
+      "command": "~/.cargo/bin/mcp-cpp-server",
+      "args": [],
+      "env": {
+        "CLANGD_PATH": "/opt/homebrew/opt/llvm/bin/clangd"
+      }
+    }
+  },
+  "permissions": {
+    "allow": [
+      "mcp__cpp__search_symbols",
+      "mcp__cpp__analyze_symbol_context",
+      "mcp__cpp__get_project_details"
+    ]
+  }
+}
+```
+
+**Notes:**
+- Claude Code reads `~/.claude.json`, not `~/.claude/mcp_servers.json`
+- The `permissions` section is required to enable the MCP tools
+- Adjust the `command` path to match your cargo installation (use `which mcp-cpp-server` to find it)
+- Adjust `CLANGD_PATH` to your clangd installation (use `which clangd` to find it, or omit if clangd is in your PATH)
+- Tools are prefixed with `mcp__cpp__` in Claude Code (e.g., `mcp__cpp__search_symbols`)
+
 ### Docker Usage with MCP Clients
 
 **Claude Desktop/CLI:**
