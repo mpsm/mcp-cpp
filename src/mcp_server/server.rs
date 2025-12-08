@@ -14,6 +14,7 @@ use crate::project::{ProjectError, ProjectWorkspace, WorkspaceSession};
 use crate::register_tools;
 use crate::{log_mcp_message, log_timing};
 use std::path::PathBuf;
+use std::sync::Arc;
 use std::time::Instant;
 
 pub struct CppServerHandler {
@@ -120,7 +121,7 @@ impl ServerHandler for CppServerHandler {
     async fn handle_list_tools_request(
         &self,
         request: ListToolsRequest,
-        _runtime: &dyn McpServer,
+        _runtime: Arc<dyn McpServer>,
     ) -> std::result::Result<ListToolsResult, RpcError> {
         let start = Instant::now();
 
@@ -142,7 +143,7 @@ impl ServerHandler for CppServerHandler {
     async fn handle_call_tool_request(
         &self,
         request: CallToolRequest,
-        _runtime: &dyn McpServer,
+        _runtime: Arc<dyn McpServer>,
     ) -> std::result::Result<CallToolResult, CallToolError> {
         let start = Instant::now();
         let tool_name = request.params.name.clone();

@@ -19,9 +19,7 @@ use rust_mcp_sdk::schema::{
 };
 
 use rust_mcp_sdk::{
-    McpServer, StdioTransport, TransportOptions,
-    error::SdkResult,
-    mcp_server::{ServerRuntime, server_runtime},
+    McpServer, StdioTransport, TransportOptions, error::SdkResult, mcp_server::server_runtime,
 };
 use std::path::PathBuf;
 use tracing::info;
@@ -154,7 +152,7 @@ async fn main() -> SdkResult<()> {
     };
 
     // Create MCP server
-    let server: ServerRuntime = server_runtime::create_server(server_details, transport, handler);
+    let server = server_runtime::create_server(server_details, transport, handler);
 
     info!("C++ MCP Server ready and listening for requests");
 

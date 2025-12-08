@@ -20,7 +20,7 @@ flate2 = "1.0"
 hex = "0.4"
 libc = "0.2"
 lsp-types = "0.97"
-rust-mcp-sdk = { version = "0.6", features = ["macros"] }
+rust-mcp-sdk = { version = "0.7", features = ["macros"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 thiserror = "2.0"
