@@ -1,5 +1,10 @@
 # Changelog
 
+## [0.2.2] - 2025-12-08
+
+Updated MCP protocol schema to version 2025-11-25 (rust-mcp-sdk 0.6 → 0.7).
+Server handler signatures now use Arc<dyn McpServer> for improved concurrency.
+
 ## [0.2.1] - 2025-01-22
 
 Improved AI agent guidance and error handling for C++ codebase navigation.
