@@ -67,6 +67,8 @@ pub struct FileProcessingResult {
     pub symbols_found: usize,
 }
 
+/// # MCP Tool: search_symbols
+///
 /// Advanced C++ symbol search engine with intelligent dual-mode operation for comprehensive
 /// codebase exploration. Leverages clangd LSP for semantic understanding and provides
 /// both broad workspace discovery and precise file-specific analysis capabilities.

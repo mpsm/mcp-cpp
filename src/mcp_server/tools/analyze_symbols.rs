@@ -62,6 +62,8 @@ impl From<AnalyzerError> for ErrorData {
 // MCP Tool Definition - PRESERVE EXACT EXTERNAL SCHEMA
 // ============================================================================
 
+/// # MCP Tool: analyze_symbol_context
+///
 /// Advanced multi-dimensional C++ symbol analysis engine providing comprehensive contextual
 /// understanding of any symbol in your codebase through sophisticated clangd LSP integration.
 /// This tool performs deep semantic analysis combining multiple LSP operations to deliver
@@ -637,7 +639,18 @@ mod tests {
         let clangd_path = crate::test_utils::get_test_clangd_path();
         let workspace_session = WorkspaceSession::new(workspace.clone(), clangd_path)
             .expect("Failed to create workspace session");
-        // ComponentSession handles session management internally
+
+        // Ensure indexing is completed before testing
+        let component_session = workspace_session
+            .get_component_session(test_project.build_dir.clone())
+            .await
+            .unwrap();
+        component_session
+            .ensure_indexed(crate::test_utils::DEFAULT_INDEXING_TIMEOUT)
+            .await
+            .expect("Indexing should complete successfully for analyzer test");
+
+        info!("Indexing completed, proceeding with analyzer test");
 
         let tool = AnalyzeSymbolContextTool {
             symbol: "Math".to_string(),
@@ -652,10 +665,6 @@ mod tests {
             include_code: None,
         };
 
-        let component_session = workspace_session
-            .get_component_session(test_project.build_dir.clone())
-            .await
-            .unwrap();
         let result = tool.call_tool(component_session, &workspace).await;
 
         // Check and log error if present
@@ -722,6 +731,79 @@ mod tests {
         assert!(
             !analyzer_result.examples.is_empty(),
             "Should have usage examples"
+        );
+    }
+
+    #[cfg(feature = "clangd-integration-tests")]
+    #[tokio::test]
+    async fn test_analyzer_with_max_examples() {
+        use super::*;
+
+        // Create a test project first
+        use crate::test_utils::integration::TestProject;
+        let test_project = TestProject::new().await.unwrap();
+        test_project.cmake_configure().await.unwrap();
+
+        // Scan the test project to create a proper workspace with components
+        use crate::project::{ProjectScanner, WorkspaceSession};
+        let scanner = ProjectScanner::with_default_providers();
+        let workspace = scanner
+            .scan_project(&test_project.project_root, 3, None)
+            .expect("Failed to scan test project");
+
+        // Create a WorkspaceSession with test clangd path
+        let clangd_path = crate::test_utils::get_test_clangd_path();
+        let workspace_session = WorkspaceSession::new(workspace.clone(), clangd_path)
+            .expect("Failed to create workspace session");
+
+        // Ensure indexing is completed before testing
+        let component_session = workspace_session
+            .get_component_session(test_project.build_dir.clone())
+            .await
+            .unwrap();
+        component_session
+            .ensure_indexed(crate::test_utils::DEFAULT_INDEXING_TIMEOUT)
+            .await
+            .expect("Indexing should complete successfully for analyzer test");
+
+        info!("Indexing completed, proceeding with max_examples test");
+
+        // Test with max_examples = 2
+        let tool = AnalyzeSymbolContextTool {
+            symbol: "Math".to_string(),
+            build_directory: None,
+            max_examples: Some(2),
+            location_hint: None,
+            wait_timeout: None,
+            include_type_hierarchy: None,
+            include_call_hierarchy: None,
+            include_usage_patterns: None,
+            include_members: None,
+            include_code: None,
+        };
+
+        let result = tool.call_tool(component_session, &workspace).await;
+
+        assert!(result.is_ok());
+
+        let call_result = result.unwrap();
+        // Extract text from CallToolResult
+        let text = match call_result.content.first().map(|c| &c.raw) {
+            Some(rmcp::model::RawContent::Text(rmcp::model::RawTextContent { text, .. })) => text,
+            _ => panic!("Expected TextContent in call_result"),
+        };
+        let analyzer_result: AnalyzerResult = serde_json::from_str(text).unwrap();
+
+        // Should have at most 2 examples
+        assert!(
+            analyzer_result.examples.len() <= 2,
+            "Should have at most 2 examples, but got {}",
+            analyzer_result.examples.len()
+        );
+
+        info!(
+            "Found {} usage examples (max was 2)",
+            analyzer_result.examples.len()
         );
     }
 }

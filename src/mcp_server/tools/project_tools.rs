@@ -9,6 +9,8 @@ use tracing::{info, instrument};
 use super::utils::serialize_result;
 use crate::project::ProjectWorkspace;
 
+/// # MCP Tool: get_project_details
+///
 /// Get comprehensive project analysis including build configurations, components,
 /// and global compilation database information. Provides complete workspace
 /// intelligence for multi-provider build systems.
