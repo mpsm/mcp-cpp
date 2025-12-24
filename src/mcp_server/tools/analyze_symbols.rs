@@ -62,21 +62,158 @@ impl From<AnalyzerError> for ErrorData {
 // MCP Tool Definition - PRESERVE EXACT EXTERNAL SCHEMA
 // ============================================================================
 
-/// Tool parameters for analyze_symbol_context
+/// Advanced multi-dimensional C++ symbol analysis engine providing comprehensive contextual
+/// understanding of any symbol in your codebase through sophisticated clangd LSP integration.
+/// This tool performs deep semantic analysis combining multiple LSP operations to deliver
+/// complete symbol intelligence for complex C++ codebases.
+///
+/// 🚀 RECOMMENDED WORKFLOW FOR AI AGENTS:
+/// 1. ALWAYS call get_project_details first to discover available build directories
+/// 2. Use the ABSOLUTE build directory paths from get_project_details output
+/// 3. Use search_symbols with empty query to find symbols of interest first
+/// 4. Then call analyze_symbol_context with specific symbol names
+///
+/// Example workflow:
+/// • get_project_details {} → Returns: {"/home/project/build-debug": {...}}
+/// • search_symbols {"query": "", "build_directory": "/home/project/build-debug"} → Discover symbols
+/// • analyze_symbol_context {"symbol": "Math", "build_directory": "/home/project/build-debug"}
+///
+/// ⚡ WHY USE THESE TOOLS:
+/// • MUCH FASTER than filesystem reads (grep, find, cat commands)
+/// • SEMANTIC AWARENESS: Deep understanding of C++ relationships, inheritance, calls
+/// • COMPREHENSIVE ANALYSIS: Gets all context (usage, hierarchy, documentation) in one call
+/// • LSP INTEGRATION: Uses same semantic understanding as IDEs
+///
+/// 🔍 SYMBOL RESOLUTION CAPABILITIES:
+/// • Simple names: 'MyClass', 'factorial', 'process'
+/// • Fully qualified names: 'std::vector', 'MyNamespace::MyClass'
+/// • Global scope symbols: '::main', '::global_function'
+/// • Template specializations and overloaded functions
+/// • Advanced disambiguation using optional location hints
+///
+/// 📊 CORE SEMANTIC ANALYSIS:
+/// • Precise symbol kind classification (class, function, variable, etc.)
+/// • Complete type information with template parameters
+/// • Extracted documentation comments and signatures
+/// • Definition and declaration locations with file mappings
+/// • Fully qualified names with namespace resolution
+///
+/// 🏛 CLASS MEMBER ANALYSIS (classes/structs):
+/// • Flat enumeration of all class members (methods, fields, constructors)
+/// • Member kind classification with string representation (method, field, constructor, etc.)
+/// • Member signatures and documentation extraction
+/// • Static vs instance member identification
+/// • Access level determination where available
+///
+/// 📈 USAGE EXAMPLES (always included):
+/// • Concrete code snippets showing how the symbol is used throughout the codebase
+/// • Real usage patterns from actual code references
+/// • Automatically collected from all references to the symbol
+/// • Configurable limit via max_examples parameter (unlimited by default)
+///
+/// 🏗️ INHERITANCE HIERARCHY ANALYSIS (optional):
+/// • Complete class relationship mapping and base class hierarchies
+/// • Derived class discovery and virtual function relationships
+/// • Multiple inheritance resolution and abstract interface identification
+/// • Essential for understanding polymorphic relationships
+///
+/// 📞 CALL RELATIONSHIP ANALYSIS (optional):
+/// • Incoming call discovery (who calls this function)
+/// • Outgoing call mapping (what functions this calls)
+/// • Call chain traversal with configurable depth limits
+/// • Dependency relationship mapping and recursive call detection
+///
+/// ⚡ PERFORMANCE & RELIABILITY:
+/// • Leverages clangd's high-performance indexing system
+/// • Concurrent LSP request processing for parallel analysis
+/// • Intelligent caching and graceful degradation
+/// • Automatic build directory detection and clangd setup
+///
+/// 🎯 TARGET USE CASES:
+/// Code navigation • Dependency analysis • Refactoring preparation • Architecture understanding
+/// • Debugging inheritance issues • Code review assistance • Technical documentation • Educational exploration
+/// • Class member discovery and API exploration
+///
+/// INPUT REQUIREMENTS:
+/// • symbol: Required C++ symbol name to analyze (NOT file paths!)
+/// • build_directory: Optional - STRONGLY PREFER absolute paths from get_project_details
+/// • max_examples: Optional number - limits the number of usage examples (unlimited by default)
+/// • location_hint: Optional string - location hint for disambiguating overloaded symbols (format: "/path/file.cpp:line:column")
+/// • wait_timeout: Optional number - timeout for indexing completion in seconds (default: 20s, 0 = no wait)
+///
+/// AUTOMATIC ANALYSIS (no flags required):
+/// Inheritance hierarchy, call relationships, and usage patterns are automatically included when applicable based on symbol type.
 #[derive(Debug, ::serde::Serialize, ::serde::Deserialize)]
 pub struct AnalyzeSymbolContextTool {
     /// The C++ SYMBOL NAME to analyze (NOT file paths, component names, or directory names).
+    /// This must be the exact name of a C++ code symbol.
+    ///
+    /// SYMBOL NAME EXAMPLES:
+    /// • Class names: "Math", "Calculator", "MyClass"
+    /// • Function names: "factorial", "main", "processData"
+    /// • Fully qualified: "std::vector", "MyNamespace::MyClass"
+    /// • Global scope: "::main", "::global_var"
+    /// • Methods: "MyClass::method" (class context will be analyzed)
+    ///
+    /// NOT VALID (these are not symbol names):
+    /// • File paths: "src/math.cpp", "include/header.h"
+    /// • Component names: "math_library", "core_module"
+    /// • Directory names: "src", "include"
+    ///
+    /// TIP: Use search_symbols with empty query first to discover what symbols exist.
+    /// For overloaded functions or template specializations, consider providing
+    /// the optional 'location_hint' parameter for precise disambiguation.
     pub symbol: String,
 
     /// Build directory path containing compile_commands.json. STRONGLY RECOMMENDED: Use absolute paths from get_project_details output.
+    ///
+    /// WORKFLOW:
+    /// 1. Call get_project_details to see available build directories with absolute paths
+    /// 2. Copy the absolute path from that output (e.g., "/home/project/build-debug")
+    /// 3. Use that absolute path here to avoid path concatenation issues
+    ///
+    /// EXAMPLES:
+    /// • GOOD: "/home/project/build-debug", "/absolute/path/to/build"
+    /// • AVOID: "build", "../build" (relative paths can cause concatenation issues)
+    ///
+    /// BEHAVIOR: When specified, uses this build directory instead of auto-detection.
+    /// The build directory must contain compile_commands.json for clangd integration.
+    ///
+    /// AUTO-DETECTION (when not specified): Attempts to find single build directory
+    /// in current workspace. Fails if multiple or zero build directories found.
+    ///
+    /// CLANGD SETUP: clangd CWD will be set to project root (from CMAKE_SOURCE_DIR),
+    /// and build directory will be passed via --compile-commands-dir argument.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub build_directory: Option<String>,
 
     /// Maximum number of usage examples to include in the analysis. OPTIONAL.
+    ///
+    /// BEHAVIOR:
+    /// • Not specified or None: Returns all available usage examples (unlimited)
+    /// • Some(n): Returns at most n usage examples
+    ///
+    /// EXAMPLES are code snippets showing how the symbol is used throughout the codebase.
+    /// They are collected from references to the symbol, excluding the declaration itself.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_examples: Option<u32>,
 
     /// Location hint for disambiguating overloaded symbols. OPTIONAL.
+    ///
+    /// FORMAT: Compact LSP-style location string with 1-based line/column numbers:
+    /// • "/absolute/path/to/file.cpp:line:column"
+    /// • Example: "/home/project/src/Math.cpp:89:8"
+    ///
+    /// BEHAVIOR:
+    /// • None: Uses workspace symbol resolution (fuzzy matching across project)
+    /// • Some(location): Finds document symbol at the specified location
+    ///
+    /// USE CASES:
+    /// • Disambiguating function overloads with same name but different signatures
+    /// • Targeting specific template specializations
+    /// • Precise symbol selection in files with multiple symbols of same name
+    ///
+    /// NOTE: Column number is required. Use editor or LSP tools to get exact position.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub location_hint: Option<String>,
 

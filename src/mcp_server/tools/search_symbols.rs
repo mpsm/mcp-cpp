@@ -67,14 +67,93 @@ pub struct FileProcessingResult {
     pub symbols_found: usize,
 }
 
-/// Tool parameters for search_symbols
+/// Advanced C++ symbol search engine with intelligent dual-mode operation for comprehensive
+/// codebase exploration. Leverages clangd LSP for semantic understanding and provides
+/// both broad workspace discovery and precise file-specific analysis capabilities.
+///
+/// 🚀 RECOMMENDED WORKFLOW FOR AI AGENTS:
+/// 1. ALWAYS call get_project_details first to discover available build directories
+/// 2. Use the ABSOLUTE build directory paths from get_project_details output
+/// 3. Then call search_symbols with the build_directory parameter
+///
+/// Example workflow:
+/// • get_project_details {} → Returns: {"/home/project/build-debug": {...}}
+/// • search_symbols {"query": "Math", "build_directory": "/home/project/build-debug"}
+///
+/// ⚡ WHY USE THESE TOOLS:
+/// • MUCH FASTER than filesystem reads (ls, find, grep commands)
+/// • SEMANTIC AWARENESS: Understands C++ syntax, templates, namespaces
+/// • PROJECT INTELLIGENCE: Filters out system/external symbols automatically
+/// • LSP INTEGRATION: Uses same semantic understanding as IDEs
+///
+/// 🔍 DUAL SEARCH MODES:
+/// • Workspace Search (default): Fuzzy matching across entire codebase using clangd workspace symbols
+/// • Document Search (with files parameter): Comprehensive symbol enumeration within specific files
+/// • Smart mode selection based on parameters for optimal results
+///
+/// 📋 SYMBOL OVERVIEW CAPABILITY:
+/// • Use empty query ("") with files parameter to list ALL symbols in specified files
+/// • Use empty query ("") without files for workspace-wide symbol discovery (subject to clangd heuristics)
+/// • Perfect for getting complete symbol inventory of headers or source files
+/// • Ideal for API exploration and codebase familiarization
+/// • No search filtering - shows comprehensive symbol catalog
+/// • ⚠️ Note: Workspace-wide empty queries may not return all symbols due to clangd's internal filtering
+///
+/// 🎯 INTELLIGENT FILTERING:
+/// • Symbol kinds: Class, Function, Method, Variable, Enum, Namespace, Constructor, Field, Interface, Struct
+/// • Project boundary detection (exclude external/system symbols by default)
+/// • Fuzzy matching with clangd's relevance ranking preserved
+/// • Configurable result limits with smart client-side application
+///
+/// ⚡ PERFORMANCE & RELIABILITY:
+/// • Fixed 2000-symbol queries to clangd with client-side limiting for consistent ranking
+/// • Indexing progress tracking with configurable timeout control
+/// • Automatic build directory detection and validation
+/// • Graceful handling of large codebases with intelligent result capping
+///
+/// 🏗️ BUILD SYSTEM INTEGRATION:
+/// • Multi-provider support (CMake, Meson, extensible architecture)
+/// • Automatic compilation database discovery and validation
+/// • Custom build directory specification for multi-component projects
+/// • Project vs external symbol classification using compilation database analysis
+///
+/// 🎮 USAGE PATTERNS:
+/// • Discovery: search_symbols {"query": "vector", "max_results": 10}
+/// • Type filtering: search_symbols {"query": "Process", "kinds": ["Class", "Struct"]}
+/// • File overview: search_symbols {"query": "", "files": ["include/api.h"]}
+/// • PROJECT EXPLORATION: search_symbols {"query": "", "max_results": 100, "build_directory": "/abs/path"}
+///   → Returns top symbols to understand what the project does (classes, main functions, key APIs)
+/// • Workspace overview: search_symbols {"query": "", "max_results": 500} (limited by clangd)
+/// • External symbols: search_symbols {"query": "std::", "include_external": true}
+///
+/// INPUT PARAMETERS:
+/// • query: C++ symbol name to search (NOT file paths!) - use "" when unsure to explore first
+/// • files: Optional file paths for document-specific search
+/// • kinds: Optional symbol type filtering (PascalCase names)
+/// • max_results: Result limit (default: 100, max: 1000)
+/// • include_external: Include system/library symbols (default: false)
+/// • build_directory: Custom build directory path (STRONGLY PREFER ABSOLUTE PATHS from get_project_details)
+/// • wait_timeout: Indexing completion timeout in seconds (default: 20s, 0 = no wait)
 #[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub struct SearchSymbolsTool {
     /// Search query to match C++ SYMBOL NAMES (class names, function names, variable names, etc.).
     /// This is NOT for file paths, component names, or directory names - only code symbol names.
+    ///
+    /// EXAMPLES:
+    /// • "Math" (matches class/namespace named Math)
+    /// • "factorial" (matches functions named factorial)
+    /// • "std::vector" (matches the vector class from std namespace)
+    /// • "" (EMPTY STRING for PROJECT EXPLORATION - see all important symbols)
+    ///
+    /// WHEN UNSURE: Use empty string ("") first to explore what symbols exist, then search for specific ones.
+    ///
+    /// USE CASES FOR EMPTY QUERY:
+    /// • WITH files parameter: Complete symbol listing for specific files
+    /// • WITHOUT files parameter: PROJECT EXPLORATION - discover key symbols to understand project purpose
+    /// Note: Workspace-wide empty queries subject to clangd heuristics - may not return all symbols.
     pub query: String,
 
-    /// Optional symbol kinds to filter results. Supported PascalCase names: "Class", "Function", "Method", "Variable", "Enum", "Namespace", "Constructor", "Field", "Interface", "Struct".
+    /// Optional symbol kinds to filter results. Supported PascalCase names: "Class", "Function", "Method", "Variable", "Enum", "Namespace", "Constructor", "Field", "Interface", "Struct". Can specify multiple kinds for combined filtering.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub kinds: Option<Vec<String>>,
 
@@ -91,6 +170,15 @@ pub struct SearchSymbolsTool {
     pub include_external: Option<bool>,
 
     /// Build directory path containing compile_commands.json. STRONGLY RECOMMENDED: Use absolute paths from get_project_details output.
+    ///
+    /// WORKFLOW:
+    /// 1. Call get_project_details to see available build directories with absolute paths
+    /// 2. Copy the absolute path from that output (e.g., "/home/project/build-debug")
+    /// 3. Use that absolute path here to avoid path concatenation issues
+    ///
+    /// EXAMPLES:
+    /// • GOOD: "/home/project/build-debug", "/absolute/path/to/build"
+    /// • AVOID: "build", "../build" (relative paths can cause concatenation issues)
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub build_directory: Option<String>,
 
