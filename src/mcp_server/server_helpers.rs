@@ -1,6 +1,6 @@
 //! Server helper utilities for common operations
 
-use rust_mcp_sdk::schema::{CallToolResult, schema_utils::CallToolError};
+use rmcp::ErrorData;
 use serde::de::DeserializeOwned;
 use std::path::PathBuf;
 use tracing::debug;
@@ -15,7 +15,7 @@ use crate::project::ProjectWorkspace;
 ///
 /// # Returns
 /// * `Ok(PathBuf)` - The resolved build directory path
-/// * `Err(CallToolError)` - If the specified directory doesn't exist in workspace or if
+/// * `Err(ErrorData)` - If the specified directory doesn't exist in workspace or if
 ///   auto-detection fails due to zero or multiple build directories
 ///
 /// # Behavior
@@ -26,7 +26,7 @@ use crate::project::ProjectWorkspace;
 pub fn resolve_build_directory(
     workspace: &ProjectWorkspace,
     requested_build_dir: Option<&str>,
-) -> Result<PathBuf, CallToolError> {
+) -> Result<PathBuf, ErrorData> {
     match requested_build_dir {
         Some(build_dir_str) => {
             debug!(
@@ -82,8 +82,7 @@ pub fn resolve_build_directory(
                         String::new()
                     };
 
-                    return Err(CallToolError::new(std::io::Error::new(
-                        std::io::ErrorKind::NotFound,
+                    return Err(ErrorData::invalid_params(
                         format!(
                             "Build directory '{}' does not exist{}. Scan root: '{}'. Run get_project_details first to see available build directories with absolute paths. Available directories: {:?}. STRONGLY RECOMMEND: Use absolute paths from get_project_details output.",
                             absolute_path.display(),
@@ -91,7 +90,8 @@ pub fn resolve_build_directory(
                             workspace.project_root_path.display(),
                             available_dirs
                         ),
-                    )));
+                        None,
+                    ));
                 }
 
                 // Return the path anyway - let get_component_session handle dynamic discovery
@@ -105,13 +105,13 @@ pub fn resolve_build_directory(
             match build_dirs.len() {
                 0 => {
                     debug!("No build directories found in workspace");
-                    Err(CallToolError::new(std::io::Error::new(
-                        std::io::ErrorKind::NotFound,
+                    Err(ErrorData::invalid_params(
                         format!(
                             "No build directories found in project. Scan root: '{}'. Run get_project_details first to see project status and available build configurations. If no build directories exist, you may need to run cmake or meson to generate build configuration.",
                             workspace.project_root_path.display()
                         ),
-                    )))
+                        None,
+                    ))
                 }
                 1 => {
                     debug!("Single build directory found: {:?}", build_dirs[0]);
@@ -119,14 +119,14 @@ pub fn resolve_build_directory(
                 }
                 _ => {
                     debug!("Multiple build directories found: {:?}", build_dirs);
-                    Err(CallToolError::new(std::io::Error::new(
-                        std::io::ErrorKind::InvalidInput,
+                    Err(ErrorData::invalid_params(
                         format!(
                             "Multiple build directories found. Scan root: '{}'. Run get_project_details to see all available options with absolute paths, then specify one using the build_directory parameter. Available directories: {:?}. STRONGLY RECOMMEND: Use absolute paths from get_project_details output.",
                             workspace.project_root_path.display(),
                             build_dirs
                         ),
-                    )))
+                        None,
+                    ))
                 }
             }
         }
@@ -134,99 +134,25 @@ pub fn resolve_build_directory(
 }
 
 /// Extension trait for cleaner tool argument deserialization
+#[allow(dead_code)]
 pub trait ToolArguments {
     /// Deserialize MCP tool arguments to a concrete tool type
-    fn deserialize_tool<T: DeserializeOwned>(self, tool_name: &str) -> Result<T, CallToolError>;
+    fn deserialize_tool<T: DeserializeOwned>(self, tool_name: &str) -> Result<T, ErrorData>;
 }
 
 impl ToolArguments for Option<serde_json::Map<String, serde_json::Value>> {
-    fn deserialize_tool<T: DeserializeOwned>(self, tool_name: &str) -> Result<T, CallToolError> {
+    fn deserialize_tool<T: DeserializeOwned>(self, tool_name: &str) -> Result<T, ErrorData> {
         serde_json::from_value(
             self.map(serde_json::Value::Object)
                 .unwrap_or(serde_json::Value::Null),
         )
         .map_err(|e| {
-            CallToolError::new(std::io::Error::new(
-                std::io::ErrorKind::InvalidInput,
+            ErrorData::invalid_params(
                 format!("Failed to deserialize {tool_name} arguments: {e}"),
-            ))
+                None,
+            )
         })
     }
-}
-
-/// Trait for unified MCP tool handling with compile-time safety
-pub trait McpToolHandler<T> {
-    /// The tool name (must match the #[mcp_tool] name attribute)
-    const TOOL_NAME: &'static str;
-
-    /// Handle sync tools (default implementation panics - override for sync tools)
-    #[allow(dead_code)]
-    fn call_tool_sync(&self, _tool: T) -> Result<CallToolResult, CallToolError> {
-        panic!("call_tool_sync not implemented - this tool should use call_tool_async")
-    }
-
-    /// Handle async tools (default implementation panics - override for async tools)  
-    async fn call_tool_async(&self, _tool: T) -> Result<CallToolResult, CallToolError> {
-        panic!("call_tool_async not implemented - this tool should use call_tool_sync")
-    }
-}
-
-/// Macro for registering MCP tools with compile-time safety
-///
-/// Usage:
-/// ```
-/// register_tools! {
-///     HandlerType {
-///         ToolStruct => handler_method (sync),
-///         AnotherTool => another_handler (async),
-///     }
-/// }
-/// ```
-#[macro_export]
-macro_rules! register_tools {
-    ($handler_type:ty {
-        $($tool_type:ty => $handler_method:ident ($tool_mode:ident)),+ $(,)?
-    }) => {
-        impl $handler_type {
-            /// Generate the dispatch function with compile-time safety
-            pub async fn dispatch_tool(
-                &self,
-                tool_name: &str,
-                arguments: Option<serde_json::Map<String, serde_json::Value>>,
-            ) -> Result<rust_mcp_sdk::schema::CallToolResult, rust_mcp_sdk::schema::schema_utils::CallToolError> {
-                use $crate::mcp_server::server_helpers::{McpToolHandler, ToolArguments};
-
-                match tool_name {
-                    $(
-                        <Self as McpToolHandler<$tool_type>>::TOOL_NAME => {
-                            let tool: $tool_type = arguments.deserialize_tool(tool_name)?;
-                            register_tools!(@dispatch_call self, tool, $tool_mode)
-                        }
-                    )+
-                    _ => Err(rust_mcp_sdk::schema::schema_utils::CallToolError::unknown_tool(
-                        format!("Unknown tool: {}", tool_name)
-                    ))
-                }
-            }
-
-            /// Generate the tool registration list
-            pub fn registered_tools() -> Vec<rust_mcp_sdk::schema::Tool> {
-                vec![
-                    $(
-                        <$tool_type>::tool(),
-                    )+
-                ]
-            }
-        }
-    };
-
-    // Helper macro for sync vs async dispatch
-    (@dispatch_call $self:expr, $tool:expr, sync) => {
-        $self.call_tool_sync($tool)
-    };
-    (@dispatch_call $self:expr, $tool:expr, async) => {
-        $self.call_tool_async($tool).await
-    };
 }
 
 #[cfg(test)]
@@ -238,7 +164,7 @@ mod tests {
         // Test validates function signature compatibility.
         // Full integration test coverage is provided by the E2E test suite
         // which exercises this function with real ProjectWorkspace instances.
-        let _result: fn(&ProjectWorkspace, Option<&str>) -> Result<PathBuf, CallToolError> =
+        let _result: fn(&ProjectWorkspace, Option<&str>) -> Result<PathBuf, ErrorData> =
             resolve_build_directory;
     }
 }

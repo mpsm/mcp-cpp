@@ -20,6 +20,7 @@ use crate::project::{ProjectError, ProjectScanner, ProjectWorkspace};
 /// reuse, and cleanup of ComponentSession instances for different build directories.
 /// This orchestrates component sessions while maintaining the same external API.
 /// Supports dynamic component discovery for build directories not found in initial scanning.
+#[derive(Clone)]
 pub struct WorkspaceSession {
     /// Project workspace for determining project root and components (mutable for dynamic discovery)
     workspace: Arc<Mutex<ProjectWorkspace>>,
@@ -29,8 +30,6 @@ pub struct WorkspaceSession {
     clangd_path: String,
     /// Clangd version information
     clangd_version: ClangdVersion,
-    /// Project scanner for dynamic component discovery
-    scanner: ProjectScanner,
 }
 
 impl WorkspaceSession {
@@ -46,15 +45,11 @@ impl WorkspaceSession {
             clangd_version.major, clangd_version.minor, clangd_version.patch
         );
 
-        // Create scanner with default providers for dynamic discovery
-        let scanner = ProjectScanner::with_default_providers();
-
         Ok(Self {
             workspace: Arc::new(Mutex::new(workspace)),
             component_sessions: Arc::new(Mutex::new(HashMap::new())),
             clangd_path,
             clangd_version,
-            scanner,
         })
     }
 
@@ -95,7 +90,10 @@ impl WorkspaceSession {
                     build_dir.display()
                 );
 
-                match self.scanner.discover_component(&build_dir)? {
+                // Create scanner on-demand for dynamic discovery
+                let scanner = ProjectScanner::with_default_providers();
+
+                match scanner.discover_component(&build_dir)? {
                     Some(discovered_component) => {
                         // Add the discovered component to the workspace
                         let mut workspace = self.workspace.lock().await;

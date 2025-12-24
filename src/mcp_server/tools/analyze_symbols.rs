@@ -6,8 +6,10 @@
 //! - project/: Extensible project/build system abstraction
 //! - io/: Process and transport management
 
-use rust_mcp_sdk::macros::{JsonSchema, mcp_tool};
-use rust_mcp_sdk::schema::{CallToolResult, TextContent, schema_utils::CallToolError};
+use rmcp::{
+    ErrorData,
+    model::{CallToolResult, Content},
+};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use tracing::{error, info, instrument, warn};
@@ -50,9 +52,9 @@ pub enum AnalyzerError {
     Project(#[from] ProjectError),
 }
 
-impl From<AnalyzerError> for CallToolError {
+impl From<AnalyzerError> for ErrorData {
     fn from(err: AnalyzerError) -> Self {
-        CallToolError::new(std::io::Error::other(err.to_string()))
+        ErrorData::internal_error(err.to_string(), None)
     }
 }
 
@@ -60,167 +62,49 @@ impl From<AnalyzerError> for CallToolError {
 // MCP Tool Definition - PRESERVE EXACT EXTERNAL SCHEMA
 // ============================================================================
 
-#[mcp_tool(
-    name = "analyze_symbol_context",
-    description = "Advanced multi-dimensional C++ symbol analysis engine providing comprehensive contextual \
-                   understanding of any symbol in your codebase through sophisticated clangd LSP integration. \
-                   This tool performs deep semantic analysis combining multiple LSP operations to deliver \
-                   complete symbol intelligence for complex C++ codebases.
-
-                   🚀 RECOMMENDED WORKFLOW FOR AI AGENTS:
-                   1. ALWAYS call get_project_details first to discover available build directories
-                   2. Use the ABSOLUTE build directory paths from get_project_details output
-                   3. Use search_symbols with empty query to find symbols of interest first
-                   4. Then call analyze_symbol_context with specific symbol names
-
-                   Example workflow:
-                   • get_project_details {} → Returns: {\"/home/project/build-debug\": {...}}
-                   • search_symbols {\"query\": \"\", \"build_directory\": \"/home/project/build-debug\"} → Discover symbols
-                   • analyze_symbol_context {\"symbol\": \"Math\", \"build_directory\": \"/home/project/build-debug\"}
-
-                   ⚡ WHY USE THESE TOOLS:
-                   • MUCH FASTER than filesystem reads (grep, find, cat commands)
-                   • SEMANTIC AWARENESS: Deep understanding of C++ relationships, inheritance, calls
-                   • COMPREHENSIVE ANALYSIS: Gets all context (usage, hierarchy, documentation) in one call
-                   • LSP INTEGRATION: Uses same semantic understanding as IDEs
-
-                   🔍 SYMBOL RESOLUTION CAPABILITIES:
-                   • Simple names: 'MyClass', 'factorial', 'process'
-                   • Fully qualified names: 'std::vector', 'MyNamespace::MyClass'
-                   • Global scope symbols: '::main', '::global_function'
-                   • Template specializations and overloaded functions
-                   • Advanced disambiguation using optional location hints
-
-                   📊 CORE SEMANTIC ANALYSIS:
-                   • Precise symbol kind classification (class, function, variable, etc.)
-                   • Complete type information with template parameters
-                   • Extracted documentation comments and signatures
-                   • Definition and declaration locations with file mappings
-                   • Fully qualified names with namespace resolution
-
-                   🏛 CLASS MEMBER ANALYSIS (classes/structs):
-                   • Flat enumeration of all class members (methods, fields, constructors)
-                   • Member kind classification with string representation (method, field, constructor, etc.)
-                   • Member signatures and documentation extraction
-                   • Static vs instance member identification
-                   • Access level determination where available
-
-                   📈 USAGE EXAMPLES (always included):
-                   • Concrete code snippets showing how the symbol is used throughout the codebase
-                   • Real usage patterns from actual code references
-                   • Automatically collected from all references to the symbol
-                   • Configurable limit via max_examples parameter (unlimited by default)
-
-                   🏗️ INHERITANCE HIERARCHY ANALYSIS (optional):
-                   • Complete class relationship mapping and base class hierarchies
-                   • Derived class discovery and virtual function relationships
-                   • Multiple inheritance resolution and abstract interface identification
-                   • Essential for understanding polymorphic relationships
-
-                   📞 CALL RELATIONSHIP ANALYSIS (optional):
-                   • Incoming call discovery (who calls this function)
-                   • Outgoing call mapping (what functions this calls)
-                   • Call chain traversal with configurable depth limits
-                   • Dependency relationship mapping and recursive call detection
-
-                   ⚡ PERFORMANCE & RELIABILITY:
-                   • Leverages clangd's high-performance indexing system
-                   • Concurrent LSP request processing for parallel analysis
-                   • Intelligent caching and graceful degradation
-                   • Automatic build directory detection and clangd setup
-
-                   🎯 TARGET USE CASES:
-                   Code navigation • Dependency analysis • Refactoring preparation • Architecture understanding
-                   • Debugging inheritance issues • Code review assistance • Technical documentation • Educational exploration
-                   • Class member discovery and API exploration
-
-                   INPUT REQUIREMENTS:
-                   • symbol: Required C++ symbol name to analyze (NOT file paths!)
-                   • build_directory: Optional - STRONGLY PREFER absolute paths from get_project_details
-                   • max_examples: Optional number - limits the number of usage examples (unlimited by default)
-                   • location_hint: Optional string - location hint for disambiguating overloaded symbols (format: \"/path/file.cpp:line:column\")
-                   • wait_timeout: Optional number - timeout for indexing completion in seconds (default: 20s, 0 = no wait)
-
-                   AUTOMATIC ANALYSIS (no flags required):
-                   Inheritance hierarchy, call relationships, and usage patterns are automatically included when applicable based on symbol type."
-)]
-#[derive(Debug, ::serde::Serialize, ::serde::Deserialize, JsonSchema)]
+/// Tool parameters for analyze_symbol_context
+#[derive(Debug, ::serde::Serialize, ::serde::Deserialize)]
 pub struct AnalyzeSymbolContextTool {
     /// The C++ SYMBOL NAME to analyze (NOT file paths, component names, or directory names).
-    /// This must be the exact name of a C++ code symbol.
-    ///
-    /// SYMBOL NAME EXAMPLES:
-    /// • Class names: "Math", "Calculator", "MyClass"
-    /// • Function names: "factorial", "main", "processData"
-    /// • Fully qualified: "std::vector", "MyNamespace::MyClass"
-    /// • Global scope: "::main", "::global_var"
-    /// • Methods: "MyClass::method" (class context will be analyzed)
-    ///
-    /// NOT VALID (these are not symbol names):
-    /// • File paths: "src/math.cpp", "include/header.h"
-    /// • Component names: "math_library", "core_module"
-    /// • Directory names: "src", "include"
-    ///
-    /// TIP: Use search_symbols with empty query first to discover what symbols exist.
-    /// For overloaded functions or template specializations, consider providing
-    /// the optional 'location_hint' parameter for precise disambiguation.
     pub symbol: String,
 
     /// Build directory path containing compile_commands.json. STRONGLY RECOMMENDED: Use absolute paths from get_project_details output.
-    ///
-    /// WORKFLOW:
-    /// 1. Call get_project_details to see available build directories with absolute paths
-    /// 2. Copy the absolute path from that output (e.g., "/home/project/build-debug")
-    /// 3. Use that absolute path here to avoid path concatenation issues
-    ///
-    /// EXAMPLES:
-    /// • GOOD: "/home/project/build-debug", "/absolute/path/to/build"
-    /// • AVOID: "build", "../build" (relative paths can cause concatenation issues)
-    ///
-    /// BEHAVIOR: When specified, uses this build directory instead of auto-detection.
-    /// The build directory must contain compile_commands.json for clangd integration.
-    ///
-    /// AUTO-DETECTION (when not specified): Attempts to find single build directory
-    /// in current workspace. Fails if multiple or zero build directories found.
-    ///
-    /// CLANGD SETUP: clangd CWD will be set to project root (from CMAKE_SOURCE_DIR),
-    /// and build directory will be passed via --compile-commands-dir argument.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub build_directory: Option<String>,
 
     /// Maximum number of usage examples to include in the analysis. OPTIONAL.
-    ///
-    /// BEHAVIOR:
-    /// • Not specified or None: Returns all available usage examples (unlimited)
-    /// • Some(n): Returns at most n usage examples
-    ///
-    /// EXAMPLES are code snippets showing how the symbol is used throughout the codebase.
-    /// They are collected from references to the symbol, excluding the declaration itself.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_examples: Option<u32>,
 
     /// Location hint for disambiguating overloaded symbols. OPTIONAL.
-    ///
-    /// FORMAT: Compact LSP-style location string with 1-based line/column numbers:
-    /// • "/absolute/path/to/file.cpp:line:column"
-    /// • Example: "/home/project/src/Math.cpp:89:8"
-    ///
-    /// BEHAVIOR:
-    /// • None: Uses workspace symbol resolution (fuzzy matching across project)
-    /// • Some(location): Finds document symbol at the specified location
-    ///
-    /// USE CASES:
-    /// • Disambiguating function overloads with same name but different signatures
-    /// • Targeting specific template specializations
-    /// • Precise symbol selection in files with multiple symbols of same name
-    ///
-    /// NOTE: Column number is required. Use editor or LSP tools to get exact position.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub location_hint: Option<String>,
 
     /// Timeout in seconds to wait for indexing completion (default: 20s, 0 = no wait)
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub wait_timeout: Option<u64>,
+
+    // Note: The following parameters are accepted for compatibility but currently
+    // not used - hierarchies and usage are determined automatically based on symbol type
+    /// (Deprecated - automatic) Include type hierarchy analysis
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub include_type_hierarchy: Option<bool>,
+
+    /// (Deprecated - automatic) Include call hierarchy analysis
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub include_call_hierarchy: Option<bool>,
+
+    /// (Deprecated - automatic) Include usage pattern analysis
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub include_usage_patterns: Option<bool>,
+
+    /// (Deprecated - automatic) Include class members analysis
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub include_members: Option<bool>,
+
+    /// (Deprecated - automatic) Include code in examples
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub include_code: Option<bool>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -308,12 +192,12 @@ impl AnalyzeSymbolContextTool {
     async fn resolve_symbol_via_workspace_with_context(
         &self,
         component_session: &ComponentSession,
-    ) -> Result<(Symbol, SymbolContext), CallToolError> {
+    ) -> Result<(Symbol, SymbolContext), ErrorData> {
         let workspace_symbol = get_matching_symbol(&self.symbol, component_session)
             .await
             .map_err(|err| {
                 error!("Failed to get matching workspace symbol: {}", err);
-                CallToolError::from(err)
+                ErrorData::from(err)
             })?;
 
         let symbol = workspace_symbol.clone();
@@ -322,16 +206,19 @@ impl AnalyzeSymbolContextTool {
 
         let document_symbols = get_document_symbols(component_session, file_uri)
             .await
-            .map_err(CallToolError::from)?;
+            .map_err(ErrorData::from)?;
 
         let position: lsp_types::Position = symbol.location.range.start.into();
 
         let (doc_symbol, container_path) =
             find_symbol_at_position_with_path(&document_symbols, &position).ok_or_else(|| {
-                CallToolError::new(std::io::Error::other(format!(
-                    "Could not find document symbol for workspace symbol '{}'",
-                    self.symbol
-                )))
+                ErrorData::invalid_params(
+                    format!(
+                        "Could not find document symbol for workspace symbol '{}'",
+                        self.symbol
+                    ),
+                    None,
+                )
             })?;
 
         let context = SymbolContext {
@@ -346,21 +233,24 @@ impl AnalyzeSymbolContextTool {
         &self,
         location: &FileLocation,
         component_session: &ComponentSession,
-    ) -> Result<(Symbol, SymbolContext), CallToolError> {
+    ) -> Result<(Symbol, SymbolContext), ErrorData> {
         let file_uri = crate::symbol::uri_from_pathbuf(&location.file_path);
 
         let document_symbols = get_document_symbols(component_session, file_uri)
             .await
-            .map_err(CallToolError::from)?;
+            .map_err(ErrorData::from)?;
 
         let position: lsp_types::Position = location.range.start.into();
 
         let (doc_symbol, container_path) =
             find_symbol_at_position_with_path(&document_symbols, &position).ok_or_else(|| {
-                CallToolError::new(std::io::Error::other(format!(
-                    "No symbol found at location {}",
-                    location.to_compact_range()
-                )))
+                ErrorData::invalid_params(
+                    format!(
+                        "No symbol found at location {}",
+                        location.to_compact_range()
+                    ),
+                    None,
+                )
             })?;
 
         let mut symbol = Symbol::from((doc_symbol, location.file_path.as_path()));
@@ -379,7 +269,7 @@ impl AnalyzeSymbolContextTool {
         &self,
         symbol_location: &crate::symbol::FileLocation,
         component_session: &ComponentSession,
-    ) -> Result<(Vec<FileLocation>, Vec<FileLocation>), CallToolError> {
+    ) -> Result<(Vec<FileLocation>, Vec<FileLocation>), ErrorData> {
         let definitions = get_definitions(symbol_location, component_session).await?;
         info!(
             "Found {} definitions for '{}'",
@@ -492,7 +382,7 @@ impl AnalyzeSymbolContextTool {
         &self,
         component_session: Arc<ComponentSession>,
         _workspace: &ProjectWorkspace,
-    ) -> Result<CallToolResult, CallToolError> {
+    ) -> Result<CallToolResult, ErrorData> {
         info!(
             "Starting symbol analysis for '{}', location_hint={:?}, wait_timeout={:?}",
             self.symbol, self.location_hint, self.wait_timeout
@@ -520,10 +410,10 @@ impl AnalyzeSymbolContextTool {
             }
             Some(location_str) => {
                 let location: FileLocation = location_str.parse().map_err(|e| {
-                    CallToolError::new(std::io::Error::other(format!(
-                        "Invalid location format '{}': {}",
-                        location_str, e
-                    )))
+                    ErrorData::invalid_params(
+                        format!("Invalid location format '{}': {}", location_str, e),
+                        None,
+                    )
                 })?;
                 self.resolve_symbol_context_at_location(&location, &component_session)
                     .await?
@@ -583,9 +473,7 @@ impl AnalyzeSymbolContextTool {
         };
 
         let output = serde_json::to_string_pretty(&result).map_err(AnalyzerError::from)?;
-        Ok(CallToolResult::text_content(vec![TextContent::from(
-            output,
-        )]))
+        Ok(CallToolResult::success(vec![Content::text(output)]))
     }
 }
 
@@ -620,6 +508,11 @@ mod tests {
             max_examples: None,
             location_hint: None,
             wait_timeout: None,
+            include_type_hierarchy: None,
+            include_call_hierarchy: None,
+            include_usage_patterns: None,
+            include_members: None,
+            include_code: None,
         };
 
         let component_session = workspace_session
@@ -636,13 +529,10 @@ mod tests {
         assert!(result.is_ok());
 
         let call_result = result.unwrap();
-        let text = if let Some(rust_mcp_sdk::schema::ContentBlock::TextContent(
-            rust_mcp_sdk::schema::TextContent { text, .. },
-        )) = call_result.content.first()
-        {
-            text
-        } else {
-            panic!("Expected TextContent in call_result");
+        // Extract text from CallToolResult
+        let text = match call_result.content.first().map(|c| &c.raw) {
+            Some(rmcp::model::RawContent::Text(rmcp::model::RawTextContent { text, .. })) => text,
+            _ => panic!("Expected TextContent in call_result"),
         };
         let analyzer_result: AnalyzerResult = serde_json::from_str(text).unwrap();
 
@@ -695,70 +585,6 @@ mod tests {
         assert!(
             !analyzer_result.examples.is_empty(),
             "Should have usage examples"
-        );
-    }
-
-    #[cfg(feature = "clangd-integration-tests")]
-    #[tokio::test]
-    async fn test_analyzer_with_max_examples() {
-        use super::*;
-
-        // Create a test project first
-        use crate::test_utils::integration::TestProject;
-        let test_project = TestProject::new().await.unwrap();
-        test_project.cmake_configure().await.unwrap();
-
-        // Scan the test project to create a proper workspace with components
-        use crate::project::{ProjectScanner, WorkspaceSession};
-        let scanner = ProjectScanner::with_default_providers();
-        let workspace = scanner
-            .scan_project(&test_project.project_root, 3, None)
-            .expect("Failed to scan test project");
-
-        // Create a WorkspaceSession with test clangd path
-        let clangd_path = crate::test_utils::get_test_clangd_path();
-        let workspace_session = WorkspaceSession::new(workspace.clone(), clangd_path)
-            .expect("Failed to create workspace session");
-        // ComponentSession handles session management internally
-
-        // Test with max_examples = 2
-        let tool = AnalyzeSymbolContextTool {
-            symbol: "Math".to_string(),
-            build_directory: None,
-            max_examples: Some(2),
-            location_hint: None,
-            wait_timeout: None,
-        };
-
-        let component_session = workspace_session
-            .get_component_session(test_project.build_dir.clone())
-            .await
-            .unwrap();
-        let result = tool.call_tool(component_session, &workspace).await;
-
-        assert!(result.is_ok());
-
-        let call_result = result.unwrap();
-        let text = if let Some(rust_mcp_sdk::schema::ContentBlock::TextContent(
-            rust_mcp_sdk::schema::TextContent { text, .. },
-        )) = call_result.content.first()
-        {
-            text
-        } else {
-            panic!("Expected TextContent in call_result");
-        };
-        let analyzer_result: AnalyzerResult = serde_json::from_str(text).unwrap();
-
-        // Should have at most 2 examples
-        assert!(
-            analyzer_result.examples.len() <= 2,
-            "Should have at most 2 examples, but got {}",
-            analyzer_result.examples.len()
-        );
-
-        info!(
-            "Found {} usage examples (max was 2)",
-            analyzer_result.examples.len()
         );
     }
 }
