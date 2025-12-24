@@ -13,15 +13,10 @@ use clap::Parser;
 use logging::{LogConfig, init_logging};
 use mcp_server::CppServerHandler;
 use project::{ProjectScanner, ProjectWorkspace};
-use rust_mcp_sdk::schema::{
-    Implementation, InitializeResult, LATEST_PROTOCOL_VERSION, ServerCapabilities,
-    ServerCapabilitiesTools,
-};
 
-use rust_mcp_sdk::{
-    McpServer, StdioTransport, TransportOptions, error::SdkResult, mcp_server::server_runtime,
-};
+use rmcp::service::serve_server;
 use std::path::PathBuf;
+use tokio::io::{stdin, stdout};
 use tracing::info;
 
 /// CLI arguments for the MCP C++ server
@@ -87,7 +82,7 @@ fn create_project_workspace(project_root: PathBuf) -> ProjectWorkspace {
 }
 
 #[tokio::main]
-async fn main() -> SdkResult<()> {
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args = Args::parse();
 
     // Extract values before moving
@@ -119,30 +114,11 @@ async fn main() -> SdkResult<()> {
         project_workspace.project_root_path.display()
     );
 
-    // Define server details and capabilities
-    let server_details = InitializeResult {
-        server_info: Implementation {
-            name: "C++ MCP Server".to_string(),
-            version: "0.1.0".to_string(),
-            title: Some("C++ Project Analysis MCP Server".to_string()),
-        },
-        capabilities: ServerCapabilities {
-            tools: Some(ServerCapabilitiesTools { list_changed: None }),
-            ..Default::default()
-        },
-        meta: None,
-        instructions: Some("C++ project analysis and LSP bridge server".to_string()),
-        protocol_version: LATEST_PROTOCOL_VERSION.to_string(),
-    };
-
     // Resolve clangd path
     let clangd_path = resolve_clangd_path(args.clangd_path);
     info!("Using clangd: {}", clangd_path);
 
-    // Create stdio transport
-    let transport = StdioTransport::new(TransportOptions::default())?;
-
-    // Create custom handler with ProjectWorkspace and clangd path
+    // Create handler with ProjectWorkspace and clangd path
     let handler = match CppServerHandler::new(project_workspace, clangd_path) {
         Ok(handler) => handler,
         Err(e) => {
@@ -151,20 +127,17 @@ async fn main() -> SdkResult<()> {
         }
     };
 
-    // Create MCP server
-    let server = server_runtime::create_server(server_details, transport, handler);
+    // Create stdio transport
+    let transport = (stdin(), stdout());
 
+    // Start the server using serve_server
     info!("C++ MCP Server ready and listening for requests");
 
-    // Start the server
-    if let Err(start_error) = server.start().await {
-        eprintln!(
-            "{}",
-            start_error
-                .rpc_error_message()
-                .unwrap_or(&start_error.to_string())
-        );
-    }
+    let server = serve_server(handler, transport).await?;
+
+    // Wait for server to finish
+    let quit_reason = server.waiting().await?;
+    info!("Server shutdown: {:?}", quit_reason);
 
     Ok(())
 }

@@ -6,8 +6,10 @@
 //! - project/: Extensible project/build system abstraction
 //! - io/: Process and transport management
 
-use rust_mcp_sdk::macros::{JsonSchema, mcp_tool};
-use rust_mcp_sdk::schema::{CallToolResult, TextContent, schema_utils::CallToolError};
+use rmcp::{
+    ErrorData,
+    model::{CallToolResult, Content},
+};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use tracing::{error, info, instrument, warn};
@@ -50,9 +52,9 @@ pub enum AnalyzerError {
     Project(#[from] ProjectError),
 }
 
-impl From<AnalyzerError> for CallToolError {
+impl From<AnalyzerError> for ErrorData {
     fn from(err: AnalyzerError) -> Self {
-        CallToolError::new(std::io::Error::other(err.to_string()))
+        ErrorData::internal_error(err.to_string(), None)
     }
 }
 
@@ -60,91 +62,90 @@ impl From<AnalyzerError> for CallToolError {
 // MCP Tool Definition - PRESERVE EXACT EXTERNAL SCHEMA
 // ============================================================================
 
-#[mcp_tool(
-    name = "analyze_symbol_context",
-    description = "Advanced multi-dimensional C++ symbol analysis engine providing comprehensive contextual \
-                   understanding of any symbol in your codebase through sophisticated clangd LSP integration. \
-                   This tool performs deep semantic analysis combining multiple LSP operations to deliver \
-                   complete symbol intelligence for complex C++ codebases.
-
-                   🚀 RECOMMENDED WORKFLOW FOR AI AGENTS:
-                   1. ALWAYS call get_project_details first to discover available build directories
-                   2. Use the ABSOLUTE build directory paths from get_project_details output
-                   3. Use search_symbols with empty query to find symbols of interest first
-                   4. Then call analyze_symbol_context with specific symbol names
-
-                   Example workflow:
-                   • get_project_details {} → Returns: {\"/home/project/build-debug\": {...}}
-                   • search_symbols {\"query\": \"\", \"build_directory\": \"/home/project/build-debug\"} → Discover symbols
-                   • analyze_symbol_context {\"symbol\": \"Math\", \"build_directory\": \"/home/project/build-debug\"}
-
-                   ⚡ WHY USE THESE TOOLS:
-                   • MUCH FASTER than filesystem reads (grep, find, cat commands)
-                   • SEMANTIC AWARENESS: Deep understanding of C++ relationships, inheritance, calls
-                   • COMPREHENSIVE ANALYSIS: Gets all context (usage, hierarchy, documentation) in one call
-                   • LSP INTEGRATION: Uses same semantic understanding as IDEs
-
-                   🔍 SYMBOL RESOLUTION CAPABILITIES:
-                   • Simple names: 'MyClass', 'factorial', 'process'
-                   • Fully qualified names: 'std::vector', 'MyNamespace::MyClass'
-                   • Global scope symbols: '::main', '::global_function'
-                   • Template specializations and overloaded functions
-                   • Advanced disambiguation using optional location hints
-
-                   📊 CORE SEMANTIC ANALYSIS:
-                   • Precise symbol kind classification (class, function, variable, etc.)
-                   • Complete type information with template parameters
-                   • Extracted documentation comments and signatures
-                   • Definition and declaration locations with file mappings
-                   • Fully qualified names with namespace resolution
-
-                   🏛 CLASS MEMBER ANALYSIS (classes/structs):
-                   • Flat enumeration of all class members (methods, fields, constructors)
-                   • Member kind classification with string representation (method, field, constructor, etc.)
-                   • Member signatures and documentation extraction
-                   • Static vs instance member identification
-                   • Access level determination where available
-
-                   📈 USAGE EXAMPLES (always included):
-                   • Concrete code snippets showing how the symbol is used throughout the codebase
-                   • Real usage patterns from actual code references
-                   • Automatically collected from all references to the symbol
-                   • Configurable limit via max_examples parameter (unlimited by default)
-
-                   🏗️ INHERITANCE HIERARCHY ANALYSIS (optional):
-                   • Complete class relationship mapping and base class hierarchies
-                   • Derived class discovery and virtual function relationships
-                   • Multiple inheritance resolution and abstract interface identification
-                   • Essential for understanding polymorphic relationships
-
-                   📞 CALL RELATIONSHIP ANALYSIS (optional):
-                   • Incoming call discovery (who calls this function)
-                   • Outgoing call mapping (what functions this calls)
-                   • Call chain traversal with configurable depth limits
-                   • Dependency relationship mapping and recursive call detection
-
-                   ⚡ PERFORMANCE & RELIABILITY:
-                   • Leverages clangd's high-performance indexing system
-                   • Concurrent LSP request processing for parallel analysis
-                   • Intelligent caching and graceful degradation
-                   • Automatic build directory detection and clangd setup
-
-                   🎯 TARGET USE CASES:
-                   Code navigation • Dependency analysis • Refactoring preparation • Architecture understanding
-                   • Debugging inheritance issues • Code review assistance • Technical documentation • Educational exploration
-                   • Class member discovery and API exploration
-
-                   INPUT REQUIREMENTS:
-                   • symbol: Required C++ symbol name to analyze (NOT file paths!)
-                   • build_directory: Optional - STRONGLY PREFER absolute paths from get_project_details
-                   • max_examples: Optional number - limits the number of usage examples (unlimited by default)
-                   • location_hint: Optional string - location hint for disambiguating overloaded symbols (format: \"/path/file.cpp:line:column\")
-                   • wait_timeout: Optional number - timeout for indexing completion in seconds (default: 20s, 0 = no wait)
-
-                   AUTOMATIC ANALYSIS (no flags required):
-                   Inheritance hierarchy, call relationships, and usage patterns are automatically included when applicable based on symbol type."
-)]
-#[derive(Debug, ::serde::Serialize, ::serde::Deserialize, JsonSchema)]
+/// # MCP Tool: analyze_symbol_context
+///
+/// Advanced multi-dimensional C++ symbol analysis engine providing comprehensive contextual
+/// understanding of any symbol in your codebase through sophisticated clangd LSP integration.
+/// This tool performs deep semantic analysis combining multiple LSP operations to deliver
+/// complete symbol intelligence for complex C++ codebases.
+///
+/// 🚀 RECOMMENDED WORKFLOW FOR AI AGENTS:
+/// 1. ALWAYS call get_project_details first to discover available build directories
+/// 2. Use the ABSOLUTE build directory paths from get_project_details output
+/// 3. Use search_symbols with empty query to find symbols of interest first
+/// 4. Then call analyze_symbol_context with specific symbol names
+///
+/// Example workflow:
+/// • get_project_details {} → Returns: {"/home/project/build-debug": {...}}
+/// • search_symbols {"query": "", "build_directory": "/home/project/build-debug"} → Discover symbols
+/// • analyze_symbol_context {"symbol": "Math", "build_directory": "/home/project/build-debug"}
+///
+/// ⚡ WHY USE THESE TOOLS:
+/// • MUCH FASTER than filesystem reads (grep, find, cat commands)
+/// • SEMANTIC AWARENESS: Deep understanding of C++ relationships, inheritance, calls
+/// • COMPREHENSIVE ANALYSIS: Gets all context (usage, hierarchy, documentation) in one call
+/// • LSP INTEGRATION: Uses same semantic understanding as IDEs
+///
+/// 🔍 SYMBOL RESOLUTION CAPABILITIES:
+/// • Simple names: 'MyClass', 'factorial', 'process'
+/// • Fully qualified names: 'std::vector', 'MyNamespace::MyClass'
+/// • Global scope symbols: '::main', '::global_function'
+/// • Template specializations and overloaded functions
+/// • Advanced disambiguation using optional location hints
+///
+/// 📊 CORE SEMANTIC ANALYSIS:
+/// • Precise symbol kind classification (class, function, variable, etc.)
+/// • Complete type information with template parameters
+/// • Extracted documentation comments and signatures
+/// • Definition and declaration locations with file mappings
+/// • Fully qualified names with namespace resolution
+///
+/// 🏛 CLASS MEMBER ANALYSIS (classes/structs):
+/// • Flat enumeration of all class members (methods, fields, constructors)
+/// • Member kind classification with string representation (method, field, constructor, etc.)
+/// • Member signatures and documentation extraction
+/// • Static vs instance member identification
+/// • Access level determination where available
+///
+/// 📈 USAGE EXAMPLES (always included):
+/// • Concrete code snippets showing how the symbol is used throughout the codebase
+/// • Real usage patterns from actual code references
+/// • Automatically collected from all references to the symbol
+/// • Configurable limit via max_examples parameter (unlimited by default)
+///
+/// 🏗️ INHERITANCE HIERARCHY ANALYSIS (optional):
+/// • Complete class relationship mapping and base class hierarchies
+/// • Derived class discovery and virtual function relationships
+/// • Multiple inheritance resolution and abstract interface identification
+/// • Essential for understanding polymorphic relationships
+///
+/// 📞 CALL RELATIONSHIP ANALYSIS (optional):
+/// • Incoming call discovery (who calls this function)
+/// • Outgoing call mapping (what functions this calls)
+/// • Call chain traversal with configurable depth limits
+/// • Dependency relationship mapping and recursive call detection
+///
+/// ⚡ PERFORMANCE & RELIABILITY:
+/// • Leverages clangd's high-performance indexing system
+/// • Concurrent LSP request processing for parallel analysis
+/// • Intelligent caching and graceful degradation
+/// • Automatic build directory detection and clangd setup
+///
+/// 🎯 TARGET USE CASES:
+/// Code navigation • Dependency analysis • Refactoring preparation • Architecture understanding
+/// • Debugging inheritance issues • Code review assistance • Technical documentation • Educational exploration
+/// • Class member discovery and API exploration
+///
+/// INPUT REQUIREMENTS:
+/// • symbol: Required C++ symbol name to analyze (NOT file paths!)
+/// • build_directory: Optional - STRONGLY PREFER absolute paths from get_project_details
+/// • max_examples: Optional number - limits the number of usage examples (unlimited by default)
+/// • location_hint: Optional string - location hint for disambiguating overloaded symbols (format: "/path/file.cpp:line:column")
+/// • wait_timeout: Optional number - timeout for indexing completion in seconds (default: 20s, 0 = no wait)
+///
+/// AUTOMATIC ANALYSIS (no flags required):
+/// Inheritance hierarchy, call relationships, and usage patterns are automatically included when applicable based on symbol type.
+#[derive(Debug, ::serde::Serialize, ::serde::Deserialize)]
 pub struct AnalyzeSymbolContextTool {
     /// The C++ SYMBOL NAME to analyze (NOT file paths, component names, or directory names).
     /// This must be the exact name of a C++ code symbol.
@@ -221,6 +222,28 @@ pub struct AnalyzeSymbolContextTool {
     /// Timeout in seconds to wait for indexing completion (default: 20s, 0 = no wait)
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub wait_timeout: Option<u64>,
+
+    // Note: The following parameters are accepted for compatibility but currently
+    // not used - hierarchies and usage are determined automatically based on symbol type
+    /// (Deprecated - automatic) Include type hierarchy analysis
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub include_type_hierarchy: Option<bool>,
+
+    /// (Deprecated - automatic) Include call hierarchy analysis
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub include_call_hierarchy: Option<bool>,
+
+    /// (Deprecated - automatic) Include usage pattern analysis
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub include_usage_patterns: Option<bool>,
+
+    /// (Deprecated - automatic) Include class members analysis
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub include_members: Option<bool>,
+
+    /// (Deprecated - automatic) Include code in examples
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub include_code: Option<bool>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -308,12 +331,12 @@ impl AnalyzeSymbolContextTool {
     async fn resolve_symbol_via_workspace_with_context(
         &self,
         component_session: &ComponentSession,
-    ) -> Result<(Symbol, SymbolContext), CallToolError> {
+    ) -> Result<(Symbol, SymbolContext), ErrorData> {
         let workspace_symbol = get_matching_symbol(&self.symbol, component_session)
             .await
             .map_err(|err| {
                 error!("Failed to get matching workspace symbol: {}", err);
-                CallToolError::from(err)
+                ErrorData::from(err)
             })?;
 
         let symbol = workspace_symbol.clone();
@@ -322,16 +345,19 @@ impl AnalyzeSymbolContextTool {
 
         let document_symbols = get_document_symbols(component_session, file_uri)
             .await
-            .map_err(CallToolError::from)?;
+            .map_err(ErrorData::from)?;
 
         let position: lsp_types::Position = symbol.location.range.start.into();
 
         let (doc_symbol, container_path) =
             find_symbol_at_position_with_path(&document_symbols, &position).ok_or_else(|| {
-                CallToolError::new(std::io::Error::other(format!(
-                    "Could not find document symbol for workspace symbol '{}'",
-                    self.symbol
-                )))
+                ErrorData::invalid_params(
+                    format!(
+                        "Could not find document symbol for workspace symbol '{}'",
+                        self.symbol
+                    ),
+                    None,
+                )
             })?;
 
         let context = SymbolContext {
@@ -346,21 +372,24 @@ impl AnalyzeSymbolContextTool {
         &self,
         location: &FileLocation,
         component_session: &ComponentSession,
-    ) -> Result<(Symbol, SymbolContext), CallToolError> {
+    ) -> Result<(Symbol, SymbolContext), ErrorData> {
         let file_uri = crate::symbol::uri_from_pathbuf(&location.file_path);
 
         let document_symbols = get_document_symbols(component_session, file_uri)
             .await
-            .map_err(CallToolError::from)?;
+            .map_err(ErrorData::from)?;
 
         let position: lsp_types::Position = location.range.start.into();
 
         let (doc_symbol, container_path) =
             find_symbol_at_position_with_path(&document_symbols, &position).ok_or_else(|| {
-                CallToolError::new(std::io::Error::other(format!(
-                    "No symbol found at location {}",
-                    location.to_compact_range()
-                )))
+                ErrorData::invalid_params(
+                    format!(
+                        "No symbol found at location {}",
+                        location.to_compact_range()
+                    ),
+                    None,
+                )
             })?;
 
         let mut symbol = Symbol::from((doc_symbol, location.file_path.as_path()));
@@ -379,7 +408,7 @@ impl AnalyzeSymbolContextTool {
         &self,
         symbol_location: &crate::symbol::FileLocation,
         component_session: &ComponentSession,
-    ) -> Result<(Vec<FileLocation>, Vec<FileLocation>), CallToolError> {
+    ) -> Result<(Vec<FileLocation>, Vec<FileLocation>), ErrorData> {
         let definitions = get_definitions(symbol_location, component_session).await?;
         info!(
             "Found {} definitions for '{}'",
@@ -492,7 +521,7 @@ impl AnalyzeSymbolContextTool {
         &self,
         component_session: Arc<ComponentSession>,
         _workspace: &ProjectWorkspace,
-    ) -> Result<CallToolResult, CallToolError> {
+    ) -> Result<CallToolResult, ErrorData> {
         info!(
             "Starting symbol analysis for '{}', location_hint={:?}, wait_timeout={:?}",
             self.symbol, self.location_hint, self.wait_timeout
@@ -520,10 +549,10 @@ impl AnalyzeSymbolContextTool {
             }
             Some(location_str) => {
                 let location: FileLocation = location_str.parse().map_err(|e| {
-                    CallToolError::new(std::io::Error::other(format!(
-                        "Invalid location format '{}': {}",
-                        location_str, e
-                    )))
+                    ErrorData::invalid_params(
+                        format!("Invalid location format '{}': {}", location_str, e),
+                        None,
+                    )
                 })?;
                 self.resolve_symbol_context_at_location(&location, &component_session)
                     .await?
@@ -583,9 +612,7 @@ impl AnalyzeSymbolContextTool {
         };
 
         let output = serde_json::to_string_pretty(&result).map_err(AnalyzerError::from)?;
-        Ok(CallToolResult::text_content(vec![TextContent::from(
-            output,
-        )]))
+        Ok(CallToolResult::success(vec![Content::text(output)]))
     }
 }
 
@@ -612,7 +639,18 @@ mod tests {
         let clangd_path = crate::test_utils::get_test_clangd_path();
         let workspace_session = WorkspaceSession::new(workspace.clone(), clangd_path)
             .expect("Failed to create workspace session");
-        // ComponentSession handles session management internally
+
+        // Ensure indexing is completed before testing
+        let component_session = workspace_session
+            .get_component_session(test_project.build_dir.clone())
+            .await
+            .unwrap();
+        component_session
+            .ensure_indexed(crate::test_utils::DEFAULT_INDEXING_TIMEOUT)
+            .await
+            .expect("Indexing should complete successfully for analyzer test");
+
+        info!("Indexing completed, proceeding with analyzer test");
 
         let tool = AnalyzeSymbolContextTool {
             symbol: "Math".to_string(),
@@ -620,12 +658,13 @@ mod tests {
             max_examples: None,
             location_hint: None,
             wait_timeout: None,
+            include_type_hierarchy: None,
+            include_call_hierarchy: None,
+            include_usage_patterns: None,
+            include_members: None,
+            include_code: None,
         };
 
-        let component_session = workspace_session
-            .get_component_session(test_project.build_dir.clone())
-            .await
-            .unwrap();
         let result = tool.call_tool(component_session, &workspace).await;
 
         // Check and log error if present
@@ -636,13 +675,10 @@ mod tests {
         assert!(result.is_ok());
 
         let call_result = result.unwrap();
-        let text = if let Some(rust_mcp_sdk::schema::ContentBlock::TextContent(
-            rust_mcp_sdk::schema::TextContent { text, .. },
-        )) = call_result.content.first()
-        {
-            text
-        } else {
-            panic!("Expected TextContent in call_result");
+        // Extract text from CallToolResult
+        let text = match call_result.content.first().map(|c| &c.raw) {
+            Some(rmcp::model::RawContent::Text(rmcp::model::RawTextContent { text, .. })) => text,
+            _ => panic!("Expected TextContent in call_result"),
         };
         let analyzer_result: AnalyzerResult = serde_json::from_str(text).unwrap();
 
@@ -719,7 +755,18 @@ mod tests {
         let clangd_path = crate::test_utils::get_test_clangd_path();
         let workspace_session = WorkspaceSession::new(workspace.clone(), clangd_path)
             .expect("Failed to create workspace session");
-        // ComponentSession handles session management internally
+
+        // Ensure indexing is completed before testing
+        let component_session = workspace_session
+            .get_component_session(test_project.build_dir.clone())
+            .await
+            .unwrap();
+        component_session
+            .ensure_indexed(crate::test_utils::DEFAULT_INDEXING_TIMEOUT)
+            .await
+            .expect("Indexing should complete successfully for analyzer test");
+
+        info!("Indexing completed, proceeding with max_examples test");
 
         // Test with max_examples = 2
         let tool = AnalyzeSymbolContextTool {
@@ -728,24 +775,22 @@ mod tests {
             max_examples: Some(2),
             location_hint: None,
             wait_timeout: None,
+            include_type_hierarchy: None,
+            include_call_hierarchy: None,
+            include_usage_patterns: None,
+            include_members: None,
+            include_code: None,
         };
 
-        let component_session = workspace_session
-            .get_component_session(test_project.build_dir.clone())
-            .await
-            .unwrap();
         let result = tool.call_tool(component_session, &workspace).await;
 
         assert!(result.is_ok());
 
         let call_result = result.unwrap();
-        let text = if let Some(rust_mcp_sdk::schema::ContentBlock::TextContent(
-            rust_mcp_sdk::schema::TextContent { text, .. },
-        )) = call_result.content.first()
-        {
-            text
-        } else {
-            panic!("Expected TextContent in call_result");
+        // Extract text from CallToolResult
+        let text = match call_result.content.first().map(|c| &c.raw) {
+            Some(rmcp::model::RawContent::Text(rmcp::model::RawTextContent { text, .. })) => text,
+            _ => panic!("Expected TextContent in call_result"),
         };
         let analyzer_result: AnalyzerResult = serde_json::from_str(text).unwrap();
 
