@@ -382,6 +382,15 @@ analyze_symbol_context {"symbol": "MyClass"}
 analyze_symbol_context {"symbol": "MyClass::process", "max_examples": 3}
 ```
 
+## Developing
+
+Install [pre-commit](https://pre-commit.com/) to run formatting and linting checks before each commit:
+
+```bash
+pip install pre-commit
+pre-commit install
+```
+
 ## Limitations
 
 - Requires CMake or Meson projects that generate `compile_commands.json`
