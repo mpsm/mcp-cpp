@@ -1269,6 +1269,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "num_threads"
+version = "0.1.7"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5c7398b9c8b70908f6371f47ed36737907c87c52af34c268fed0bf0ceb92ead9"
+dependencies = [
+ "libc",
+]
+
+[[package]]
 name = "once_cell"
 version = "1.21.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1612,9 +1621,9 @@ dependencies = [
 
 [[package]]
 name = "rust-mcp-macros"
-version = "0.5.3"
+version = "0.8.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2cd5071387506c57ba93c1b37de7f394aee72ea1f1de74fa86cb2c319527d109"
+checksum = "a4b2466f90db7bb97dfc3de9422c2411ee505ae457428190490e4ef9d42607ed"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -1625,9 +1634,9 @@ dependencies = [
 
 [[package]]
 name = "rust-mcp-schema"
-version = "0.7.5"
+version = "0.9.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ba217e6fcb043bba9e194209bff92c35294093187504d1443832ca2051816753"
+checksum = "b1209aa7fb74fccafe6b2a649b15581fb328343427d85def865b0ad233fe1f74"
 dependencies = [
  "serde",
  "serde_json",
@@ -1635,9 +1644,9 @@ dependencies = [
 
 [[package]]
 name = "rust-mcp-sdk"
-version = "0.7.4"
+version = "0.8.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d30f48ab3339a8effc1c5af176b87eb3297f013afd353628d9088ba42d26fa59"
+checksum = "67357f0d9ee9c28bdb0d4cf5ae23c0359342a14d177c23b4ee992df93e9a87d7"
 dependencies = [
  "async-trait",
  "axum",
@@ -1657,6 +1666,7 @@ dependencies = [
  "serde",
  "serde_json",
  "thiserror",
+ "time",
  "tokio",
  "tokio-stream",
  "tracing",
@@ -1666,9 +1676,9 @@ dependencies = [
 
 [[package]]
 name = "rust-mcp-transport"
-version = "0.6.3"
+version = "0.8.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0494ba7f4e6a726e95f4ce45a4dc39285ec0c446bedd1a414f8754f3213f810a"
+checksum = "cc5c1534d052a9ccb136539e4014645d6b3d77d8ab92ef5730cb7448c893d910"
 dependencies = [
  "async-trait",
  "bytes",
@@ -2053,7 +2063,9 @@ checksum = "91e7d9e3bb61134e77bde20dd4825b97c010155709965fedf0f49bb138e52a9d"
 dependencies = [
  "deranged",
  "itoa",
+ "libc",
  "num-conv",
+ "num_threads",
  "powerfmt",
  "serde",
  "time-core",
